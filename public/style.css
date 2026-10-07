@@ -125,10 +125,24 @@ button, input, select, textarea { font: inherit; color: inherit; }
   display: flex;
   flex-direction: column;
   padding: 6px;
-  background: var(--bg);
-  border: 2px solid var(--ink);
-  border-radius: 14px;
-  box-shadow: 4px 4px 0 var(--shadow);
+  /* Frosted glass, in the spirit of Apple's Liquid Glass menus: the page shows through, blurred. */
+  background: rgba(24, 24, 24, 0.66);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid rgba(242, 239, 233, 0.18);
+  border-radius: 22px;
+  box-shadow: inset 0 1px 0 rgba(242, 239, 233, 0.14), 0 18px 48px rgba(0, 0, 0, 0.55);
+  transform-origin: top right;
+  animation: menu-in 180ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+
+@keyframes menu-in { from { opacity: 0; transform: scale(0.94); } }
+
+@media (prefers-reduced-motion: reduce) { .account-menu { animation: none; } }
+
+/* Browsers without blur get a solid panel so text stays readable. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .account-menu { background: var(--panel); }
 }
 
 .menu-head { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px 12px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
@@ -141,7 +155,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   min-height: 40px;
   padding: 0 12px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 14px;
   background: none;
   color: var(--muted);
   text-align: left;
@@ -152,7 +166,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 .account-menu [aria-current='page'] { color: var(--ink); }
 .account-menu [aria-current='page']::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--ink); margin-left: auto; }
-.account-menu #logout { border-top: 1px solid var(--line); border-radius: 0 0 8px 8px; margin-top: 6px; padding-top: 2px; }
+.account-menu #logout { margin-top: 6px; position: relative; }
+.account-menu #logout::before { content: ''; position: absolute; top: -4px; left: 12px; right: 12px; border-top: 1px solid var(--line); }
 
 .avatar {
   width: 34px;
@@ -448,7 +463,7 @@ input[type='range']:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 2px var(
   .brand { flex: 1; }
   /* The menu drops down full width under the bar, easy to reach with a thumb. */
   .who { position: static; }
-  .account-menu { top: calc(100% + 8px); left: 12px; right: 12px; min-width: 0; }
+  .account-menu { top: calc(100% + 8px); left: 12px; right: 12px; min-width: 0; transform-origin: top center; }
   .hero { padding: 32px 16px 28px; }
   .stats { grid-template-columns: repeat(2, 1fr); }
   .section, .footer { padding-left: 16px; padding-right: 16px; }
