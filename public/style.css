@@ -111,6 +111,71 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 
 
+/* ---------- alerts bell ---------- */
+
+.bell-wrap { position: relative; }
+
+.bell {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--line);
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+  color: var(--muted);
+}
+.bell svg { width: 20px; height: 20px; }
+.bell[aria-expanded='true'], .bell.loud { color: var(--ink); border-color: var(--ink); }
+
+.bell-count {
+  position: absolute;
+  top: -5px;
+  right: -7px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 2px solid var(--bg);
+  background: var(--bad);
+  color: var(--bg);
+  font: 700 11px/16px var(--mono);
+  text-align: center;
+}
+
+.alerts-panel {
+  position: absolute;
+  top: calc(100% + 14px);
+  right: 0;
+  z-index: 10;
+  width: 380px;
+  max-height: min(520px, calc(100dvh - 120px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 20px 22px;
+}
+.alerts-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+.alerts-head h3 { margin: 0; font-size: 22px; font-weight: 500; letter-spacing: -0.02em; }
+.alerts-head .mono { font-size: 11px; }
+.alerts-panel .more-link { margin-top: 16px; font-size: 12px; }
+.alerts-quiet { display: flex; align-items: center; margin: 14px 0 4px; }
+.alerts-sub { font-size: 11px; margin: 18px 0 2px; }
+
+.alert-row { display: flex; align-items: flex-start; gap: 4px; padding: 12px 0; border-top: 1px solid var(--line); }
+.alerts-sub + .alert-row, #alerts-list > .alert-row:first-child { border-top: 0; }
+.alert-row .dot { margin-top: 7px; flex: none; }
+.alert-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.alert-text .mono { font-size: 11px; text-transform: none; letter-spacing: 0; overflow-wrap: anywhere; }
+.alert-row.cleared .alert-text > div:first-child { color: var(--muted); }
+.alert-row .link-btn { font-size: 12px; padding: 2px 0 2px 8px; }
+
+.alert-checks { flex-direction: column; gap: 10px; }
+.alert-level { margin-top: 20px; max-width: 420px; }
+.alert-level b { font-size: 20px; font-weight: 500; }
+.alert-level.off { opacity: 0.4; }
+
 /* ---------- hero ---------- */
 
 .hero { padding: 48px 28px 40px; border-bottom: 1px solid var(--line); }
@@ -353,6 +418,10 @@ input[type='range']:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 2px var(
   .frame { margin: 0; border: 0; min-height: 100vh; min-height: 100dvh; }
   .topbar { flex-wrap: wrap; gap: 14px; padding: 18px 16px; }
   .nav { order: 3; flex-basis: 100%; justify-content: flex-start; gap: 22px; }
+  .bell-wrap { margin-left: auto; position: static; }
+  .topbar { position: relative; }
+  /* Phones: the alert list drops down full width under the header. */
+  .alerts-panel { left: 16px; right: 16px; top: 72px; width: auto; }
   .hero { padding: 32px 16px 28px; }
   .stats { grid-template-columns: repeat(2, 1fr); }
   .section, .footer { padding-left: 16px; padding-right: 16px; }
@@ -423,7 +492,7 @@ input[type='range']:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 2px var(
 /* Hover effects only where there is a mouse; on phones a tapped button would stay "pressed". */
 @media (hover: hover) {
   .nav a:hover, .more-link:hover { color: var(--ink); border-bottom-color: var(--ink); }
-  .link-btn:hover { color: var(--ink); }
+  .link-btn:hover, .bell:hover { color: var(--ink); }
   .btn:hover { transform: translate(2px, 2px); box-shadow: 2px 2px 0 rgba(242, 239, 233, 0.35); }
   a.app-card:hover { transform: translate(4px, 4px); box-shadow: 3px 3px 0 var(--shadow); }
 }
@@ -433,6 +502,8 @@ input[type='range']:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 2px var(
   .nav a, .link-btn, .more-link { display: inline-flex; align-items: center; min-height: 44px; }
   .nav a { padding-bottom: 0; }
   .btn.small { min-height: 44px; }
+  .bell { width: 44px; height: 44px; }
+  .alert-row .link-btn { min-height: 36px; }
   .checks label { min-height: 44px; }
   .checks input[type='checkbox'] { width: 20px; height: 20px; }
 }

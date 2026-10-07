@@ -182,6 +182,7 @@ async function enter(user) {
   document.querySelectorAll('.admin-only').forEach((n) => n.classList.toggle('hidden', user.role !== 'admin'));
   renderUser();
   await Promise.all([loadApps(), loadSystem()]);
+  if (user.role === 'admin') loadAlerts();
   route();
 }
 
@@ -213,7 +214,147 @@ window.addEventListener('hashchange', route);
 
 $('#logout').addEventListener('click', async () => {
   await api('POST', '/api/logout').catch(() => {});
+  closeAlerts();
   showWelcome(false);
+});
+
+// ---------- alerts (admins) ----------
+
+const ALERTS_REFRESH_MS = 30 * 1000;
+const alerts = { data: null, busy: false };
+
+function clock(iso) {
+  return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+// "14:02" today, "3 Oct 14:02" on another day.
+function when(iso) {
+  const d = new Date(iso);
+  return d.toDateString() === new Date().toDateString() ? clock(iso) : `${shortDate(iso)} ${clock(iso)}`;
+}
+
+async function loadAlerts() {
+  if (alerts.busy || !state.user || state.user.role !== 'admin') return;
+  alerts.busy = true;
+  try {
+    renderAlerts(await api('GET', '/api/alerts'));
+  } catch {
+    // Keep what the bell showed last.
+  } finally {
+    alerts.busy = false;
+  }
+}
+
+function alertRow(a) {
+  const cleared = Boolean(a.resolvedAt);
+  const kind = cleared ? '' : a.dismissedAt ? 'starting' : 'offline';
+  let meta;
+  if (!cleared) meta = `Since ${when(a.startedAt)} · ${ago(a.startedAt)}${a.dismissedAt ? ' · ignored until fixed' : ''}`;
+  else if (a.startedAt === a.resolvedAt) meta = when(a.resolvedAt);
+  else meta = `${when(a.startedAt)} – ${clock(a.resolvedAt)} · lasted ${duration((Date.parse(a.resolvedAt) - Date.parse(a.startedAt)) / 1000)}`;
+  const ignore = !cleared && !a.dismissedAt
+    ? el('button', { class: 'link-btn mono', type: 'button', text: 'Ignore', onclick: () => dismissAlert(a.id) })
+    : null;
+  return el('div', { class: `alert-row${cleared ? ' cleared' : ''}` },
+    el('span', { class: `dot ${kind}` }),
+    el('div', { class: 'alert-text' },
+      el('div', { text: a.title }),
+      el('div', { class: 'mono muted', text: a.detail }),
+      el('div', { class: 'mono muted', text: meta })),
+    ignore);
+}
+
+function renderAlerts(data) {
+  alerts.data = data;
+  const loud = data.active.filter((a) => !a.dismissedAt).length;
+  const count = $('#bell-count');
+  count.textContent = loud > 9 ? '9+' : String(loud);
+  count.classList.toggle('hidden', !loud);
+  $('#bell').classList.toggle('loud', loud > 0);
+  $('#bell').setAttribute('aria-label', loud ? `Alerts: ${loud} problem${loud > 1 ? 's' : ''}` : 'Alerts');
+  $('#alerts-checked').textContent = data.checkedAt ? `Checked ${clock(data.checkedAt)}` : 'First check running';
+
+  const list = [];
+  if (data.active.length) list.push(...data.active.map(alertRow));
+  else list.push(el('p', { class: 'alerts-quiet' }, el('span', { class: 'dot online' }), 'All quiet'));
+  if (data.recent.length) {
+    list.push(el('div', { class: 'mono muted alerts-sub', text: 'Cleared · last 7 days' }));
+    list.push(...data.recent.map(alertRow));
+  }
+  $('#alerts-list').replaceChildren(...list);
+  renderAlertSettings(data.settings);
+}
+
+async function dismissAlert(id) {
+  try {
+    renderAlerts(await api('POST', `/api/alerts/${id}/dismiss`));
+  } catch {
+    loadAlerts();
+  }
+}
+
+function openAlerts() {
+  $('#alerts-panel').classList.remove('hidden');
+  $('#bell').setAttribute('aria-expanded', 'true');
+  loadAlerts();
+}
+
+function closeAlerts() {
+  $('#alerts-panel').classList.add('hidden');
+  $('#bell').setAttribute('aria-expanded', 'false');
+}
+
+$('#bell').addEventListener('click', () => {
+  if ($('#alerts-panel').classList.contains('hidden')) openAlerts();
+  else closeAlerts();
+});
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.bell-wrap')) closeAlerts();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('#alerts-panel').classList.contains('hidden')) {
+    closeAlerts();
+    $('#bell').focus();
+  }
+});
+$('#alerts-settings-link').addEventListener('click', () => {
+  closeAlerts();
+  // Wait for the admin view to show, then bring the alert settings into view.
+  setTimeout(() => $('#alerts-form').scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+});
+
+const alertForm = $('#alerts-form');
+const paintAlertPct = () => {
+  const r = alertForm.alertDiskPct;
+  r.style.setProperty('--fill', `${((r.value - r.min) / (r.max - r.min)) * 100}%`);
+  $('#alert-pct-value').textContent = `${r.value}%`;
+  r.disabled = !alertForm.alertDisks.checked;
+  $('.alert-level', alertForm).classList.toggle('off', r.disabled);
+};
+alertForm.alertDiskPct.addEventListener('input', paintAlertPct);
+alertForm.alertDisks.addEventListener('change', paintAlertPct);
+
+function renderAlertSettings(s) {
+  // Don't overwrite what an admin is in the middle of changing.
+  if (alertForm.contains(document.activeElement)) return;
+  alertForm.alertApps.checked = s.alertApps;
+  alertForm.alertDisks.checked = s.alertDisks;
+  alertForm.alertDiskPct.value = s.alertDiskPct;
+  paintAlertPct();
+}
+
+alertForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('PATCH', '/api/admin/settings', {
+      alertApps: alertForm.alertApps.checked,
+      alertDisks: alertForm.alertDisks.checked,
+      alertDiskPct: Number(alertForm.alertDiskPct.value),
+    });
+    flash(alertForm, 'Saved');
+    alertForm.querySelector('button').blur();
+    loadAlerts();
+  } catch (err) { flash(alertForm, err.message, false); }
 });
 
 // ---------- apps ----------
@@ -650,6 +791,9 @@ $('#settings-form').addEventListener('submit', async (e) => {
   setInterval(() => {
     if (state.user && !document.hidden && !$('#view-status').classList.contains('hidden')) loadStatus();
   }, STATUS_REFRESH_MS);
+  // The bell reads the server's last check, so this is cheap; it pauses in background tabs.
+  setInterval(() => { if (!document.hidden) loadAlerts(); }, ALERTS_REFRESH_MS);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) loadAlerts(); });
   const s = await api('GET', '/api/state');
   setServerName(s.serverName);
   if (s.user) await enter(s.user);

@@ -7,8 +7,9 @@ const path = require('path');
 const { Store } = require('./store');
 const { hashPassword, verifyPassword, Sessions, RateLimiter, SESSION_TTL_MS } = require('./auth');
 const storage = require('./storage');
-const { parseDisks, CpuMeter, serverHealth } = require('./status');
+const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
+const { Watcher, alertSettings, alertsOf } = require('./alerts');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const COOKIE = 'roost_session';
@@ -138,7 +139,10 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '' } = {}) {
+function createServer({
+  dataDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '',
+  alertIntervalMs = 60 * 1000, readContainers,
+} = {}) {
   const store = new Store(dataDir);
   const sessions = new Sessions();
   const limiter = new RateLimiter();
@@ -147,6 +151,12 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
   // the drive Roost keeps its data on (the same drive is only listed once).
   const diskList = disks && disks.length ? disks : [{ label: 'System', path: '/' }, { label: 'Data', path: dataDir }];
   const db = () => store.db;
+  const watcher = new Watcher({
+    store,
+    readContainers: readContainers || (() => listContainers(dockerHost, probeTimeoutMs)),
+    readDisks: () => readDisks(diskList),
+    newId: () => store.newId(),
+  });
 
   function currentUser(req) {
     const s = sessions.get(parseCookies(req)[COOKIE]);
@@ -203,6 +213,23 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
 
   function requireApp(req) {
     if (!storage.appTokenOk(req, appToken)) throw new HttpError(401, 'App token missing or wrong');
+  }
+
+  function cleanDiskPct(v) {
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 50 || n > 99) throw new HttpError(400, 'Drive alert level must be a whole number from 50 to 99');
+    return n;
+  }
+
+  function alertView() {
+    const alerts = alertsOf(db());
+    const recent = alerts.filter((a) => a.resolvedAt).reverse().slice(0, 20);
+    return {
+      active: alerts.filter((a) => !a.resolvedAt).reverse(),
+      recent,
+      checkedAt: watcher.checkedAt,
+      settings: alertSettings(db()),
+    };
   }
 
   function cleanAppAccess(apps) {
@@ -427,8 +454,31 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       const body = await readJson(req);
       if (body.serverName !== undefined) db().settings.serverName = str(body.serverName, 40) || 'Roost';
       if (body.defaultLimitGb !== undefined) db().settings.defaultLimitGb = cleanLimit(body.defaultLimitGb);
+      const alertsChanged = ['alertApps', 'alertDisks', 'alertDiskPct'].some((k) => body[k] !== undefined);
+      if (body.alertApps !== undefined) db().settings.alertApps = body.alertApps === true;
+      if (body.alertDisks !== undefined) db().settings.alertDisks = body.alertDisks === true;
+      if (body.alertDiskPct !== undefined) db().settings.alertDiskPct = cleanDiskPct(body.alertDiskPct);
       store.save();
-      send(res, 200, { settings: { ...db().settings, defaultLimitGb: storage.defaultLimitGb(db()) } });
+      // Check again now, so the bell matches the new settings straight away.
+      if (alertsChanged) await watcher.check().catch(() => {});
+      send(res, 200, { settings: { ...db().settings, ...alertSettings(db()), defaultLimitGb: storage.defaultLimitGb(db()) } });
+    },
+
+    // ---------- alerts ----------
+
+    'GET /api/alerts': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, alertView());
+    },
+
+    // "Ignore until fixed": the alert stays listed but stops counting on the bell.
+    'POST /api/alerts/:id/dismiss': (req, res, id) => {
+      requireAdmin(req);
+      const alert = alertsOf(db()).find((a) => a.id === id && !a.resolvedAt);
+      if (!alert) throw new HttpError(404, 'That alert has already cleared');
+      alert.dismissedAt = new Date().toISOString();
+      store.save();
+      send(res, 200, alertView());
     },
 
     // ---------- storage limits ----------
@@ -527,7 +577,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/storage-requests|storage\/users))\/([a-z0-9._-]+)(\/usage)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/storage-requests|storage\/users|alerts))\/([a-z0-9._-]+)(\/usage|\/dismiss)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }
@@ -569,6 +619,9 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     }
   });
 
+  watcher.start(alertIntervalMs);
+  server.on('close', () => watcher.stop());
+  server.watcher = watcher;
   return server;
 }
 
