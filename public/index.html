@@ -126,6 +126,7 @@
           <div class="stat">Storage<b id="stat-disk">—</b></div>
         </div>
         <a class="more-link mono" href="#/status">Server status →</a>
+        <a class="more-link mono setup-nudge hidden" id="setup-nudge" href="#/admin"></a>
       </div>
       <div class="section">
         <div class="section-head">
@@ -262,6 +263,18 @@
     <!-- Admin view -->
     <section id="view-admin" class="section hidden">
       <div class="section-head"><h2>Admin</h2><span class="mono muted">Apps · users · server</span></div>
+
+      <div class="card panel" id="setup-panel">
+        <div class="setup-head">
+          <div><h3>Setup</h3><span class="mono muted" id="setup-count">Checking…</span></div>
+          <button class="link-btn mono hidden" type="button" id="setup-toggle">Show steps</button>
+        </div>
+        <div class="meter setup-meter" aria-hidden="true"><i id="setup-fill" style="width:0"></i></div>
+        <div id="setup-body">
+          <div class="setup-step" id="setup-step" aria-live="polite"></div>
+          <ol class="setup-list" id="setup-list"></ol>
+        </div>
+      </div>
 
       <div class="card panel" id="requests-panel">
         <h3>Storage requests</h3><span class="mono muted">Users asking for more space</span>

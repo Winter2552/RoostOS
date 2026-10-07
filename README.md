@@ -11,6 +11,12 @@ Roost is the home-server suite: one homepage that signs you in and shows the app
 | Nest | File storage, built into Roost (the Files page) |
 | Glint | Photo storage |
 
+## Setup checklist
+
+**Admin → Setup** walks through everything Roost needs, one step at a time. Each step covers the domain, the Cloudflare tunnel, the email relay, the data drive and so on, and gives the exact steps, including the ones outside Roost. Roost checks most steps itself and ticks them off as you go. Until every step is done, admins see a "Setup · 3 of 9 done" link on the dashboard.
+
+The steps live in `src/setup.js`, which is the single tally of what setting up Roost involves. **When a change needs something set up (a setting, an environment variable, a DNS record, a drive), add a step there in the same change**, with a check if Roost can see it.
+
 ## The homepage
 
 - **First run** creates the admin account.
