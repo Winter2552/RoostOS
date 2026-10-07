@@ -516,6 +516,7 @@ async function loadAdmin() {
   pickers.default.setValue(defaultLimitGb);
   pickers.newUser.setValue(defaultLimitGb);
   renderStorageRequests(requests);
+  loadActivity();
   renderAppsEditor();
   renderUsers();
   $('#new-user-apps').replaceChildren(...appChecks(null));
@@ -639,6 +640,75 @@ $('#settings-form').addEventListener('submit', async (e) => {
     flash(e.target, 'Saved');
   } catch (err) { flash(e.target, err.message, false); }
 });
+
+// ---------- activity log ----------
+
+const ACTIVITY_LABELS = {
+  'sign-in': 'Signed in',
+  'sign-out': 'Signed out',
+  setup: 'Set up Roost',
+  'sign-in-failed': 'Failed sign-in',
+  'password-changed': 'Changed password',
+  'user-added': 'Added user',
+  'user-changed': 'Changed user',
+  'user-removed': 'Removed user',
+  'storage-requested': 'Asked for storage',
+  'storage-approved': 'Approved storage',
+  'storage-declined': 'Declined storage',
+  'apps-changed': 'Changed apps',
+  'settings-changed': 'Changed server settings',
+};
+
+const activity = { filter: '', last: null };
+
+function ago(iso) {
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  if (s < 7 * 86400) return `${Math.floor(s / 86400)} d ago`;
+  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function activityRow(e) {
+  const exact = new Date(e.at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  const time = el('button', { type: 'button', class: 'activity-time mono muted', title: exact, text: ago(e.at) });
+  time.addEventListener('click', () => { time.textContent = time.textContent === exact ? ago(e.at) : exact; });
+  // "raven → mia" when an admin acted on someone else; just the name otherwise.
+  const who = e.actor && e.target && e.actor !== e.target ? `${e.actor} → ${e.target}` : e.actor || e.target || 'unknown';
+  return el('li', { class: `activity-row${e.kind === 'failed' ? ' failed' : ''}` },
+    el('div', { class: 'activity-main' },
+      el('div', {}, el('span', { class: 'activity-what', text: ACTIVITY_LABELS[e.type] || e.type }), el('span', { class: 'activity-who', text: ` · ${who}` })),
+      el('div', { class: 'activity-detail mono muted', text: [e.detail, e.ip].filter(Boolean).join(' · ') })),
+    time);
+}
+
+async function loadActivity(more = false) {
+  const list = $('#activity');
+  const params = new URLSearchParams();
+  if (activity.filter) params.set('filter', activity.filter);
+  if (more && activity.last) params.set('before', activity.last);
+  try {
+    const { entries, more: hasMore } = await api('GET', `/api/admin/activity?${params}`);
+    const rows = entries.map(activityRow);
+    if (more) list.append(...rows);
+    else list.replaceChildren(...(rows.length ? rows : [el('li', { class: 'empty mono', text: 'Nothing here yet' })]));
+    activity.last = entries.length ? entries[entries.length - 1].seq : activity.last;
+    $('#activity-more-row').classList.toggle('hidden', !hasMore);
+    $('#activity-panel > .msg').textContent = '';
+  } catch (err) { flash($('#activity-panel'), err.message, false); }
+}
+
+$('#activity-filters').addEventListener('click', (e) => {
+  const chip = e.target.closest('.chip');
+  if (!chip) return;
+  activity.filter = chip.dataset.filter;
+  activity.last = null;
+  for (const c of $('#activity-filters').children) c.setAttribute('aria-pressed', String(c === chip));
+  loadActivity();
+});
+
+$('#activity-more').addEventListener('click', () => loadActivity(true));
 
 // ---------- boot ----------
 

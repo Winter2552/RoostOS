@@ -299,6 +299,35 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 .pill.approved { border-color: var(--ok); color: var(--ok); }
 .pill.declined { border-color: var(--bad); color: var(--bad); }
 
+/* ---------- activity log ---------- */
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  border: 1px solid var(--line); border-radius: 999px; background: transparent;
+  padding: 8px 14px; font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.chip[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: var(--bg); }
+
+.activity { list-style: none; margin: 16px 0 0; padding: 0; }
+.activity-row { border-top: 1px solid var(--line); padding: 14px 0; display: flex; gap: 16px; align-items: baseline; justify-content: space-between; }
+.activity-row:first-child { border-top: 0; }
+.activity-main { min-width: 0; }
+.activity-what { font-weight: 500; }
+.activity-who { color: var(--muted); overflow-wrap: anywhere; }
+.activity-detail { font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
+/* Failed sign-ins: a small dot, not a red row. */
+.activity-row.failed .activity-what::before {
+  content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--bad); margin-right: 8px; vertical-align: middle;
+}
+.activity-time { background: none; border: 0; padding: 0; font-size: 12px; white-space: nowrap; cursor: pointer; text-align: right; }
+.activity .empty { margin-top: 0; }
+@media (max-width: 600px) {
+  .activity-row { flex-direction: column; gap: 6px; }
+  .activity-time { text-align: left; }
+}
+
 .gb-input { display: flex; align-items: center; gap: 8px; }
 .gb-input input { width: 104px; padding: 8px 12px; }
 

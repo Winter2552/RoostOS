@@ -183,6 +183,21 @@
         <div class="row"><button class="btn" type="submit">Save</button></div>
         <div class="msg" role="status"></div>
       </form>
+
+      <div class="card panel" id="activity-panel">
+        <h3>Activity</h3><span class="mono muted">Sign-ins and changes, newest first. Tap a time for the exact date.</span>
+        <div class="chips" id="activity-filters" role="group" aria-label="Show">
+          <button type="button" class="chip" data-filter="" aria-pressed="true">All</button>
+          <button type="button" class="chip" data-filter="sign-ins" aria-pressed="false">Sign-ins</button>
+          <button type="button" class="chip" data-filter="failed" aria-pressed="false">Failed</button>
+          <button type="button" class="chip" data-filter="users" aria-pressed="false">Users</button>
+          <button type="button" class="chip" data-filter="storage" aria-pressed="false">Storage</button>
+          <button type="button" class="chip" data-filter="settings" aria-pressed="false">Settings</button>
+        </div>
+        <ol class="activity" id="activity"></ol>
+        <div class="row hidden" id="activity-more-row"><button class="btn ghost small" type="button" id="activity-more">Show more</button></div>
+        <div class="msg" role="status"></div>
+      </div>
     </section>
 
     <footer class="footer mono muted">

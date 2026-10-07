@@ -9,6 +9,7 @@ const { hashPassword, verifyPassword, Sessions, RateLimiter, SESSION_TTL_MS } = 
 const storage = require('./storage');
 const { parseDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
+const { ActivityLog, clientIp, FILTERS } = require('./activity');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const COOKIE = 'roost_session';
@@ -138,8 +139,9 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '' } = {}) {
+function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, activitySaveDelayMs } = {}) {
   const store = new Store(dataDir);
+  const activity = new ActivityLog(dataDir, { saveDelayMs: activitySaveDelayMs });
   const sessions = new Sessions();
   const limiter = new RateLimiter();
   const cpu = new CpuMeter();
@@ -164,6 +166,12 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     if (user.role !== 'admin') throw new HttpError(403, 'Admins only');
     return user;
   }
+
+  function record(req, type, fields = {}) {
+    activity.add(type, { ...fields, ip: clientIp(req, trustProxy) });
+  }
+
+  const gbText = (limit) => (limit === null ? 'no limit' : `${limit} GB`);
 
   function login(res, user, status = 200) {
     const token = sessions.create(user.id);
@@ -240,21 +248,27 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       };
       db().users.push(user);
       store.save();
+      record(req, 'setup', { actor: user.username });
       login(res, user, 201);
     },
 
     'POST /api/login': async (req, res) => {
-      if (!limiter.allow(req.socket.remoteAddress)) throw new HttpError(429, 'Too many attempts, wait a few minutes');
+      if (!limiter.allow(clientIp(req, trustProxy))) throw new HttpError(429, 'Too many attempts, wait a few minutes');
       const body = await readJson(req);
       const username = str(body.username, 32).toLowerCase();
       const user = db().users.find((u) => u.username === username);
       if (!user || typeof body.password !== 'string' || !verifyPassword(body.password, user.password)) {
+        // Only the username typed is kept, never the password.
+        record(req, 'sign-in-failed', { target: username || null, detail: user ? 'wrong password' : 'no such user' });
         throw new HttpError(401, 'Wrong username or password');
       }
+      record(req, 'sign-in', { actor: user.username });
       login(res, user);
     },
 
     'POST /api/logout': (req, res) => {
+      const user = currentUser(req);
+      if (user) record(req, 'sign-out', { actor: user.username });
       sessions.destroy(parseCookies(req)[COOKIE]);
       send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie('', secureCookies) });
     },
@@ -269,6 +283,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         }
         if (!validPassword(body.newPassword)) throw new HttpError(400, 'Password must be at least 8 characters');
         user.password = hashPassword(body.newPassword);
+        record(req, 'password-changed', { actor: user.username, target: user.username });
       }
       store.save();
       send(res, 200, { user: publicUser(user) });
@@ -357,7 +372,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     },
 
     'POST /api/admin/users': async (req, res) => {
-      requireAdmin(req);
+      const admin = requireAdmin(req);
       const body = await readJson(req);
       const username = str(body.username, 32).toLowerCase();
       if (!validUsername(username)) throw new HttpError(400, 'Username: 2–32 of a–z, 0–9, . _ -');
@@ -375,6 +390,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       };
       db().users.push(user);
       store.save();
+      record(req, 'user-added', { actor: admin.username, target: user.username, detail: `${user.role}, ${gbText(user.limitGb)}` });
       send(res, 201, { user: adminView(user) });
     },
 
@@ -383,39 +399,65 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       const user = db().users.find((u) => u.id === id);
       if (!user) throw new HttpError(404, 'No such user');
       const body = await readJson(req);
-      if (body.displayName !== undefined) user.displayName = str(body.displayName, 60) || user.username;
-      if (body.apps !== undefined) user.apps = cleanAppAccess(body.apps);
-      if (body.limitGb !== undefined) user.limitGb = cleanLimit(body.limitGb);
+      const changes = [];
+      if (body.displayName !== undefined) {
+        const name = str(body.displayName, 60) || user.username;
+        if (name !== user.displayName) changes.push('name');
+        user.displayName = name;
+      }
+      if (body.apps !== undefined) {
+        const apps = cleanAppAccess(body.apps);
+        if (JSON.stringify(apps) !== JSON.stringify(user.apps)) changes.push('app access');
+        user.apps = apps;
+      }
+      if (body.limitGb !== undefined) {
+        const limit = cleanLimit(body.limitGb);
+        const before = storage.limitGbOf(db(), user);
+        if (limit !== before) changes.push(`limit ${gbText(before)} → ${gbText(limit)}`);
+        user.limitGb = limit;
+      }
       if (body.role !== undefined) {
         const role = body.role === 'admin' ? 'admin' : 'user';
         if (user.id === admin.id && role !== 'admin') throw new HttpError(400, "You can't remove your own admin role");
+        if (role !== user.role) changes.push(`role ${user.role} → ${role}`);
         user.role = role;
       }
       if (body.password !== undefined) {
         if (!validPassword(body.password)) throw new HttpError(400, 'Password must be at least 8 characters');
         user.password = hashPassword(body.password);
         sessions.destroyUser(user.id);
+        changes.push('password reset');
       }
       store.save();
+      if (changes.length) record(req, 'user-changed', { actor: admin.username, target: user.username, detail: changes.join(', ') });
       send(res, 200, { user: adminView(user) });
     },
 
     'DELETE /api/admin/users/:id': (req, res, id) => {
       const admin = requireAdmin(req);
       if (id === admin.id) throw new HttpError(400, "You can't delete yourself");
-      const before = db().users.length;
+      const gone = db().users.find((u) => u.id === id);
+      if (!gone) throw new HttpError(404, 'No such user');
       db().users = db().users.filter((u) => u.id !== id);
-      if (db().users.length === before) throw new HttpError(404, 'No such user');
       sessions.destroyUser(id);
       db().storageRequests = storage.requestsOf(db()).filter((r) => r.userId !== id);
       store.save();
+      record(req, 'user-removed', { actor: admin.username, target: gone.username });
       send(res, 200, { ok: true });
     },
 
     'PUT /api/admin/apps': async (req, res) => {
-      requireAdmin(req);
+      const admin = requireAdmin(req);
       const body = await readJson(req);
+      const before = new Map(db().apps.map((a) => [a.id, a]));
       db().apps = cleanApps(body.apps);
+      const after = new Set(db().apps.map((a) => a.id));
+      const changes = [
+        ...db().apps.filter((a) => !before.has(a.id)).map((a) => `added ${a.name}`),
+        ...[...before.values()].filter((a) => !after.has(a.id)).map((a) => `removed ${a.name}`),
+        ...db().apps.filter((a) => before.has(a.id) && JSON.stringify(a) !== JSON.stringify(before.get(a.id))).map((a) => `edited ${a.name}`),
+      ];
+      if (changes.length) record(req, 'apps-changed', { actor: admin.username, detail: changes.join(', ') });
       const ids = new Set(db().apps.map((a) => a.id));
       for (const u of db().users) if (Array.isArray(u.apps)) u.apps = u.apps.filter((a) => ids.has(a));
       store.save();
@@ -423,12 +465,31 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     },
 
     'PATCH /api/admin/settings': async (req, res) => {
-      requireAdmin(req);
+      const admin = requireAdmin(req);
       const body = await readJson(req);
-      if (body.serverName !== undefined) db().settings.serverName = str(body.serverName, 40) || 'Roost';
-      if (body.defaultLimitGb !== undefined) db().settings.defaultLimitGb = cleanLimit(body.defaultLimitGb);
+      const changes = [];
+      if (body.serverName !== undefined) {
+        const name = str(body.serverName, 40) || 'Roost';
+        if (name !== db().settings.serverName) changes.push(`name ${db().settings.serverName} → ${name}`);
+        db().settings.serverName = name;
+      }
+      if (body.defaultLimitGb !== undefined) {
+        const limit = cleanLimit(body.defaultLimitGb);
+        const before = storage.defaultLimitGb(db());
+        if (limit !== before) changes.push(`default limit ${gbText(before)} → ${gbText(limit)}`);
+        db().settings.defaultLimitGb = limit;
+      }
       store.save();
+      if (changes.length) record(req, 'settings-changed', { actor: admin.username, detail: changes.join(', ') });
       send(res, 200, { settings: { ...db().settings, defaultLimitGb: storage.defaultLimitGb(db()) } });
+    },
+
+    'GET /api/admin/activity': (req, res) => {
+      requireAdmin(req);
+      const q = new URL(req.url, 'http://roost').searchParams;
+      const before = Number(q.get('before')) || Infinity;
+      const filter = FILTERS.includes(q.get('filter')) ? q.get('filter') : '';
+      send(res, 200, activity.page({ before, filter, limit: 50 }));
     },
 
     // ---------- storage limits ----------
@@ -462,6 +523,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       };
       requests.push(request);
       store.save();
+      record(req, 'storage-requested', { actor: user.username, detail: `${gbText(current)} → ${gbText(requestedGb)}` });
       send(res, 201, { request });
     },
 
@@ -499,6 +561,12 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       request.decidedBy = admin.username;
       request.reply = str(body.reply, 300);
       store.save();
+      const asker = db().users.find((u) => u.id === request.userId);
+      record(req, `storage-${request.status}`, {
+        actor: admin.username,
+        target: asker && asker.username,
+        detail: request.status === 'approved' ? gbText(request.approvedGb) : `asked ${gbText(request.requestedGb)}`,
+      });
       send(res, 200, { request });
     },
 
@@ -569,6 +637,8 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     }
   });
 
+  // Write any activity still waiting, e.g. when the container is stopped.
+  server.flushActivity = () => activity.flush();
   return server;
 }
 
@@ -580,9 +650,18 @@ if (require.main === module) {
   const disks = parseDisks(process.env.ROOST_DISKS);
   const dockerHost = process.env.DOCKER_HOST || '';
   const roostContainer = process.env.ROOST_CONTAINER || 'roost';
-  createServer({ dataDir, secureCookies, disks, dockerHost, roostContainer, appToken }).listen(port, () => {
+  const trustProxy = process.env.BEHIND_PROXY === 'true';
+  const server = createServer({ dataDir, secureCookies, disks, dockerHost, roostContainer, appToken, trustProxy });
+  server.listen(port, () => {
     console.log(`Roost is running on http://localhost:${port} (data in ${dataDir})`);
   });
+  // docker stop sends SIGTERM; save the activity log and exit straight away.
+  for (const signal of ['SIGTERM', 'SIGINT']) {
+    process.on(signal, () => {
+      server.flushActivity();
+      process.exit(0);
+    });
+  }
 }
 
 module.exports = { createServer };
