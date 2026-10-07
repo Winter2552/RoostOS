@@ -89,7 +89,7 @@
         <div class="meter-label"><b id="storage-used">—</b><span class="mono muted" id="storage-limit"></span></div>
         <form id="storage-request-form">
           <div class="form-grid">
-            <label class="field"><span>How much do you need? (GB)</span><input type="number" name="requestedGb" min="1" step="1" inputmode="numeric" required></label>
+            <div class="field"><span>How much do you need?</span><div id="request-picker"></div></div>
             <label class="field"><span>Note for the admin (optional)</span><input type="text" name="note" maxlength="300"></label>
           </div>
           <div class="row"><button class="btn" type="submit">Request more storage</button></div>
@@ -141,7 +141,7 @@
           <label class="field"><span>Username</span><input type="text" name="username" required autocapitalize="none" spellcheck="false"></label>
           <label class="field"><span>Password</span><input type="password" name="password" autocomplete="new-password" required minlength="8"></label>
           <label class="field"><span>Role</span><select name="role"><option value="user">User</option><option value="admin">Admin</option></select></label>
-          <label class="field"><span>Storage limit (GB)</span><input type="number" name="limitGb" min="1" step="1" inputmode="numeric" placeholder="No limit"></label>
+          <div class="field"><span>Storage limit</span><div id="new-user-picker"></div></div>
         </div>
         <div class="row"><span class="mono muted">Apps</span><div class="checks" id="new-user-apps"></div></div>
         <div class="row"><button class="btn" type="submit">Add user</button></div>
@@ -152,7 +152,7 @@
         <h3>Server</h3><span class="mono muted">The name shown across Roost, and the storage new users start with</span>
         <div class="form-grid">
           <label class="field"><span>Server name</span><input type="text" name="serverName" maxlength="40"></label>
-          <label class="field"><span>Default storage limit (GB)</span><input type="number" name="defaultLimitGb" min="1" step="1" inputmode="numeric" placeholder="No limit"></label>
+          <div class="field"><span>Default storage limit</span><div id="default-picker"></div></div>
         </div>
         <div class="row"><button class="btn" type="submit">Save</button></div>
         <div class="msg" role="status"></div>
