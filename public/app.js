@@ -196,17 +196,22 @@ function renderUser() {
   $('#profile-form').username.value = u.username;
 }
 
-const VIEWS = ['apps', 'status', 'profile', 'admin'];
+const VIEWS = ['apps', 'nest', 'status', 'profile', 'admin'];
+
+const hasNest = () => state.apps.some((a) => a.id === 'nest' && a.url === '#/nest');
 
 function route() {
   if (!state.user) return;
-  let view = (location.hash.replace('#/', '') || 'apps');
-  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin')) view = 'apps';
+  const [first, ...rest] = location.hash.replace(/^#\/?/, '').split('/');
+  let view = first || 'apps';
+  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'nest' && !hasNest())) view = 'apps';
   for (const v of VIEWS) $(`#view-${v}`).classList.toggle('hidden', v !== view);
   document.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
   if (view === 'admin') loadAdmin();
   if (view === 'profile') loadStorage();
   if (view === 'status') loadStatus();
+  if (view === 'nest') window.nestOpen(rest);
+  else document.title = state.serverName;
 }
 
 window.addEventListener('hashchange', route);
@@ -221,6 +226,7 @@ $('#logout').addEventListener('click', async () => {
 async function loadApps() {
   const { apps } = await api('GET', '/api/apps');
   state.apps = apps;
+  $('.nav [data-view=nest]').classList.toggle('hidden', !hasNest());
   renderApps();
   api('GET', '/api/apps/status').then(({ status }) => { state.status = status; renderApps(); }).catch(() => {});
 }
@@ -244,8 +250,10 @@ function renderApps() {
         el('span', {}, el('span', { class: `dot ${status}` }), label),
         el('span', { text: app.url ? 'Open →' : isAdmin ? 'Add link' : '' })),
     ];
+    // Apps built into Roost (like Nest) open in place; the rest in a new tab.
+    const builtIn = app.url.startsWith('#/');
     return app.url
-      ? el('a', { class: 'card app-card', href: resolveUrl(app.url), target: '_blank', rel: 'noopener' }, children)
+      ? el('a', builtIn ? { class: 'card app-card', href: app.url } : { class: 'card app-card', href: resolveUrl(app.url), target: '_blank', rel: 'noopener' }, children)
       : el('div', { class: 'card app-card disabled' }, children);
   }));
 }

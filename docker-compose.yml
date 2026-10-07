@@ -19,6 +19,8 @@ services:
       # Drives on the status page, as Label=path inside the container; the paths are
       # the read-only mounts below. Without this, Roost shows the drive it runs on.
       ROOST_DISKS: "System=/hostfs/system;Data=/hostfs/data"
+      # Where Nest keeps everyone's files (the mount below).
+      NEST_DIR: /nest
       # Container status comes from the docker-proxy service below, which only lets
       # Roost read the container list. Remove both to fall back to web checks.
       DOCKER_HOST: tcp://docker-proxy:2375
@@ -27,6 +29,9 @@ services:
     volumes:
       # On ZimaOS this keeps Roost's accounts and app list with the other app data.
       - /DATA/AppData/roost:/data
+      # Nest's files, as normal folders: one per user. Point the left side at a
+      # folder on the 3 TB data drive (ZimaOS shows its mount under Storage).
+      - /DATA/roost-nest:/nest
       # Read-only, only so the status page can see how full each drive is.
       # /DATA is on the system SSD. Point the second line at the 3 TB data drive's
       # mount folder (ZimaOS shows it under Storage); until then it repeats /DATA

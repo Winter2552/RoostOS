@@ -29,7 +29,8 @@ const DEFAULT_APPS = [
     name: 'Nest',
     tagline: 'Files',
     description: 'Your files, stored on the Roost drive.',
-    url: '',
+    // Built into Roost: the link opens the Files page.
+    url: '#/nest',
     icon: 'folder',
   },
   {
@@ -68,6 +69,24 @@ class Store {
     const tmp = `${this.file}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(this.db, null, 2));
     fs.renameSync(tmp, this.file);
+  }
+
+  // For frequent small changes (like storage usage after each upload): one
+  // write a moment later instead of one per change.
+  saveSoon() {
+    if (this.timer) return;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.save();
+    }, 2000);
+    this.timer.unref();
+  }
+
+  flush() {
+    if (!this.timer) return;
+    clearTimeout(this.timer);
+    this.timer = null;
+    this.save();
   }
 
   newId() {

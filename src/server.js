@@ -9,6 +9,8 @@ const { hashPassword, verifyPassword, Sessions, RateLimiter, SESSION_TTL_MS } = 
 const storage = require('./storage');
 const { parseDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
+const { HttpError, send, readJson, str } = require('./http');
+const { Nest } = require('./nest');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const COOKIE = 'roost_session';
@@ -24,20 +26,7 @@ const MIME = {
   '.json': 'application/json',
 };
 
-class HttpError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
-
 // ---------- helpers ----------
-
-function send(res, status, body, headers = {}) {
-  const data = body === undefined ? '' : JSON.stringify(body);
-  res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers });
-  res.end(data);
-}
 
 function parseCookies(req) {
   const out = {};
@@ -53,29 +42,6 @@ function sessionCookie(token, secure) {
   return `${COOKIE}=${token || ''}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
 }
 
-async function readJson(req) {
-  // Requiring a JSON content type also blocks plain cross-site form posts.
-  if (!String(req.headers['content-type'] || '').includes('application/json')) {
-    throw new HttpError(415, 'Expected JSON');
-  }
-  let size = 0;
-  const chunks = [];
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > 64 * 1024) throw new HttpError(413, 'Body too large');
-    chunks.push(chunk);
-  }
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
-  } catch {
-    throw new HttpError(400, 'Invalid JSON');
-  }
-}
-
-function str(v, max = 200) {
-  return typeof v === 'string' ? v.trim().slice(0, max) : '';
-}
-
 function validUsername(u) {
   return /^[a-z0-9._-]{2,32}$/.test(u);
 }
@@ -85,14 +51,19 @@ function validPassword(p) {
 }
 
 // App links may use {host} so they follow whatever address you opened Roost on.
+// Apps built into Roost link to their page, e.g. #/nest.
 function validAppUrl(u) {
-  if (u === '') return true;
+  if (u === '' || builtIn(u)) return true;
   try {
     const parsed = new URL(u.replace(/\{host\}/g, 'localhost'));
     return parsed.protocol === 'http:' || parsed.protocol === 'https:';
   } catch {
     return false;
   }
+}
+
+function builtIn(url) {
+  return /^#\/[a-z]+$/.test(url);
 }
 
 function publicUser(u) {
@@ -117,8 +88,11 @@ function requestHost(req) {
   return host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.split(':')[0];
 }
 
-async function probe(url, timeoutMs) {
-  return (await timedProbe(url, timeoutMs)).state;
+// An app's reachability: built-in apps are up whenever Roost is.
+function appProbe(app, host, timeoutMs) {
+  if (!app.url) return { state: 'unset' };
+  if (builtIn(app.url)) return { state: 'online', ms: 0 };
+  return timedProbe(app.url.replace(/\{host\}/g, host), timeoutMs);
 }
 
 async function timedProbe(url, timeoutMs) {
@@ -138,8 +112,14 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '' } = {}) {
+function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '' } = {}) {
   const store = new Store(dataDir);
+  // Nest used to be an outside app with no link; it is built in now.
+  const nestApp = store.db.apps.find((a) => a.id === 'nest');
+  if (nestApp && !nestApp.url) {
+    nestApp.url = '#/nest';
+    store.save();
+  }
   const sessions = new Sessions();
   const limiter = new RateLimiter();
   const cpu = new CpuMeter();
@@ -147,6 +127,25 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
   // the drive Roost keeps its data on (the same drive is only listed once).
   const diskList = disks && disks.length ? disks : [{ label: 'System', path: '/' }, { label: 'Data', path: dataDir }];
   const db = () => store.db;
+
+  const nest = new Nest({
+    dir: nestDir || path.join(dataDir, 'nest'),
+    dbFile: path.join(dataDir, 'nest.db'),
+    users: (id) => db().users.find((u) => u.id === id) || null,
+    limitOf: (user) => {
+      const s = storage.storageOf(db(), user);
+      return { limitBytes: s.limitBytes, otherBytes: s.usedBytes - (s.usage.nest || 0) };
+    },
+    onUsage: (user, bytes) => {
+      user.storageUsage = { ...user.storageUsage, nest: bytes };
+      store.saveSoon();
+    },
+  });
+  nest.syncUsage();
+  const sweep = () => nest.sweep().catch((err) => console.error('Nest clean-up failed:', err));
+  sweep();
+  const sweepTimer = setInterval(sweep, 6 * 60 * 60 * 1000);
+  sweepTimer.unref();
 
   function currentUser(req) {
     const s = sessions.get(parseCookies(req)[COOKIE]);
@@ -283,10 +282,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       const user = requireUser(req);
       const host = requestHost(req);
       const entries = await Promise.all(
-        visibleApps(db(), user).map(async (a) => [
-          a.id,
-          a.url ? await probe(a.url.replace(/\{host\}/g, host), probeTimeoutMs) : 'unset',
-        ]),
+        visibleApps(db(), user).map(async (a) => [a.id, (await appProbe(a, host, probeTimeoutMs)).state]),
       );
       send(res, 200, { status: Object.fromEntries(entries) });
     },
@@ -316,8 +312,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       const [health, docker, web] = await Promise.all([
         serverHealth({ cpu, disks: diskList }),
         listContainers(dockerHost, probeTimeoutMs),
-        Promise.all(visibleApps(db(), user).map((a) =>
-          a.url ? timedProbe(a.url.replace(/\{host\}/g, host), probeTimeoutMs) : { state: 'unset' })),
+        Promise.all(visibleApps(db(), user).map((a) => appProbe(a, host, probeTimeoutMs))),
       ]);
       const all = docker.containers || [];
       const claimed = new Set();
@@ -553,7 +548,11 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     res.setHeader('X-Frame-Options', 'DENY');
     try {
       const { pathname } = new URL(req.url, 'http://roost');
-      if (pathname.startsWith('/api/')) {
+      if (pathname.startsWith('/api/nest/')) {
+        const user = requireUser(req);
+        if (!visibleApps(db(), user).some((a) => a.id === 'nest')) throw new HttpError(403, 'You don’t have access to Nest');
+        await nest.handle(req, res, user, pathname, new URL(req.url, 'http://roost').searchParams);
+      } else if (pathname.startsWith('/api/')) {
         const found = route(req.method, pathname);
         if (!found) throw new HttpError(404, 'Not found');
         await found[0](req, res, found[1]);
@@ -569,6 +568,12 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     }
   });
 
+  server.on('close', () => {
+    clearInterval(sweepTimer);
+    store.flush();
+    nest.close();
+  });
+  server.nest = nest;
   return server;
 }
 
@@ -580,7 +585,8 @@ if (require.main === module) {
   const disks = parseDisks(process.env.ROOST_DISKS);
   const dockerHost = process.env.DOCKER_HOST || '';
   const roostContainer = process.env.ROOST_CONTAINER || 'roost';
-  createServer({ dataDir, secureCookies, disks, dockerHost, roostContainer, appToken }).listen(port, () => {
+  const nestDir = process.env.NEST_DIR || path.join(dataDir, 'nest');
+  createServer({ dataDir, nestDir, secureCookies, disks, dockerHost, roostContainer, appToken }).listen(port, () => {
     console.log(`Roost is running on http://localhost:${port} (data in ${dataDir})`);
   });
 }
