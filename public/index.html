@@ -34,6 +34,32 @@
     </section>
   </main>
 
+  <!-- Opened from an invite or password reset link -->
+  <main id="join" class="welcome hidden">
+    <section class="card welcome-card">
+      <p class="hello">Hello,</p>
+      <h1 id="join-title">Join <span data-server-name>Roost</span></h1>
+      <svg class="logo-mark" viewBox="0 8 120 120" aria-hidden="true">
+        <path d="M22 48 L42 68 L22 88" fill="none" stroke="currentColor" stroke-width="13"/>
+        <path d="M58 92 V44 H76 A26 26 0 0 1 102 70 V92 Z" fill="currentColor"/>
+        <circle cx="86" cy="60" r="4.5" fill="var(--panel)"/>
+      </svg>
+      <p id="join-lead" class="mono muted" style="margin:0 0 22px">Checking your link…</p>
+      <form id="join-form" class="hidden" autocomplete="on">
+        <label class="field join-invite"><span>Your name</span><input type="text" name="displayName" autocomplete="name" maxlength="60"></label>
+        <label class="field join-invite"><span>Username</span><input type="text" name="username" autocomplete="username" maxlength="32" autocapitalize="none" spellcheck="false"><small class="hint mono muted" id="join-username-hint">Letters, numbers, . _ - · you can't change it later</small></label>
+        <input type="text" name="resetUsername" class="hidden" autocomplete="username" tabindex="-1" aria-hidden="true">
+        <label class="field"><span>Password</span>
+          <span class="password-box"><input type="password" name="password" autocomplete="new-password" required minlength="8"><button type="button" class="link-btn mono show-password">Show</button></span>
+          <small class="hint mono muted">At least 8 characters</small>
+        </label>
+        <button class="btn" type="submit" id="join-submit">Create account</button>
+        <div class="msg error" id="join-msg" role="alert"></div>
+      </form>
+      <a class="btn ghost hidden" id="join-signin" href="/">Go to sign in</a>
+    </section>
+  </main>
+
   <!-- Signed-in dashboard -->
   <div id="shell" class="frame hidden">
     <header class="topbar">
@@ -202,25 +228,26 @@
         <div id="users"></div>
       </div>
 
-      <form class="card panel" id="new-user-form">
-        <h3>Add a user</h3><span class="mono muted">Admins see every app</span>
+      <form class="card panel" id="invite-form">
+        <h3>Invite someone</h3><span class="mono muted">Send them a link. They pick their own username and password. Works once, for 7 days.</span>
         <div class="form-grid">
-          <label class="field"><span>Display name</span><input type="text" name="displayName" maxlength="60"></label>
-          <label class="field"><span>Username</span><input type="text" name="username" required autocapitalize="none" spellcheck="false"></label>
-          <label class="field"><span>Password</span><input type="password" name="password" autocomplete="new-password" required minlength="8"></label>
+          <label class="field"><span>Who it's for (only you see this)</span><input type="text" name="label" maxlength="60" placeholder="e.g. Mum"></label>
           <label class="field"><span>Role</span><select name="role"><option value="user">User</option><option value="admin">Admin</option></select></label>
           <div class="field"><span>Storage limit</span><div id="new-user-picker"></div></div>
         </div>
-        <div class="row"><span class="mono muted">Apps</span><div class="checks" id="new-user-apps"></div></div>
-        <div class="row"><button class="btn" type="submit">Add user</button></div>
+        <div class="row" id="invite-apps-row"><span class="mono muted">Apps</span><div class="checks" id="new-user-apps"></div></div>
+        <div class="row"><button class="btn" type="submit">Create invite link</button></div>
         <div class="msg" role="status"></div>
+        <div id="invite-result"></div>
+        <div id="invites"></div>
       </form>
 
       <form class="card panel" id="settings-form">
-        <h3>Server</h3><span class="mono muted">The name shown across Roost, and the storage new users start with</span>
+        <h3>Server</h3><span class="mono muted">The name shown across Roost, the storage new users start with, and the address invite links use</span>
         <div class="form-grid">
           <label class="field"><span>Server name</span><input type="text" name="serverName" maxlength="40"></label>
           <div class="field"><span>Default storage limit</span><div id="default-picker"></div></div>
+          <label class="field"><span>Public address (for invite links)</span><input type="text" name="publicUrl" maxlength="200" placeholder="https://roostos.network" autocapitalize="none" spellcheck="false" inputmode="url"></label>
         </div>
         <div class="row"><button class="btn" type="submit">Save</button></div>
         <div class="msg" role="status"></div>

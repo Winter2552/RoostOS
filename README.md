@@ -17,7 +17,7 @@ Roost is the home-server suite: one homepage that signs you in and shows the app
 - **Dashboard**: greeting, live server stats (uptime, memory, load, free space on the data drive) and a card for every app you have access to, each showing whether the app is reachable.
 - **Status**: refreshes every 5 seconds. First, each app (and Roost itself) with its container state from Docker: running, stopped, restarting, unhealthy, how long it has been up and how often it restarted, plus whether it answers on its link. Admins also see every other container. Below that, server health: uptime, CPU, memory and free space on each drive. Problems are listed at the top.
 - **Profile**: change your display name and password, see your storage use and limit, and ask an admin for more space.
-- **Admin**: edit the app list and links, add or remove users, choose which apps each user sees and how much storage they get, approve or decline storage requests, rename the server.
+- **Admin**: edit the app list and links, invite or remove users, make password reset links, choose which apps each user sees and how much storage they get, approve or decline storage requests, rename the server.
 
 ![Signing in to Roost](docs/screenshots/sign-in.png)
 
@@ -37,6 +37,16 @@ Nest is Roost's own file storage, built to work like Google Drive. Open it from 
 - **Big uploads** go in 16 MB pieces, three files at a time. A dropped connection picks up where it stopped, and the upload panel keeps going while you browse.
 
 Files are stored as ordinary files and folders, laid out the way you see them, so they stay readable even without Roost: `NEST_DIR/<username>_<id>/files/...` (the trash is next to it in `trash/`). Folder details (ids, trash dates) are kept in `/data/nest.db` (SQLite, built into Node). Uploads are refused when they would go over your storage limit or leave less than 1 GB free on the drive. Removing a user leaves their Nest folder on the drive.
+
+## Invites and password resets
+
+Nobody needs to be in the room to get an account. Under **Admin → Invite someone**, pick their role, apps and storage limit and press **Create invite link**. Copy the link (or use **Share** on a phone) and send it any way you like. It looks like `https://roostos.network/j/K7PX-2QM9`. They open it, choose their own username and password, and are signed straight in.
+
+- An invite works once and stops working after 7 days. Pending invites are listed under the form, where you can cancel one.
+- The link is only shown when you make it. Lost it? Cancel it and make a new one.
+- If someone forgets their password, press **Password reset link** next to their name under **Admin → Users** and send them that (`/r/…`). It works once for 24 hours, and saving the new password signs them out everywhere else.
+- Codes are 8 characters with no look-alikes (no 0/O or 1/I/L), so they can be read out and typed in any case, with or without the dash. Wrong guesses are rate limited per address and codes are stored hashed.
+- Set **Admin → Server → Public address** (for example `https://roostos.network`) so links use it even when you make them at home. Left blank, links use whatever address you opened Roost on, so one made on `http://192.168.1.20:8080` only opens at home.
 
 ## Storage limits
 

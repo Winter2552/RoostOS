@@ -7,6 +7,7 @@ const path = require('path');
 const { Store } = require('./store');
 const { hashPassword, verifyPassword, Sessions, RateLimiter, SESSION_TTL_MS } = require('./auth');
 const storage = require('./storage');
+const links = require('./links');
 const { parseDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
 const { HttpError, send, readJson, str } = require('./http');
@@ -196,6 +197,21 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     return limit;
   }
 
+  // The address invite and reset links use, e.g. https://roostos.network.
+  // Blank means "whatever address the admin has Roost open on".
+  function cleanPublicUrl(v) {
+    const raw = str(v, 200);
+    if (!raw) return '';
+    if (raw.includes('://') && !/^https?:\/\//i.test(raw)) throw new HttpError(400, 'Public address must start with http:// or https://');
+    let url;
+    try {
+      url = new URL(raw.includes('://') ? raw : `https://${raw}`);
+    } catch {
+      throw new HttpError(400, 'Public address must look like https://roostos.network');
+    }
+    return url.origin;
+  }
+
   function adminView(user) {
     return { ...publicUser(user), storage: storage.storageOf(db(), user) };
   }
@@ -209,6 +225,26 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     if (!Array.isArray(apps)) throw new HttpError(400, 'Apps must be a list');
     const ids = new Set(db().apps.map((a) => a.id));
     return apps.filter((id) => ids.has(id));
+  }
+
+  // Finds a live link or explains why it doesn't work. Only misses count
+  // towards the rate limit, so typing a username doesn't lock anyone out.
+  function openLink(req, token) {
+    const link = links.find(db(), token);
+    if (!link) {
+      if (!limiter.allow(`link:${req.socket.remoteAddress}`)) throw new HttpError(429, 'Too many attempts, wait a few minutes');
+      throw new HttpError(404, 'This link has expired or was already used');
+    }
+    if (link.kind === 'reset' && !db().users.some((u) => u.id === link.userId)) {
+      throw new HttpError(404, 'This link has expired or was already used');
+    }
+    return link;
+  }
+
+  function usernameCheck(username) {
+    if (!validUsername(username)) return { available: false, reason: '2–32 of a–z, 0–9, . _ -' };
+    if (db().users.some((u) => u.username === username)) return { available: false, taken: true, reason: 'That username is taken' };
+    return { available: true };
   }
 
   const routes = {
@@ -402,9 +438,110 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       db().users = db().users.filter((u) => u.id !== id);
       if (db().users.length === before) throw new HttpError(404, 'No such user');
       sessions.destroyUser(id);
+      db().links = (db().links || []).filter((l) => l.userId !== id);
       db().storageRequests = storage.requestsOf(db()).filter((r) => r.userId !== id);
       store.save();
       send(res, 200, { ok: true });
+    },
+
+    // ---------- invite and reset links ----------
+
+    'GET /api/admin/invites': (req, res) => {
+      requireAdmin(req);
+      if (links.prune(db())) store.save();
+      const invites = db().links.filter((l) => l.kind === 'invite').map(links.adminView);
+      send(res, 200, { invites, publicUrl: db().settings.publicUrl || '' });
+    },
+
+    'POST /api/admin/invites': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const role = body.role === 'admin' ? 'admin' : 'user';
+      const { token, link } = links.create(db(), {
+        id: store.newId(),
+        kind: 'invite',
+        label: str(body.label, 60),
+        role,
+        apps: role === 'admin' ? null : cleanAppAccess(body.apps),
+        limitGb: body.limitGb === undefined ? storage.defaultLimitGb(db()) : cleanLimit(body.limitGb),
+        createdBy: admin.id,
+      }, links.INVITE_TTL_MS);
+      store.save();
+      send(res, 201, { invite: links.adminView(link), token });
+    },
+
+    'DELETE /api/admin/invites/:id': (req, res, id) => {
+      requireAdmin(req);
+      const link = (db().links || []).find((l) => l.kind === 'invite' && l.id === id);
+      if (!link) throw new HttpError(404, 'No such invite');
+      links.remove(db(), link);
+      store.save();
+      send(res, 200, { ok: true });
+    },
+
+    'POST /api/admin/users/:id/reset-link': (req, res, id) => {
+      const admin = requireAdmin(req);
+      const user = db().users.find((u) => u.id === id);
+      if (!user) throw new HttpError(404, 'No such user');
+      // Only the newest reset link for a user works.
+      db().links = (db().links || []).filter((l) => !(l.kind === 'reset' && l.userId === id));
+      const { token, link } = links.create(db(), { id: store.newId(), kind: 'reset', userId: id, createdBy: admin.id }, links.RESET_TTL_MS);
+      store.save();
+      send(res, 201, { expiresAt: link.expiresAt, token });
+    },
+
+    // The page a link opens asks what it is for, and (for invites) whether a
+    // username is free while the person types it.
+    'GET /api/links/:id': (req, res, token) => {
+      const link = openLink(req, token);
+      if (link.kind === 'reset') {
+        const user = db().users.find((u) => u.id === link.userId);
+        return send(res, 200, { kind: 'reset', serverName: db().settings.serverName, username: user.username, displayName: user.displayName });
+      }
+      const wanted = new URL(req.url, 'http://roost').searchParams.get('username');
+      if (wanted !== null) return send(res, 200, usernameCheck(wanted.toLowerCase()));
+      const inviter = db().users.find((u) => u.id === link.createdBy);
+      const apps = link.role === 'admin' || !Array.isArray(link.apps) ? db().apps : db().apps.filter((a) => link.apps.includes(a.id));
+      send(res, 200, {
+        kind: 'invite',
+        serverName: db().settings.serverName,
+        invitedBy: inviter ? inviter.displayName : null,
+        role: link.role,
+        apps: apps.map((a) => a.name),
+        expiresAt: link.expiresAt,
+      });
+    },
+
+    'POST /api/links/:id': async (req, res, token) => {
+      const link = openLink(req, token);
+      const body = await readJson(req);
+      if (!validPassword(body.password)) throw new HttpError(400, 'Password must be at least 8 characters');
+      if (link.kind === 'reset') {
+        const user = db().users.find((u) => u.id === link.userId);
+        user.password = hashPassword(body.password);
+        sessions.destroyUser(user.id);
+        links.remove(db(), link);
+        store.save();
+        return login(res, user);
+      }
+      const username = str(body.username, 32).toLowerCase();
+      const check = usernameCheck(username);
+      if (!check.available) throw new HttpError(check.taken ? 409 : 400, check.reason);
+      const user = {
+        id: store.newId(),
+        username,
+        displayName: str(body.displayName, 60) || username,
+        role: link.role,
+        apps: link.apps,
+        limitGb: link.limitGb,
+        password: hashPassword(body.password),
+        createdAt: new Date().toISOString(),
+        invitedBy: link.createdBy,
+      };
+      db().users.push(user);
+      links.remove(db(), link);
+      store.save();
+      login(res, user, 201);
     },
 
     'PUT /api/admin/apps': async (req, res) => {
@@ -422,6 +559,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       const body = await readJson(req);
       if (body.serverName !== undefined) db().settings.serverName = str(body.serverName, 40) || 'Roost';
       if (body.defaultLimitGb !== undefined) db().settings.defaultLimitGb = cleanLimit(body.defaultLimitGb);
+      if (body.publicUrl !== undefined) db().settings.publicUrl = cleanPublicUrl(body.publicUrl);
       store.save();
       send(res, 200, { settings: { ...db().settings, defaultLimitGb: storage.defaultLimitGb(db()) } });
     },
@@ -522,7 +660,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/storage-requests|storage\/users))\/([a-z0-9._-]+)(\/usage)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/invites|admin\/storage-requests|storage\/users|links))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }
