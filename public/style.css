@@ -63,22 +63,16 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 .brand {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--mono);
   font-size: 22px;
-  font-weight: 600;
+  font-weight: 700;
   text-decoration: none;
-  letter-spacing: -0.02em;
 }
 
-.brand-mark {
-  display: grid;
-  grid-template-columns: repeat(2, 7px);
-  grid-template-rows: repeat(2, 7px);
-}
-
-.brand-mark i { background: var(--ink); }
-.brand-mark i:nth-child(2), .brand-mark i:nth-child(3) { background: transparent; }
+/* The bird cursor that ends the wordmark. */
+.brand-cursor { width: 0.6em; height: 0.66em; flex: none; }
 
 .nav { display: flex; gap: 28px; flex: 1; justify-content: center; }
 
@@ -293,7 +287,7 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 .welcome-card .hello { font-size: 20px; margin: 0; }
 .welcome-card h1 { font-size: 26px; margin: 4px 0 18px; font-weight: 700; letter-spacing: -0.02em; }
 
-.cubes { width: 150px; margin: 6px auto 18px; display: block; }
+.logo-mark { width: 96px; margin: 6px auto 18px; display: block; }
 
 .welcome-card form { text-align: left; display: flex; flex-direction: column; gap: 14px; }
 .welcome-card .btn { width: 100%; margin-top: 6px; }

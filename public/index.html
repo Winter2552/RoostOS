@@ -18,13 +18,10 @@
     <section class="card welcome-card">
       <p class="hello">Hello,</p>
       <h1>Welcome to <span data-server-name>Roost</span></h1>
-      <svg class="cubes" viewBox="0 0 150 130" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true">
-        <path d="M75 6 L105 23 L105 57 L75 74 L45 57 L45 23 Z" fill="currentColor"/>
-        <path d="M45 23 L75 40 L105 23 M75 40 V74" stroke="#0a0a0a"/>
-        <path d="M45 57 L75 74 L75 108 L45 125 L15 108 L15 74 Z"/>
-        <path d="M15 74 L45 91 L75 74 M45 91 V125"/>
-        <path d="M105 57 L135 74 L135 108 L105 125 L75 108 L75 74 Z"/>
-        <path d="M75 74 L105 91 L135 74 M105 91 V125"/>
+      <svg class="logo-mark" viewBox="0 8 120 120" aria-hidden="true">
+        <path d="M22 48 L42 68 L22 88" fill="none" stroke="currentColor" stroke-width="13"/>
+        <path d="M58 92 V44 H76 A26 26 0 0 1 102 70 V92 Z" fill="currentColor"/>
+        <circle cx="86" cy="60" r="4.5" fill="var(--panel)"/>
       </svg>
       <p id="welcome-lead" class="mono muted" style="margin:0 0 22px"></p>
       <form id="welcome-form" autocomplete="on">
@@ -40,7 +37,7 @@
   <!-- Signed-in dashboard -->
   <div id="shell" class="frame hidden">
     <header class="topbar">
-      <a class="brand" href="#/apps"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span data-server-name>Roost</span></a>
+      <a class="brand" href="#/apps"><span data-server-name>Roost</span><svg class="brand-cursor" viewBox="58 44 44 48" aria-hidden="true"><path d="M58 92 V44 H76 A26 26 0 0 1 102 70 V92 Z" fill="currentColor"/><circle cx="86" cy="60" r="5" fill="var(--bg)"/></svg></a>
       <nav class="nav mono">
         <a href="#/apps" data-view="apps">Apps</a>
         <a href="#/profile" data-view="profile">Profile</a>
