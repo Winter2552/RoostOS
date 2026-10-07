@@ -43,6 +43,7 @@
       <a class="brand" href="#/apps"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span data-server-name>Roost</span></a>
       <nav class="nav mono">
         <a href="#/apps" data-view="apps">Apps</a>
+        <a href="#/status" data-view="status">Status</a>
         <a href="#/profile" data-view="profile">Profile</a>
         <a href="#/admin" data-view="admin" class="admin-only">Admin</a>
       </nav>
@@ -64,6 +65,7 @@
           <div class="stat">Load<b id="stat-load">—</b></div>
           <div class="stat">Storage<b id="stat-disk">—</b></div>
         </div>
+        <a class="more-link mono" href="#/status">Server status →</a>
       </div>
       <div class="section">
         <div class="section-head">
@@ -72,6 +74,24 @@
         </div>
         <div class="apps" id="apps"></div>
       </div>
+    </section>
+
+    <!-- Status view -->
+    <section id="view-status" class="section hidden">
+      <div class="section-head">
+        <h2>Server status</h2>
+        <span class="mono muted" id="status-updated">Checking…</span>
+      </div>
+      <p class="status-summary" id="status-summary"><span class="dot"></span><span>Checking the server</span></p>
+
+      <h3 class="status-group mono muted">Server</h3>
+      <div class="status-grid" id="status-server"></div>
+
+      <h3 class="status-group mono muted">Drives</h3>
+      <div class="status-grid" id="status-disks"></div>
+
+      <h3 class="status-group mono muted">Apps</h3>
+      <div class="status-grid" id="status-apps"></div>
     </section>
 
     <!-- Profile view -->

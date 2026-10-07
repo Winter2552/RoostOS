@@ -135,13 +135,16 @@ function renderUser() {
   $('#profile-form').username.value = u.username;
 }
 
+const VIEWS = ['apps', 'status', 'profile', 'admin'];
+
 function route() {
   if (!state.user) return;
   let view = (location.hash.replace('#/', '') || 'apps');
-  if (!['apps', 'profile', 'admin'].includes(view) || (view === 'admin' && state.user.role !== 'admin')) view = 'apps';
-  for (const v of ['apps', 'profile', 'admin']) $(`#view-${v}`).classList.toggle('hidden', v !== view);
+  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin')) view = 'apps';
+  for (const v of VIEWS) $(`#view-${v}`).classList.toggle('hidden', v !== view);
   document.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
   if (view === 'admin') loadAdmin();
+  if (view === 'status') loadStatus();
 }
 
 window.addEventListener('hashchange', route);
@@ -199,6 +202,82 @@ async function loadSystem() {
   } catch {
     // The panel just keeps its dashes if stats aren't available.
   }
+}
+
+// ---------- status page ----------
+
+const STATUS_REFRESH_MS = 5 * 1000;
+const FULL_AT = 90;
+let statusBusy = false;
+
+function pct(used, total) {
+  return total ? Math.round((used / total) * 100) : 0;
+}
+
+function meter(percent) {
+  return el('div', { class: `meter${percent >= FULL_AT ? ' high' : ''}`, role: 'meter', 'aria-valuenow': percent, 'aria-valuemin': 0, 'aria-valuemax': 100 },
+    el('i', { style: `width:${Math.min(100, percent)}%` }));
+}
+
+function statCard(label, value, sub, bar) {
+  return el('div', { class: 'card stat-card' },
+    el('div', { class: 'mono muted', text: label }),
+    el('div', { class: 'stat-value', text: value }),
+    bar === undefined ? null : meter(bar),
+    el('div', { class: 'mono muted stat-sub', text: sub }));
+}
+
+async function loadStatus() {
+  if (statusBusy) return;
+  statusBusy = true;
+  try {
+    renderStatus(await api('GET', '/api/status'));
+  } catch {
+    $('#status-updated').textContent = 'Roost is not answering';
+    setSummary('offline', "Can't reach the server right now");
+  } finally {
+    statusBusy = false;
+  }
+}
+
+function setSummary(kind, text) {
+  $('#status-summary').replaceChildren(el('span', { class: `dot ${kind}` }), el('span', { text }));
+}
+
+function renderStatus(s) {
+  const memUsed = s.memory.total - s.memory.available;
+  const memPct = pct(memUsed, s.memory.total);
+  $('#status-server').replaceChildren(
+    statCard('Uptime', duration(s.uptime), `Roost up ${duration(s.roostUptime)}`),
+    statCard('CPU', `${Math.round(s.cpu.percent)}%`, `Load ${s.cpu.load[0].toFixed(2)} · ${s.cpu.cores} cores`, s.cpu.percent),
+    statCard('Memory', bytes(memUsed), `${memPct}% of ${bytes(s.memory.total)}`, memPct),
+    statCard('Host', s.hostname, s.platform),
+  );
+
+  $('#status-disks').replaceChildren(...s.disks.map((d) => {
+    if (d.missing) return statCard(d.label, 'Not found', d.path);
+    const used = d.total - d.free;
+    return statCard(d.label, `${bytes(d.free)} free`, `${bytes(used)} of ${bytes(d.total)} used`, pct(used, d.total));
+  }));
+
+  const appLabel = { online: 'Online', offline: 'Offline', unset: 'Not set up' };
+  $('#status-apps').replaceChildren(...(s.apps.length ? s.apps.map((a) =>
+    el('div', { class: `card stat-card app-status ${a.state}` },
+      el('div', { class: 'app-status-head' }, icon(a.icon), el('div', { class: 'mono muted', text: a.tagline })),
+      el('div', { class: 'stat-value', text: a.name }),
+      el('div', { class: 'mono stat-sub' },
+        el('span', {}, el('span', { class: `dot ${a.state}` }), appLabel[a.state]),
+        a.ms !== undefined ? el('span', { class: 'muted', text: ` · ${a.ms} ms` }) : null)),
+  ) : [el('div', { class: 'empty mono', text: 'No apps to check.' })]));
+
+  const problems = [
+    ...s.apps.filter((a) => a.state === 'offline').map((a) => `${a.name} is offline`),
+    ...s.disks.filter((d) => !d.missing && pct(d.total - d.free, d.total) >= FULL_AT).map((d) => `${d.label} drive is nearly full`),
+    ...s.disks.filter((d) => d.missing).map((d) => `${d.label} drive not found`),
+    ...(memPct >= FULL_AT ? ['Memory is nearly full'] : []),
+  ];
+  setSummary(problems.length ? 'offline' : 'online', problems.length ? problems.join(' · ') : 'Everything is running');
+  $('#status-updated').textContent = `Updated ${new Date(s.checkedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
 }
 
 function tickClock() {
@@ -356,6 +435,10 @@ $('#settings-form').addEventListener('submit', async (e) => {
   tickClock();
   setInterval(tickClock, 30 * 1000);
   setInterval(() => { if (state.user && !$('#view-apps').classList.contains('hidden')) loadSystem(); }, 15 * 1000);
+  // The status page refreshes itself while it is open and the tab is visible.
+  setInterval(() => {
+    if (state.user && !document.hidden && !$('#view-status').classList.contains('hidden')) loadStatus();
+  }, STATUS_REFRESH_MS);
   const s = await api('GET', '/api/state');
   setServerName(s.serverName);
   if (s.user) await enter(s.user);

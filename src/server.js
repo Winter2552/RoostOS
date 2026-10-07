@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { Store } = require('./store');
 const { hashPassword, verifyPassword, Sessions, RateLimiter, SESSION_TTL_MS } = require('./auth');
+const { parseDisks, CpuMeter, serverHealth } = require('./status');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const COOKIE = 'roost_session';
@@ -115,14 +116,19 @@ function requestHost(req) {
 }
 
 async function probe(url, timeoutMs) {
+  return (await timedProbe(url, timeoutMs)).state;
+}
+
+async function timedProbe(url, timeoutMs) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const started = Date.now();
   try {
     // Any HTTP answer at all (even a redirect or 401) means the app is up.
     await fetch(url, { method: 'GET', redirect: 'manual', signal: ctrl.signal });
-    return 'online';
+    return { state: 'online', ms: Date.now() - started };
   } catch {
-    return 'offline';
+    return { state: 'offline' };
   } finally {
     clearTimeout(timer);
   }
@@ -130,10 +136,14 @@ async function probe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500 } = {}) {
+function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, disks } = {}) {
   const store = new Store(dataDir);
   const sessions = new Sessions();
   const limiter = new RateLimiter();
+  const cpu = new CpuMeter();
+  // Drives shown on the status page. Without a list, show the system drive and
+  // the drive Roost keeps its data on (the same drive is only listed once).
+  const diskList = disks && disks.length ? disks : [{ label: 'System', path: '/' }, { label: 'Data', path: dataDir }];
   const db = () => store.db;
 
   function currentUser(req) {
@@ -282,6 +292,22 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500 } 
       });
     },
 
+    'GET /api/status': async (req, res) => {
+      const user = requireUser(req);
+      const host = requestHost(req);
+      const [health, apps] = await Promise.all([
+        serverHealth({ cpu, disks: diskList }),
+        Promise.all(visibleApps(db(), user).map(async (a) => ({
+          id: a.id,
+          name: a.name,
+          tagline: a.tagline,
+          icon: a.icon,
+          ...(a.url ? await timedProbe(a.url.replace(/\{host\}/g, host), probeTimeoutMs) : { state: 'unset' }),
+        }))),
+      ]);
+      send(res, 200, { ...health, apps, checkedAt: new Date().toISOString() });
+    },
+
     'GET /api/admin/users': (req, res) => {
       requireAdmin(req);
       send(res, 200, { users: db().users.map(publicUser) });
@@ -411,7 +437,8 @@ if (require.main === module) {
   const port = Number(process.env.PORT) || 8080;
   const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
   const secureCookies = process.env.SECURE_COOKIES === 'true';
-  createServer({ dataDir, secureCookies }).listen(port, () => {
+  const disks = parseDisks(process.env.ROOST_DISKS);
+  createServer({ dataDir, secureCookies, disks }).listen(port, () => {
     console.log(`Roost is running on http://localhost:${port} (data in ${dataDir})`);
   });
 }

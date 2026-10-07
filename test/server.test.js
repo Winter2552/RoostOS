@@ -111,6 +111,36 @@ test('status reports unset apps without probing', async () => {
   assert.ok(['online', 'offline'].includes(body.status.jellyfin));
 });
 
+test('status page needs a signed-in user', async () => {
+  assert.equal((await call('GET', '/api/status')).status, 401);
+});
+
+test('status reports server health and app states', async () => {
+  const { status, body } = await call('GET', '/api/status', null, userCookie);
+  assert.equal(status, 200);
+  assert.ok(body.uptime > 0);
+  assert.ok(body.cpu.cores > 0);
+  assert.ok(body.cpu.percent >= 0 && body.cpu.percent <= 100);
+  assert.ok(body.memory.total > 0 && body.memory.available <= body.memory.total);
+  assert.ok(body.disks.length >= 1);
+  assert.ok(body.disks[0].total > 0);
+  // The guest only sees the apps they were given.
+  assert.deepEqual(body.apps.map((a) => a.id), ['jellyfin', 'glint']);
+  assert.equal(body.apps[1].state, 'unset');
+  assert.ok(['online', 'offline'].includes(body.apps[0].state));
+});
+
+test('ROOST_DISKS parsing skips bad entries', () => {
+  const { parseDisks, readDisks } = require('../src/status');
+  assert.deepEqual(parseDisks('System=/;Data = /data ;junk;=x'), [
+    { label: 'System', path: '/' },
+    { label: 'Data', path: '/data' },
+  ]);
+  const disks = readDisks([{ label: 'A', path: dataDir }, { label: 'B', path: dataDir }, { label: 'C', path: '/no/such/drive' }]);
+  assert.deepEqual(disks.map((d) => d.label), ['A', 'C']);
+  assert.equal(disks[1].missing, true);
+});
+
 test('users can rename themselves and change password', async () => {
   const renamed = await call('PATCH', '/api/me', { displayName: 'Guest Room' }, userCookie);
   assert.equal(renamed.body.user.displayName, 'Guest Room');
