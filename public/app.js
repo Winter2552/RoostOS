@@ -60,7 +60,6 @@ function resolveUrl(url) {
   return url.replace(/\{host\}/g, location.hostname);
 }
 
-const pad = (n) => String(n).padStart(2, '0');
 
 function bytes(n) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -164,18 +163,16 @@ async function loadApps() {
 function renderApps() {
   const list = $('#apps');
   const total = state.apps.length;
-  $('#app-count').textContent = `${total} app${total === 1 ? '' : 's'}`;
-  $('#foot-count').textContent = `${pad(total)}/${pad(total)}  Apps on the Roost`;
   if (!total) {
     list.replaceChildren(el('div', { class: 'empty mono', text: 'No apps yet. Ask an admin to give you access.' }));
     return;
   }
-  list.replaceChildren(...state.apps.map((app, i) => {
+  list.replaceChildren(...state.apps.map((app) => {
     const status = app.url ? state.status[app.id] || 'checking' : 'unset';
     const label = { online: 'Online', offline: 'Offline', checking: 'Checking', unset: 'Not set up' }[status];
     const isAdmin = state.user.role === 'admin';
     const children = [
-      el('div', { class: 'app-top' }, icon(app.icon), el('span', { class: 'mono muted', text: pad(i + 1) })),
+      icon(app.icon),
       el('div', {}, el('div', { class: 'mono muted', text: app.tagline }), el('h3', { text: app.name })),
       el('p', { text: app.description }),
       el('div', { class: 'app-foot mono' },
@@ -190,26 +187,10 @@ function renderApps() {
 
 // ---------- system panel ----------
 
-function buildTicks() {
-  const g = $('#ticks');
-  const ns = 'http://www.w3.org/2000/svg';
-  for (let i = 0; i < 17; i++) {
-    const x = 70 + i * 10;
-    const line = document.createElementNS(ns, 'line');
-    line.setAttribute('x1', x); line.setAttribute('x2', x);
-    line.setAttribute('y1', 186); line.setAttribute('y2', i % 4 === 0 ? 206 : 198);
-    g.append(line);
-  }
-}
-
 async function loadSystem() {
   try {
     const s = await api('GET', '/api/system');
     const used = s.memory.total - s.memory.free;
-    const pct = used / s.memory.total;
-    const circ = 2 * Math.PI * 118;
-    $('#gauge-arc').setAttribute('stroke-dasharray', `${(pct * circ).toFixed(1)} ${circ.toFixed(1)}`);
-    $('#gauge-label').textContent = `Mem ${Math.round(pct * 100)}%`;
     $('#stat-uptime').textContent = duration(s.uptime);
     $('#stat-mem').textContent = `${bytes(used)} / ${bytes(s.memory.total)}`;
     $('#stat-load').textContent = `${s.load[0].toFixed(2)} · ${s.cpus} cpu`;
@@ -372,7 +353,6 @@ $('#settings-form').addEventListener('submit', async (e) => {
 // ---------- boot ----------
 
 (async function boot() {
-  buildTicks();
   tickClock();
   setInterval(tickClock, 30 * 1000);
   setInterval(() => { if (state.user && !$('#view-apps').classList.contains('hidden')) loadSystem(); }, 15 * 1000);

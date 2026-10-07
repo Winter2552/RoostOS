@@ -56,32 +56,13 @@
     <!-- Apps view -->
     <section id="view-apps">
       <div class="hero">
-        <div class="hero-left">
-          <div class="mono muted" id="greeting">Hello</div>
-          <h1>Welcome<br>home,<br><span id="hero-name"></span><sup>®</sup></h1>
-          <div class="tags mono"><span>Home server</span><span>/</span><span id="app-count">0 apps</span></div>
-          <p>Everything on the Roost lives here. Pick an app to open it. Media, galaxies, files and photos, all running at home.</p>
-        </div>
-        <div class="hero-right">
-          <div class="stack-label">Roost is<br>always ---<br>home</div>
-          <div class="gauge-wrap"><span class="br-b"></span>
-            <svg class="gauge" viewBox="0 0 300 300" fill="none" stroke="currentColor" aria-label="Memory in use">
-              <circle cx="150" cy="150" r="118" stroke-opacity="0.5"/>
-              <circle id="gauge-arc" cx="150" cy="150" r="118" stroke-width="3" stroke-dasharray="0 742" transform="rotate(-90 150 150)"/>
-              <line x1="10" y1="150" x2="290" y2="150" stroke-opacity="0.5"/>
-              <path d="M140 92 L160 92 L150 104 Z" fill="currentColor" stroke="none"/>
-              <circle cx="150" cy="62" r="6"/><line x1="130" y1="62" x2="170" y2="62"/><line x1="150" y1="44" x2="150" y2="80"/>
-              <g id="ticks" stroke-opacity="0.8"></g>
-              <rect x="112" y="138" width="76" height="24" fill="#0a0a0a"/>
-              <text id="gauge-label" x="150" y="155" text-anchor="middle" font-size="12" stroke="none">Memory</text>
-            </svg>
-          </div>
-          <div class="stats mono">
-            <div class="stat">Uptime<b id="stat-uptime">—</b></div>
-            <div class="stat">Memory<b id="stat-mem">—</b></div>
-            <div class="stat">Load<b id="stat-load">—</b></div>
-            <div class="stat">Storage<b id="stat-disk">—</b></div>
-          </div>
+        <div class="mono muted" id="greeting">Hello</div>
+        <h1>Welcome home, <span id="hero-name"></span></h1>
+        <div class="stats mono">
+          <div class="stat">Uptime<b id="stat-uptime">—</b></div>
+          <div class="stat">Memory<b id="stat-mem">—</b></div>
+          <div class="stat">Load<b id="stat-load">—</b></div>
+          <div class="stat">Storage<b id="stat-disk">—</b></div>
         </div>
       </div>
       <div class="section">
@@ -157,14 +138,9 @@
       </form>
     </section>
 
-    <footer>
-      <div class="footer mono">
-        <span id="foot-count">01/04</span>
-        <span class="hide-sm" id="foot-host"></span>
-        <span class="hide-sm" style="text-align:right">Self-hosted · ZimaOS</span>
-        <span class="big"><span data-server-name>Roost</span></span>
-      </div>
-      <div class="checker" aria-hidden="true"></div>
+    <footer class="footer mono muted">
+      <span><span data-server-name>Roost</span> · self-hosted</span>
+      <span id="foot-host"></span>
     </footer>
   </div>
 
