@@ -235,6 +235,11 @@ test('HTTPS starts off and only admins can see or change it', async () => {
   assert.equal(res.status, 401);
 });
 
+test('the setup checklist lists HTTPS as not done yet', async () => {
+  const step = (await call('GET', '/api/admin/setup')).body.steps.find((s) => s.id === 'https');
+  assert.equal(step.done, false);
+});
+
 test('bad domains and missing tokens are refused', async () => {
   assert.equal((await call('PUT', '/api/admin/tls', { domain: 'not a domain', token: 'x' })).status, 400);
   assert.equal((await call('PUT', '/api/admin/tls', { domain: 'roostos.network' })).status, 400);
@@ -262,6 +267,12 @@ test('gets a certificate for the domain and its subdomains', { skip: !hasOpenssl
   assert.equal(dns.size, 0, 'challenge records are cleaned up');
   const files = fs.readdirSync(path.join(tmp, 'data', 'tls')).sort();
   assert.deepEqual(files, ['account.pem', 'cert.pem', 'key.pem']);
+});
+
+test('the setup checklist ticks off HTTPS once the certificate is in use', { skip: !hasOpenssl && 'needs openssl' }, async () => {
+  const step = (await call('GET', '/api/admin/setup')).body.steps.find((s) => s.id === 'https');
+  assert.equal(step.done, true);
+  assert.equal(step.action.focus, 'tls-form');
 });
 
 test('serves HTTPS with the new certificate', { skip: !hasOpenssl && 'needs openssl' }, async () => {

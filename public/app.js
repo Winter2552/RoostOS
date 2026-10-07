@@ -1427,9 +1427,9 @@ function renderTls(t) {
   else if (t.connection.secure) lines.push('You opened this page directly over HTTPS.');
   $('#tls-detail').textContent = lines.join(' · ');
 
-  if (document.activeElement === null || !f.contains(document.activeElement)) {
-    f.domain.value = t.domain || '';
-    f.email.value = t.email || '';
+  // Don't overwrite what someone is typing; an empty field is always filled in.
+  for (const name of ['domain', 'email']) {
+    if (document.activeElement !== f[name] || !f[name].value) f[name].value = t[name] || '';
   }
   f.token.placeholder = t.tokenSaved ? 'Saved (leave blank to keep)' : 'Paste the token';
   f.token.required = !t.tokenSaved;

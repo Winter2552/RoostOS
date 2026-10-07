@@ -921,6 +921,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         dockerOk: !docker.error,
         secureCookies,
         trustProxy,
+        tls: certs.status(),
         ticked: db().settings.setupTicked || [],
       }));
     },
