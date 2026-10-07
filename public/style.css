@@ -58,6 +58,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 /* ---------- header ---------- */
 
 .topbar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 32px;
@@ -78,18 +79,80 @@ button, input, select, textarea { font: inherit; color: inherit; }
 /* The bird cursor that ends the wordmark. */
 .brand-cursor { width: 0.6em; height: 0.66em; flex: none; }
 
-.nav { display: flex; gap: 28px; flex: 1; justify-content: center; }
+/* Only the apps live in the bar; account pages sit in the menu under the avatar. */
+.nav { display: flex; gap: 28px; flex: 1; min-width: 0; justify-content: center; overflow-x: auto; scrollbar-width: none; }
+.nav::-webkit-scrollbar { display: none; }
 
 .nav a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  white-space: nowrap;
   text-decoration: none;
   color: var(--muted);
-  padding-bottom: 4px;
+  font-size: 16px;
+  padding: 4px 0;
   border-bottom: 1px solid transparent;
 }
 
 .nav a.active { color: var(--ink); border-bottom-color: var(--ink); }
 
-.who { display: flex; align-items: center; gap: 12px; }
+.bar-icon { display: inline-grid; flex: none; }
+.bar-icon svg { width: 18px; height: 18px; }
+
+.who { position: relative; display: flex; align-items: center; }
+
+.avatar-btn {
+  background: none;
+  border: 0;
+  padding: 0 0 4px;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+  border-radius: 0;
+}
+
+/* On Status, Profile or Admin the avatar is underlined like an active tab. */
+.avatar-btn.active { border-bottom-color: var(--ink); }
+.avatar-btn:focus-visible, .account-menu [role='menuitem']:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+
+.account-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 20;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  background: var(--bg);
+  border: 2px solid var(--ink);
+  border-radius: 14px;
+  box-shadow: 4px 4px 0 var(--shadow);
+}
+
+.menu-head { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px 12px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+.menu-head b { font-weight: 500; font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-head .mono { font-size: 11px; }
+
+.account-menu [role='menuitem'] {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.account-menu [aria-current='page'] { color: var(--ink); }
+.account-menu [aria-current='page']::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--ink); margin-left: auto; }
+.account-menu #logout { border-top: 1px solid var(--line); border-radius: 0 0 8px 8px; margin-top: 6px; padding-top: 2px; }
 
 .avatar {
   width: 34px;
@@ -433,7 +496,11 @@ a.btn { text-decoration: none; text-align: center; }
 @media (max-width: 860px) {
   .frame { margin: 0; border: 0; min-height: 100vh; min-height: 100dvh; }
   .topbar { flex-wrap: wrap; gap: 14px; padding: 18px 16px; }
-  .nav { order: 3; flex-basis: 100%; justify-content: flex-start; gap: 22px; }
+  .nav { order: 3; flex-basis: 100%; justify-content: flex-start; gap: 22px; margin: 0 -16px; padding: 0 16px; }
+  .brand { flex: 1; }
+  /* The menu drops down full width under the bar, easy to reach with a thumb. */
+  .who { position: static; }
+  .account-menu { top: calc(100% + 8px); left: 12px; right: 12px; min-width: 0; }
   .hero { padding: 32px 16px 28px; }
   .stats { grid-template-columns: repeat(2, 1fr); }
   .section, .footer { padding-left: 16px; padding-right: 16px; }
@@ -504,6 +571,7 @@ a.btn { text-decoration: none; text-align: center; }
 /* Hover effects only where there is a mouse; on phones a tapped button would stay "pressed". */
 @media (hover: hover) {
   .nav a:hover, .more-link:hover { color: var(--ink); border-bottom-color: var(--ink); }
+  .account-menu [role='menuitem']:hover { color: var(--ink); background: rgba(242, 239, 233, 0.08); }
   .link-btn:hover { color: var(--ink); }
   .btn:hover { transform: translate(2px, 2px); box-shadow: 2px 2px 0 rgba(242, 239, 233, 0.35); }
   a.app-card:hover { transform: translate(4px, 4px); box-shadow: 3px 3px 0 var(--shadow); }
@@ -512,7 +580,9 @@ a.btn { text-decoration: none; text-align: center; }
 /* Touch screens: links and buttons at least 44px tall so they are easy to hit. */
 @media (pointer: coarse) {
   .nav a, .link-btn, .more-link { display: inline-flex; align-items: center; min-height: 44px; }
-  .nav a { padding-bottom: 0; }
+  .nav a { padding: 0; }
+  .account-menu [role='menuitem'] { min-height: 48px; }
+  .avatar-btn { min-width: 44px; min-height: 44px; display: grid; place-items: center; }
   .btn.small { min-height: 44px; }
   .checks label { min-height: 44px; }
   .checks input[type='checkbox'] { width: 20px; height: 20px; }
