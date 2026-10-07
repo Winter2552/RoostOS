@@ -183,6 +183,24 @@
         <div class="row"><button class="btn" type="submit">Save</button></div>
         <div class="msg" role="status"></div>
       </form>
+
+      <form class="card panel" id="tls-form">
+        <h3>Secure connection</h3><span class="mono muted">HTTPS for your domain and every name under it, renewed automatically</span>
+        <p class="tls-state" id="tls-state"><span class="dot"></span><span>Checking…</span></p>
+        <p class="mono muted tls-detail" id="tls-detail"></p>
+        <div class="form-grid">
+          <label class="field"><span>Domain</span><input type="text" name="domain" placeholder="roostos.network" autocapitalize="none" spellcheck="false" required></label>
+          <label class="field"><span>Cloudflare API token</span><input type="password" name="token" autocomplete="off" spellcheck="false"></label>
+          <label class="field"><span>Email (optional)</span><input type="email" name="email" placeholder="For Let's Encrypt notices" autocapitalize="none"></label>
+        </div>
+        <p class="mono muted tls-help">Make the token in Cloudflare under My Profile → API Tokens → Create Token, using the "Edit zone DNS" template limited to this domain. Roost keeps it on the server and never shows it again.</p>
+        <div class="row">
+          <button class="btn" type="submit" id="tls-save">Save and get certificate</button>
+          <button class="btn ghost small hidden" type="button" id="tls-renew">Renew now</button>
+          <button class="btn danger small hidden" type="button" id="tls-off">Turn off</button>
+        </div>
+        <div class="msg" role="status"></div>
+      </form>
     </section>
 
     <footer class="footer mono muted">

@@ -1,6 +1,7 @@
 'use strict';
 
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -9,6 +10,7 @@ const { hashPassword, verifyPassword, Sessions, RateLimiter, SESSION_TTL_MS } = 
 const storage = require('./storage');
 const { parseDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
+const { CertManager, validDomain } = require('./tls');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const COOKIE = 'roost_session';
@@ -112,6 +114,12 @@ function visibleApps(db, user) {
     : db.apps.filter((a) => user.apps.includes(a.id));
 }
 
+// True when the browser reached Roost over HTTPS: directly, or through
+// Cloudflare, which talks HTTPS to the browser and passes the request on.
+function isSecure(req) {
+  return !!req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https';
+}
+
 function requestHost(req) {
   const host = String(req.headers.host || 'localhost');
   return host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.split(':')[0];
@@ -138,8 +146,9 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '' } = {}) {
+function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', tls: tlsOptions = {} } = {}) {
   const store = new Store(dataDir);
+  const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
   const sessions = new Sessions();
   const limiter = new RateLimiter();
   const cpu = new CpuMeter();
@@ -165,9 +174,9 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     return user;
   }
 
-  function login(res, user, status = 200) {
+  function login(req, res, user, status = 200) {
     const token = sessions.create(user.id);
-    send(res, status, { user: publicUser(user) }, { 'Set-Cookie': sessionCookie(token, secureCookies) });
+    send(res, status, { user: publicUser(user) }, { 'Set-Cookie': sessionCookie(token, secureCookies || isSecure(req)) });
   }
 
   function cleanApps(input) {
@@ -205,6 +214,20 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     if (!storage.appTokenOk(req, appToken)) throw new HttpError(401, 'App token missing or wrong');
   }
 
+  function certSummary() {
+    const s = certs.status();
+    if (s.state === 'off') return null;
+    return { state: s.state, domain: s.domain, daysLeft: s.certificate ? s.certificate.daysLeft : null, expiresAt: s.certificate ? s.certificate.expiresAt : null, error: s.lastError };
+  }
+
+  // What the admin page shows, plus how this browser reached Roost.
+  function tlsView(req) {
+    return {
+      ...certs.status(),
+      connection: { secure: isSecure(req), viaCloudflare: !!req.headers['cf-connecting-ip'], host: requestHost(req) },
+    };
+  }
+
   function cleanAppAccess(apps) {
     if (apps === null || apps === undefined) return null;
     if (!Array.isArray(apps)) throw new HttpError(400, 'Apps must be a list');
@@ -240,7 +263,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       };
       db().users.push(user);
       store.save();
-      login(res, user, 201);
+      login(req, res, user, 201);
     },
 
     'POST /api/login': async (req, res) => {
@@ -251,12 +274,12 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       if (!user || typeof body.password !== 'string' || !verifyPassword(body.password, user.password)) {
         throw new HttpError(401, 'Wrong username or password');
       }
-      login(res, user);
+      login(req, res, user);
     },
 
     'POST /api/logout': (req, res) => {
       sessions.destroy(parseCookies(req)[COOKIE]);
-      send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie('', secureCookies) });
+      send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie('', secureCookies || isSecure(req)) });
     },
 
     'PATCH /api/me': async (req, res) => {
@@ -347,6 +370,8 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         apps,
         // Everything else Docker runs, for admins only.
         otherContainers: user.role === 'admin' ? all.filter((c) => !claimed.has(c.id)) : [],
+        // Certificate health, for admins once HTTPS is set up.
+        certificate: user.role === 'admin' ? certSummary() : null,
         checkedAt: new Date().toISOString(),
       });
     },
@@ -429,6 +454,47 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       if (body.defaultLimitGb !== undefined) db().settings.defaultLimitGb = cleanLimit(body.defaultLimitGb);
       store.save();
       send(res, 200, { settings: { ...db().settings, defaultLimitGb: storage.defaultLimitGb(db()) } });
+    },
+
+    // ---------- HTTPS certificate ----------
+
+    'GET /api/admin/tls': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, tlsView(req));
+    },
+
+    'PUT /api/admin/tls': async (req, res) => {
+      requireAdmin(req);
+      const body = await readJson(req);
+      const current = db().settings.tls || {};
+      const domain = str(body.domain, 200).toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^\*\./, '');
+      if (!validDomain(domain)) throw new HttpError(400, 'Enter the domain on its own, like roostos.network');
+      const email = str(body.email, 200);
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'That email address looks wrong');
+      // A blank token keeps the one already saved; it is never sent back to the browser.
+      const token = str(body.token, 200) || current.token || '';
+      if (!token) throw new HttpError(400, 'Paste a Cloudflare API token');
+      db().settings.tls = { domain, token, email };
+      store.save();
+      certs.lastError = null;
+      if (body.renew !== false) certs.renew();
+      send(res, 200, tlsView(req));
+    },
+
+    'POST /api/admin/tls/renew': (req, res) => {
+      requireAdmin(req);
+      if (!(db().settings.tls || {}).token) throw new HttpError(400, 'Save a domain and Cloudflare token first');
+      certs.renew();
+      send(res, 202, tlsView(req));
+    },
+
+    'DELETE /api/admin/tls': (req, res) => {
+      requireAdmin(req);
+      if (certs.busy) throw new HttpError(409, 'Wait for the current certificate request to finish');
+      delete db().settings.tls;
+      store.save();
+      certs.clear();
+      send(res, 200, tlsView(req));
     },
 
     // ---------- storage limits ----------
@@ -547,7 +613,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     });
   }
 
-  const server = http.createServer(async (req, res) => {
+  async function handle(req, res) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
     res.setHeader('X-Frame-Options', 'DENY');
@@ -567,8 +633,15 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       if (status === 500) console.error(err);
       if (!res.headersSent) send(res, status, { error: status === 500 ? 'Something went wrong' : err.message });
     }
-  });
+  }
 
+  const server = http.createServer(handle);
+  server.certs = certs;
+  // The HTTPS side shares every route; the certificate is looked up per
+  // connection, so a renewal takes effect without a restart.
+  // Browsers opening Roost by IP address send no name and get no certificate,
+  // which is right: the certificate is only valid for the domain.
+  server.createHttpsServer = () => https.createServer({ SNICallback: (name, cb) => cb(null, certs.context) }, handle);
   return server;
 }
 
@@ -580,8 +653,15 @@ if (require.main === module) {
   const disks = parseDisks(process.env.ROOST_DISKS);
   const dockerHost = process.env.DOCKER_HOST || '';
   const roostContainer = process.env.ROOST_CONTAINER || 'roost';
-  createServer({ dataDir, secureCookies, disks, dockerHost, roostContainer, appToken }).listen(port, () => {
+  const httpsPort = Number(process.env.HTTPS_PORT) || 8443;
+  const staging = process.env.ROOST_ACME_STAGING === 'true';
+  const server = createServer({ dataDir, secureCookies, disks, dockerHost, roostContainer, appToken, tls: { staging } });
+  server.listen(port, () => {
     console.log(`Roost is running on http://localhost:${port} (data in ${dataDir})`);
+  });
+  server.certs.start();
+  server.createHttpsServer().listen(httpsPort, () => {
+    console.log(`HTTPS is listening on port ${httpsPort}${server.certs.cert ? '' : ' (no certificate yet; set one up under Admin)'}`);
   });
 }
 

@@ -230,7 +230,7 @@ label.field, div.field { display: flex; flex-direction: column; gap: 6px; }
 
 .field > span { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
 
-input[type='text'], input[type='password'], input[type='url'], input[type='number'], select {
+input[type='text'], input[type='password'], input[type='email'], input[type='url'], input[type='number'], select {
   background: var(--bg);
   border: 1.5px solid var(--line);
   border-radius: 12px;
@@ -436,3 +436,9 @@ input[type='range']:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 2px var(
   .checks label { min-height: 44px; }
   .checks input[type='checkbox'] { width: 20px; height: 20px; }
 }
+
+/* Secure connection (Admin) */
+.tls-state { display: flex; align-items: center; margin: 0 0 6px; font-size: 18px; }
+.tls-state .dot { flex: none; width: 10px; height: 10px; margin-right: 12px; }
+.tls-detail { margin: 0 0 20px; min-height: 1.4em; text-transform: none; letter-spacing: 0; font-size: 13px; line-height: 1.5; }
+.tls-help { margin: 16px 0 0; text-transform: none; letter-spacing: 0; font-size: 13px; line-height: 1.5; }

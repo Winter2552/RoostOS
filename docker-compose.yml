@@ -9,10 +9,13 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
+      # HTTPS, once a certificate is set up under Admin → Secure connection.
+      - "443:8443"
     environment:
       PORT: "8080"
+      HTTPS_PORT: "8443"
       DATA_DIR: /data
-      # Set to "true" only when Roost is served over HTTPS (e.g. through Tailscale serve).
+      # Sign-in cookies are marked Secure automatically on HTTPS; "true" forces it on plain HTTP too.
       SECURE_COOKIES: "false"
       # Shared secret Nest and Glint use to read limits and report usage. Leave blank until they exist.
       ROOST_APP_TOKEN: ""
