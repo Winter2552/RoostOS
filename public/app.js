@@ -43,10 +43,10 @@ async function api(method, url, body) {
     credentials: 'same-origin',
   });
   const data = await res.json().catch(() => ({}));
-  if (res.status === 401 && url !== '/api/login' && !linkToken()) {
+  if (res.status === 401 && !url.startsWith('/api/login') && !linkToken()) {
     showWelcome(false);
   }
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status });
   return data;
 }
 
@@ -54,6 +54,23 @@ function flash(form, text, ok = true) {
   const msg = $('.msg', form);
   msg.textContent = text;
   msg.className = `msg ${ok ? 'ok' : 'error'}`;
+}
+
+// The clipboard API only works over HTTPS, and Roost is often opened on a
+// plain http:// LAN address, so fall back to the older copy command.
+async function copyPlain(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const area = el('textarea', { readonly: true, style: 'position:fixed;opacity:0' });
+    area.value = text;
+    document.body.append(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    area.remove();
+    return ok;
+  }
 }
 
 function resolveUrl(url) {
@@ -151,7 +168,9 @@ function showWelcome(setup) {
   setupMode = setup;
   state.user = null;
   $('#shell').classList.add('hidden');
+  $('#secure').classList.add('hidden');
   $('#welcome').classList.remove('hidden');
+  showCodeStep(null);
   $('#display-name-field').classList.toggle('hidden', !setup);
   $('#welcome-lead').textContent = setup ? 'First run · create the admin account' : 'Sign in to your home server';
   $('#welcome-form [name=password]').autocomplete = setup ? 'new-password' : 'current-password';
@@ -166,15 +185,190 @@ $('#welcome-form').addEventListener('submit', async (e) => {
   const body = { username: f.username.value, password: f.password.value };
   if (setupMode) body.displayName = f.displayName.value;
   try {
-    const { user } = await api('POST', setupMode ? '/api/setup' : '/api/login', body);
-    f.reset();
+    const res = await api('POST', setupMode ? '/api/setup' : '/api/login', body);
     $('#welcome-msg').textContent = '';
-    await enter(user);
+    if (res.twoStep) {
+      f.password.value = '';
+      showCodeStep(res.ticket);
+      return;
+    }
+    f.reset();
+    await enter(res.user);
   } catch (err) {
     $('#welcome-msg').textContent = err.message;
   }
 });
 
+// ---------- sign in: second step ----------
+
+let codeTicket = null;
+let recoveryMode = false;
+
+function showCodeStep(ticket) {
+  codeTicket = ticket;
+  const f = $('#code-form');
+  $('#welcome-form').classList.toggle('hidden', Boolean(ticket));
+  f.classList.toggle('hidden', !ticket);
+  $('#welcome-lead').textContent = ticket ? 'One more step'
+    : setupMode ? 'First run · create the admin account' : 'Sign in to your home server';
+  setRecoveryMode(false);
+  f.code.value = '';
+  $('#code-msg').textContent = '';
+  if (ticket) f.code.focus();
+}
+
+function setRecoveryMode(on) {
+  recoveryMode = on;
+  const input = $('#code-form').code;
+  input.value = '';
+  input.inputMode = on ? 'text' : 'numeric';
+  input.autocomplete = on ? 'off' : 'one-time-code';
+  input.maxLength = on ? 9 : 7;
+  input.classList.toggle('recovery', on);
+  $('#code-label').textContent = on ? 'Recovery code, like k7pm-x3qa' : '6-digit code from your authenticator app';
+  $('#use-recovery').textContent = on ? 'Use the app code instead' : 'Use a recovery code';
+}
+
+async function submitCode() {
+  const f = $('#code-form');
+  if (!f.code.value.trim() || f.code.disabled) return;
+  f.code.disabled = true;
+  try {
+    const { user } = await api('POST', '/api/login/code', { ticket: codeTicket, code: f.code.value, trust: f.trust.checked });
+    $('#welcome-form').reset();
+    showCodeStep(null);
+    await enter(user);
+  } catch (err) {
+    if (err.status === 401) {
+      // The wait ran out or there were too many tries: start again from the password.
+      showCodeStep(null);
+      $('#welcome-msg').textContent = err.message;
+      $('#welcome-form').password.focus();
+    } else {
+      $('#code-msg').textContent = err.message;
+      f.code.select();
+    }
+  } finally {
+    f.code.disabled = false;
+    if (codeTicket) f.code.focus();
+  }
+}
+
+$('#code-form').addEventListener('submit', (e) => { e.preventDefault(); submitCode(); });
+
+// Six digits in: sign in without needing to press the button.
+$('#code-form').code.addEventListener('input', (e) => {
+  if (!recoveryMode && e.target.value.replace(/\D/g, '').length === 6) submitCode();
+});
+
+$('#use-recovery').addEventListener('click', () => { setRecoveryMode(!recoveryMode); $('#code-form').code.focus(); });
+$('#code-back').addEventListener('click', () => { showCodeStep(null); $('#welcome-form').password.focus(); });
+
+// ---------- two-step setup ----------
+
+// Draws the setup steps into a container: add Roost to an authenticator app,
+// confirm one code, then save the recovery codes. Calls onDone(user) at the end.
+async function twoStepSetup(container, onDone) {
+  container.replaceChildren(el('p', { class: 'mono muted', text: 'Getting a code ready…' }));
+  let setup;
+  try {
+    setup = await api('POST', '/api/me/two-step/start');
+  } catch (err) {
+    container.replaceChildren(el('div', { class: 'msg error', text: err.message }));
+    return;
+  }
+  const qr = el('div', { class: 'qr-box' });
+  qr.innerHTML = setup.qr; // drawn by Roost's own QR maker, no user text in it
+  const key = setup.secret.match(/.{1,4}/g).join(' ');
+  const copyMsg = el('span', { class: 'mono muted' });
+  const code = el('input', {
+    type: 'text', name: 'code', class: 'code-input', inputmode: 'numeric', autocomplete: 'one-time-code',
+    maxlength: 7, required: true, 'aria-label': '6-digit code', spellcheck: 'false',
+  });
+  const msg = el('div', { class: 'msg error', role: 'alert' });
+  const turnOn = async () => {
+    if (code.disabled) return;
+    code.disabled = true;
+    try {
+      const res = await api('POST', '/api/me/two-step/enable', { code: code.value });
+      showRecoveryCodes(container, res.recoveryCodes, () => onDone(res.user));
+    } catch (err) {
+      msg.textContent = err.message;
+      code.disabled = false;
+      code.select();
+    }
+  };
+  code.addEventListener('input', () => { if (code.value.replace(/\D/g, '').length === 6) turnOn(); });
+  const form = el('form', { class: 'setup-confirm', onsubmit: (e) => { e.preventDefault(); turnOn(); } },
+    el('label', { class: 'field' }, el('span', { text: '2 · Enter the 6-digit code it shows' }), code),
+    el('button', { class: 'btn', type: 'submit', text: 'Turn on' }),
+    msg);
+  container.replaceChildren(el('div', { class: 'setup' },
+    el('div', { class: 'field' }, el('span', { text: '1 · Add Roost to your authenticator app' })),
+    el('p', { class: 'setup-hint', text: 'Any authenticator app works: Google or Microsoft Authenticator, 1Password, Bitwarden, or the passwords app on your phone.' }),
+    el('div', { class: 'setup-add' },
+      el('a', { class: 'btn ghost open-app', href: setup.uri, text: 'Open in authenticator app' }),
+      qr,
+      el('div', { class: 'setup-key' },
+        el('span', { class: 'mono muted', text: 'Or type this key' }),
+        el('code', { class: 'key', text: key }),
+        el('div', { class: 'split' },
+          el('button', { class: 'link-btn mono', type: 'button', text: 'Copy key', onclick: async () => { copyMsg.textContent = (await copyPlain(setup.secret)) ? 'Copied' : 'Select and copy it'; } }),
+          copyMsg))),
+    form));
+}
+
+function showRecoveryCodes(container, codes, onDone) {
+  const text = `${state.serverName} recovery codes for ${state.user.username}\nEach code signs you in once if you lose your phone.\n\n${codes.join('\n')}\n`;
+  const note = el('span', { class: 'mono muted' });
+  const download = () => {
+    const a = el('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/plain' })), download: `${state.serverName.toLowerCase()}-recovery-codes.txt` });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+  container.replaceChildren(el('div', { class: 'setup' },
+    el('div', { class: 'field' }, el('span', { text: 'Save your recovery codes' })),
+    el('p', { class: 'setup-hint', text: "If you lose your phone, each code signs you in once. Keep them somewhere safe that isn't your phone, like a password manager or a printout." }),
+    el('ol', { class: 'recovery-codes mono' }, codes.map((c) => el('li', { text: c }))),
+    el('div', { class: 'row', style: 'margin-top:0' },
+      el('button', { class: 'btn ghost small', type: 'button', text: 'Copy', onclick: async () => { note.textContent = (await copyPlain(codes.join('\n'))) ? 'Copied' : ''; } }),
+      el('button', { class: 'btn ghost small', type: 'button', text: 'Download', onclick: download }),
+      note),
+    el('button', { class: 'btn', type: 'button', text: "I've saved them", onclick: onDone })));
+}
+
+function needsSecureStep(u) {
+  return (u.twoStep.required && !u.twoStep.on) || u.twoStep.offer;
+}
+
+function showSecure(user) {
+  $('#welcome').classList.add('hidden');
+  $('#join').classList.add('hidden');
+  $('#shell').classList.add('hidden');
+  $('#secure').classList.remove('hidden');
+  const required = user.twoStep.required;
+  $('#secure-lead').textContent = required
+    ? 'Admins need a code from their phone as well as a password'
+    : 'Add a code from your phone as well as your password. You can do this later in Profile.';
+  $('#secure-later').classList.toggle('hidden', required);
+  twoStepSetup($('#secure-setup'), (u) => enter(u));
+}
+
+$('#secure-later').addEventListener('click', async () => {
+  try {
+    const { user } = await api('POST', '/api/me/two-step/skip');
+    await enter(user);
+  } catch (err) {
+    $('#secure-setup').prepend(el('div', { class: 'msg error', text: err.message }));
+  }
+});
+
+$('#secure-logout').addEventListener('click', async () => {
+  await api('POST', '/api/logout').catch(() => {});
+  showWelcome(false);
+});
 function showForgot(show) {
   $('#welcome-form').classList.toggle('hidden', show);
   $('#forgot-form').classList.toggle('hidden', !show);
@@ -370,6 +564,11 @@ function untilDate(iso) {
 
 async function enter(user) {
   state.user = user;
+  if (needsSecureStep(user)) {
+    showSecure(user);
+    return;
+  }
+  $('#secure').classList.add('hidden');
   $('#welcome').classList.add('hidden');
   $('#join').classList.add('hidden');
   $('#shell').classList.remove('hidden');
@@ -404,7 +603,7 @@ function route() {
   for (const v of VIEWS) $(`#view-${v}`).classList.toggle('hidden', v !== view);
   document.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
   if (view === 'admin') loadAdmin();
-  if (view === 'profile') loadStorage();
+  if (view === 'profile') { loadStorage(); loadTwoStep(); }
   if (view === 'status') loadStatus();
   if (view === 'nest') window.nestOpen(rest);
   else document.title = state.serverName;
@@ -639,6 +838,72 @@ $('#password-form').addEventListener('submit', async (e) => {
   } catch (err) { flash(f, err.message, false); }
 });
 
+// ---------- two-step in profile ----------
+
+async function loadTwoStep() {
+  const t = await api('GET', '/api/me/two-step');
+  const on = t.on;
+  $('#two-step-dot').className = `dot ${on ? 'online' : t.required ? 'offline' : ''}`;
+  $('#two-step-text').textContent = on
+    ? `On since ${shortDate(t.since)} · ${t.recoveryLeft} recovery code${t.recoveryLeft === 1 ? '' : 's'} left`
+    : 'Off';
+  $('#two-step-off').classList.toggle('hidden', on);
+  $('#two-step-on').classList.toggle('hidden', !on);
+  $('#two-step-setup-here').replaceChildren();
+  // Admins who must keep it on move it to a new phone instead of turning it off.
+  $('#two-step-off-btn').textContent = t.required ? 'Move to a new phone' : 'Turn off';
+  $('#two-step-devices').replaceChildren(...[
+    el('span', { class: 'mono muted', text: `${t.trustedDevices} trusted device${t.trustedDevices === 1 ? '' : 's'}` }),
+    t.trustedDevices ? el('button', { class: 'link-btn mono', type: 'button', text: 'Forget them', onclick: forgetDevices }) : null,
+  ].filter(Boolean));
+}
+
+async function forgetDevices() {
+  try {
+    await api('POST', '/api/me/two-step/forget-devices');
+    await loadTwoStep();
+    flash($('#two-step-on'), 'Every device will be asked for a code next time');
+  } catch (err) { flash($('#two-step-on'), err.message, false); }
+}
+
+$('#two-step-begin').addEventListener('click', () => {
+  $('#two-step-off').classList.add('hidden');
+  twoStepSetup($('#two-step-setup-here'), (user) => { state.user = user; loadTwoStep(); });
+});
+
+$('#two-step-on').addEventListener('click', async (e) => {
+  const act = e.target.dataset && e.target.dataset.act;
+  if (!act) return;
+  const f = $('#two-step-on');
+  if (!f.password.value) {
+    flash(f, 'Type your password first', false);
+    f.password.focus();
+    return;
+  }
+  try {
+    if (act === 'codes') {
+      const res = await api('POST', '/api/me/two-step/recovery-codes', { password: f.password.value });
+      f.reset();
+      flash(f, '');
+      f.classList.add('hidden');
+      showRecoveryCodes($('#two-step-setup-here'), res.recoveryCodes, () => { state.user = res.user; loadTwoStep(); });
+    } else {
+      const moving = state.user.twoStep.required;
+      if (!moving && !confirm('Turn off two-step sign-in? Your password alone will sign you in.')) return;
+      const { user } = await api('POST', '/api/me/two-step/disable', { password: f.password.value });
+      f.reset();
+      flash(f, '');
+      state.user = user;
+      await loadTwoStep();
+      if (moving) {
+        $('#two-step-off').classList.add('hidden');
+        twoStepSetup($('#two-step-setup-here'), (u) => { state.user = u; loadTwoStep(); });
+      }
+    }
+  } catch (err) { flash(f, err.message, false); }
+});
+$('#two-step-on').addEventListener('submit', (e) => e.preventDefault());
+
 // ---------- storage ----------
 
 const REQUEST_LABEL = { pending: 'Waiting for an admin', approved: 'Approved', declined: 'Declined' };
@@ -806,6 +1071,7 @@ async function loadAdmin() {
   const [{ users }, { apps }, { requests, defaultLimitGb }, { invites, publicUrl }, { settings }] = await Promise.all([
     api('GET', '/api/admin/users'), api('GET', '/api/apps'), api('GET', '/api/admin/storage-requests'), api('GET', '/api/admin/invites'),
     api('GET', '/api/admin/settings')]);
+  $('#settings-form').adminsNeedTwoStep.checked = settings.adminsNeedTwoStep;
   renderMailSettings(settings);
   state.users = users;
   state.apps = apps;
@@ -890,6 +1156,13 @@ function renderUsers() {
         msg.className = 'msg ok'; msg.textContent = 'Saved';
       } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
     };
+    const resetTwoStep = async () => {
+      if (!confirm(`Reset two-step sign-in for ${u.displayName}? Their password alone will sign them in until they set it up again.`)) return;
+      try {
+        await api('PATCH', `/api/admin/users/${u.id}`, { resetTwoStep: true });
+        loadAdmin();
+      } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
+    };
     const resetSpot = el('div', { class: 'reset-spot' });
     const resetLink = async (email) => {
       try {
@@ -910,13 +1183,15 @@ function renderUsers() {
       el('div', { class: 'who' },
         el('span', { class: 'avatar', text: (u.displayName || u.username).charAt(0).toUpperCase() }),
         el('div', {}, el('div', { text: u.displayName }), el('div', { class: 'mono muted', text: [`@${u.username}`, u.email].filter(Boolean).join(' · ') })),
-        el('span', { class: 'pill', text: u.role })),
+        el('span', { class: 'pill', text: u.role }),
+        u.twoStep.on ? el('span', { class: 'pill approved', text: 'Two-step' }) : null),
       u.role === 'admin' ? el('span', { class: 'mono muted', text: 'Sees every app' }) : checks,
       el('div', { class: 'row user-storage' },
         el('span', { class: 'mono muted', text: `Storage · ${bytes(u.storage.usedBytes)} used` }),
         limit,
         el('button', { class: 'btn ghost small', type: 'button', text: 'Save', onclick: save })),
       isMe ? null : el('div', { class: 'row', style: 'margin:0' },
+        u.twoStep.on ? el('button', { class: 'btn ghost small', type: 'button', text: 'Reset two-step', onclick: resetTwoStep }) : null,
         el('button', { class: 'btn ghost small', type: 'button', text: 'Password reset link', onclick: () => resetLink(false) }),
         u.email && state.mailEnabled ? el('button', { class: 'btn ghost small', type: 'button', text: 'Email reset link', onclick: () => resetLink(true) }) : null,
         el('button', { class: 'btn danger small', type: 'button', text: 'Remove', onclick: remove })),
@@ -1028,6 +1303,7 @@ $('#settings-form').addEventListener('submit', async (e) => {
     const { settings } = await api('PATCH', '/api/admin/settings', {
       serverName: e.target.serverName.value,
       defaultLimitGb: pickers.default.getValue(),
+      adminsNeedTwoStep: e.target.adminsNeedTwoStep.checked,
       publicUrl: e.target.publicUrl.value,
     });
     setServerName(settings.serverName);

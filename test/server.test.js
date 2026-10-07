@@ -6,6 +6,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { createServer } = require('../src/server');
+const twoStep = require('../src/twostep');
+const { setUpTwoStep, freshCode } = require('./helpers');
 
 let server;
 let base;
@@ -13,7 +15,7 @@ let dataDir;
 
 before(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'roost-test-'));
-  server = createServer({ dataDir, probeTimeoutMs: 300, appToken: 'app-secret' });
+  server = createServer({ dataDir, probeTimeoutMs: 300, appToken: 'app-secret', maxFailedSignIns: 50 });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -29,13 +31,16 @@ async function call(method, url, body, cookie) {
   if (body) headers['Content-Type'] = 'application/json';
   if (cookie) headers.Cookie = cookie;
   const res = await fetch(base + url, { method, headers, body: body ? JSON.stringify(body) : undefined });
-  const setCookie = res.headers.get('set-cookie');
-  return { status: res.status, body: await res.json().catch(() => null), cookie: setCookie && setCookie.split(';')[0] };
+  const cookies = res.headers.getSetCookie().map((c) => c.split(';')[0]);
+  const session = cookies.find((c) => c.startsWith('roost_session=') && c !== 'roost_session=');
+  return { status: res.status, body: await res.json().catch(() => null), cookie: session || null, headers: cookies };
 }
 
 let adminCookie;
 let userCookie;
 let userId;
+let adminSecret;
+let adminRecovery;
 
 test('first run asks for setup and serves the page', async () => {
   const s = await call('GET', '/api/state');
@@ -68,11 +73,85 @@ test('setup requires a JSON body', async () => {
   assert.equal(res.status, 415);
 });
 
-test('login checks the password', async () => {
+test('admins must set up two-step sign-in before admin pages', async () => {
+  const state = await call('GET', '/api/state', null, adminCookie);
+  assert.equal(state.body.user.twoStep.required, true);
+  assert.equal(state.body.user.twoStep.on, false);
+  const blocked = await call('GET', '/api/admin/users', null, adminCookie);
+  assert.equal(blocked.status, 403);
+  assert.match(blocked.body.error, /two-step/);
+  // Everyday pages still work.
+  assert.equal((await call('GET', '/api/apps', null, adminCookie)).status, 200);
+});
+
+test('two-step setup shows a QR code and needs a working code', async () => {
+  const start = await call('POST', '/api/me/two-step/start', null, adminCookie);
+  assert.equal(start.status, 200);
+  assert.match(start.body.secret, /^[A-Z2-7]{32}$/);
+  assert.match(start.body.uri, /^otpauth:\/\/totp\/Roost%3Araven\?secret=/);
+  assert.match(start.body.qr, /^<svg /);
+  adminSecret = start.body.secret;
+  assert.equal((await call('POST', '/api/me/two-step/enable', { code: '000000' }, adminCookie)).status, 400);
+  const on = await call('POST', '/api/me/two-step/enable', { code: twoStep.codeAt(adminSecret, twoStep.currentStep()) }, adminCookie);
+  assert.equal(on.status, 200);
+  assert.equal(on.body.recoveryCodes.length, 10);
+  assert.match(on.body.recoveryCodes[0], /^[a-z2-9]{4}-[a-z2-9]{4}$/);
+  assert.equal(on.body.user.twoStep.on, true);
+  adminRecovery = on.body.recoveryCodes;
+  assert.equal((await call('POST', '/api/me/two-step/start', null, adminCookie)).status, 409);
+  assert.equal((await call('GET', '/api/admin/users', null, adminCookie)).status, 200);
+  const db = JSON.parse(fs.readFileSync(path.join(dataDir, 'roost.json'), 'utf8'));
+  assert.ok(!JSON.stringify(db).includes(adminRecovery[0]), 'recovery codes are stored hashed');
+});
+
+test('login checks the password, then the code', async () => {
   assert.equal((await call('POST', '/api/login', { username: 'raven', password: 'wrong pass' })).status, 401);
-  const ok = await call('POST', '/api/login', { username: 'RAVEN', password: 'correct horse' });
+  const first = await call('POST', '/api/login', { username: 'RAVEN', password: 'correct horse' });
+  assert.equal(first.status, 200);
+  assert.equal(first.cookie, null);
+  assert.equal(first.body.twoStep, true);
+  const wrong = await call('POST', '/api/login/code', { ticket: first.body.ticket, code: '123456' });
+  assert.equal(wrong.status, 400);
+  const ok = await call('POST', '/api/login/code', { ticket: first.body.ticket, code: freshCode(adminSecret) });
   assert.equal(ok.status, 200);
   assert.ok(ok.cookie);
+  assert.equal(ok.body.user.username, 'raven');
+  // A ticket works once.
+  assert.equal((await call('POST', '/api/login/code', { ticket: first.body.ticket, code: freshCode(adminSecret) })).status, 401);
+});
+
+test('the same code is refused twice', async () => {
+  const again = await call('POST', '/api/login', { username: 'raven', password: 'correct horse' });
+  const res = await call('POST', '/api/login/code', { ticket: again.body.ticket, code: freshCode(adminSecret) });
+  assert.equal(res.status, 400);
+});
+
+test('a recovery code works once and a trusted device skips the code', async () => {
+  const first = await call('POST', '/api/login', { username: 'raven', password: 'correct horse' });
+  const ok = await call('POST', '/api/login/code', { ticket: first.body.ticket, code: adminRecovery[0].toUpperCase(), trust: true });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.user.twoStep.recoveryLeft, 9);
+  const trust = ok.headers.find((c) => c.startsWith('roost_trust='));
+  assert.ok(trust);
+  const reuse = await call('POST', '/api/login', { username: 'raven', password: 'correct horse' });
+  assert.equal((await call('POST', '/api/login/code', { ticket: reuse.body.ticket, code: adminRecovery[0] })).status, 400);
+  const trusted = await call('POST', '/api/login', { username: 'raven', password: 'correct horse' }, trust);
+  assert.equal(trusted.status, 200);
+  assert.ok(trusted.cookie);
+  assert.equal(trusted.body.user.username, 'raven');
+  const status = await call('GET', '/api/me/two-step', null, adminCookie);
+  assert.equal(status.body.trustedDevices, 1);
+  await call('POST', '/api/me/two-step/forget-devices', null, adminCookie);
+  const forgotten = await call('POST', '/api/login', { username: 'raven', password: 'correct horse' }, trust);
+  assert.equal(forgotten.body.twoStep, true);
+});
+
+test('too many wrong codes ends the sign-in', async () => {
+  const first = await call('POST', '/api/login', { username: 'raven', password: 'correct horse' });
+  for (let i = 0; i < 4; i++) await call('POST', '/api/login/code', { ticket: first.body.ticket, code: '000000' });
+  const last = await call('POST', '/api/login/code', { ticket: first.body.ticket, code: '000000' });
+  assert.equal(last.status, 401);
+  assert.equal((await call('POST', '/api/login/code', { ticket: first.body.ticket, code: freshCode(adminSecret) })).status, 401);
 });
 
 test('admin sees the four default apps', async () => {
@@ -89,6 +168,40 @@ test('admin can add a user limited to some apps', async () => {
   userCookie = (await call('POST', '/api/login', { username: 'guest', password: 'guest pass 1' })).cookie;
   const { body } = await call('GET', '/api/apps', null, userCookie);
   assert.deepEqual(body.apps.map((a) => a.id), ['jellyfin', 'glint']);
+});
+
+test('other users are offered two-step once, and admins can reset it', async () => {
+  const state = await call('GET', '/api/state', null, userCookie);
+  assert.deepEqual(
+    { required: state.body.user.twoStep.required, offer: state.body.user.twoStep.offer },
+    { required: false, offer: true });
+  const skipped = await call('POST', '/api/me/two-step/skip', null, userCookie);
+  assert.equal(skipped.body.user.twoStep.offer, false);
+  const start = await call('POST', '/api/me/two-step/start', null, userCookie);
+  await call('POST', '/api/me/two-step/enable', { code: twoStep.codeAt(start.body.secret, twoStep.currentStep()) }, userCookie);
+  assert.equal((await call('POST', '/api/login', { username: 'guest', password: 'guest pass 1' })).body.twoStep, true);
+  assert.equal((await call('PATCH', `/api/admin/users/${userId}`, { resetTwoStep: true }, userCookie)).status, 403);
+  const reset = await call('PATCH', `/api/admin/users/${userId}`, { resetTwoStep: true }, adminCookie);
+  assert.equal(reset.body.user.twoStep.on, false);
+  const back = await call('POST', '/api/login', { username: 'guest', password: 'guest pass 1' });
+  assert.ok(back.cookie);
+  userCookie = back.cookie;
+});
+
+test('turning two-step off needs the password', async () => {
+  const start = await call('POST', '/api/me/two-step/start', null, userCookie);
+  await call('POST', '/api/me/two-step/enable', { code: twoStep.codeAt(start.body.secret, twoStep.currentStep()) }, userCookie);
+  assert.equal((await call('POST', '/api/me/two-step/disable', { password: 'nope' }, userCookie)).status, 400);
+  const off = await call('POST', '/api/me/two-step/disable', { password: 'guest pass 1' }, userCookie);
+  assert.equal(off.body.user.twoStep.on, false);
+});
+
+test('admins can stop requiring two-step for admins', async () => {
+  const off = await call('PATCH', '/api/admin/settings', { adminsNeedTwoStep: false }, adminCookie);
+  assert.equal(off.body.settings.adminsNeedTwoStep, false);
+  const on = await call('PATCH', '/api/admin/settings', { adminsNeedTwoStep: true }, adminCookie);
+  assert.equal(on.body.settings.adminsNeedTwoStep, true);
+  assert.equal((await call('GET', '/api/admin/settings', null, adminCookie)).body.settings.adminsNeedTwoStep, true);
 });
 
 test('regular users cannot use admin routes', async () => {
@@ -237,6 +350,16 @@ test('data persists to disk', () => {
   assert.match(db.users[0].password, /^scrypt:/);
 });
 
+test('repeated wrong passwords are slowed down', async () => {
+  const { RateLimiter } = require('../src/auth');
+  const limiter = new RateLimiter(2);
+  assert.equal(limiter.allow('ip'), true);
+  limiter.fail('ip');
+  limiter.fail('ip');
+  assert.equal(limiter.allow('ip'), false);
+  assert.equal(limiter.allow('other'), true);
+});
+
 test('static files cannot escape the public folder', async () => {
   const res = await fetch(base + '/..%2fsrc%2fserver.js');
   assert.equal(res.status, 404);
@@ -251,8 +374,10 @@ test('activity log records sign-ins, failures and admin changes', async () => {
   }
   // Newest first.
   assert.ok(body.entries[0].seq > body.entries[body.entries.length - 1].seq);
-  const failed = body.entries.find((e) => e.type === 'sign-in-failed' && e.target === 'raven');
-  assert.equal(failed.detail, 'wrong password');
+  const failed = body.entries.find((e) => e.type === 'sign-in-failed' && e.target === 'raven' && e.detail === 'wrong password');
+  assert.ok(failed);
+  assert.ok(body.entries.some((e) => e.type === 'sign-in-failed' && e.detail === 'wrong two-step code'));
+  assert.ok(types.includes('two-step-on'));
   assert.equal(failed.kind, 'failed');
   // Without the proxy setting a forwarded header is ignored.
   assert.equal(failed.ip, '127.0.0.1');
@@ -280,6 +405,11 @@ test('activity log pages, reads the proxy address when told to, and survives a r
   try {
     const setup = await post('/api/setup', { username: 'raven', password: 'correct horse' });
     const cookie = setup.headers.get('set-cookie').split(';')[0];
+    const call2 = async (method, p, body, c) => {
+      const r = await fetch(url + p, { method, headers: { 'Content-Type': 'application/json', Cookie: c }, body: body ? JSON.stringify(body) : undefined });
+      return { status: r.status, body: await r.json() };
+    };
+    const secret = await setUpTwoStep(call2, cookie);
     for (let i = 0; i < 55; i++) {
       // Earlier X-Forwarded-For entries can be faked; the proxy's own one is last.
       await post('/api/login', { username: 'mia', password: 'guess guess' }, { 'X-Forwarded-For': `6.6.6.6, 10.0.0.${i}` });
@@ -296,7 +426,8 @@ test('activity log pages, reads the proxy address when told to, and survives a r
     s2.flushAll();
     s2.close();
     [s2, url] = await start();
-    const login = await post('/api/login', { username: 'raven', password: 'correct horse' });
+    const { ticket } = await (await post('/api/login', { username: 'raven', password: 'correct horse' })).json();
+    const login = await post('/api/login/code', { ticket, code: freshCode(secret) });
     const again = await (await fetch(`${url}/api/admin/activity`, { headers: { Cookie: login.headers.get('set-cookie').split(';')[0] } })).json();
     assert.equal(again.entries[0].type, 'sign-in');
     assert.equal(again.entries[1].ip, '10.0.0.54');

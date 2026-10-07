@@ -376,6 +376,58 @@ input[type='range']:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 2px var(
 .welcome-card form { text-align: left; display: flex; flex-direction: column; gap: 14px; }
 .welcome-card .btn { width: 100%; margin-top: 6px; }
 
+/* ---------- two-step sign-in ---------- */
+
+.welcome-card form .link-btn, .split .link-btn { font-size: 12px; }
+.split { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+
+.check-line { display: flex; align-items: center; gap: 10px; font-size: 15px; cursor: pointer; }
+.check-line input { width: 18px; height: 18px; margin: 0; accent-color: var(--ink); }
+
+/* Big, spaced digits so a code is easy to check against the app. */
+input.code-input {
+  font-family: var(--mono);
+  font-size: 28px;
+  letter-spacing: 0.35em;
+  text-align: center;
+  padding: 12px 8px 12px calc(8px + 0.35em);
+}
+input.code-input.recovery { font-size: 20px; letter-spacing: 0.12em; }
+
+.secure-card { width: min(100%, 460px); }
+.welcome-card .btn.small { width: auto; margin-top: 0; }
+.secure-card .split { justify-content: center; gap: 28px; }
+
+.setup { display: flex; flex-direction: column; gap: 14px; text-align: left; }
+.setup-hint { margin: -6px 0 0; color: var(--muted); font-size: 15px; line-height: 1.45; }
+.setup-add { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 18px; border: 1px solid var(--line); border-radius: 16px; }
+.qr-box { width: 196px; aspect-ratio: 1; background: #fff; border-radius: 12px; overflow: hidden; }
+.qr-box svg { display: block; width: 100%; height: 100%; }
+.setup-key { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 100%; }
+.key { font-family: var(--mono); font-size: 15px; letter-spacing: 0.06em; text-align: center; user-select: all; -webkit-user-select: all; }
+.setup-confirm { display: flex; flex-direction: column; gap: 12px; }
+.setup-confirm .btn, .setup > .btn { width: 100%; }
+#two-step-panel .setup, #two-step-panel .setup-confirm { max-width: 460px; }
+#two-step-panel .setup { margin-top: 18px; }
+
+.recovery-codes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 18px; margin: 0; padding: 16px 16px 16px 36px; border: 1px dashed var(--line); border-radius: 14px; font-size: 16px; text-transform: none; }
+
+.two-step-state { display: flex; align-items: center; margin: 0 0 18px; font-size: 17px; }
+#two-step-on .form-grid { max-width: 460px; }
+a.btn { text-decoration: none; text-align: center; }
+#two-step-devices { gap: 16px; }
+
+/* On a phone the app is on the same device, so opening it beats scanning. */
+.setup-add .open-app { display: none; }
+@media (pointer: coarse), (max-width: 600px) {
+  .setup-add .open-app { display: inline-flex; width: 100%; order: -1; margin-top: 0; }
+  .qr-box { width: 150px; }
+}
+@media (pointer: coarse) {
+  .check-line { min-height: 44px; }
+  .split .link-btn { min-height: 44px; }
+}
+
 /* ---------- small screens ---------- */
 
 @media (max-width: 860px) {

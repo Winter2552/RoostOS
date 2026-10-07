@@ -8,6 +8,7 @@ const path = require('path');
 const zlib = require('zlib');
 const { createServer } = require('../src/server');
 const { cleanName } = require('../src/nest');
+const { setUpTwoStep } = require('./helpers');
 
 let server;
 let base;
@@ -24,6 +25,7 @@ before(async () => {
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
   admin = (await call('POST', '/api/setup', { username: 'raven', password: 'correct horse' })).cookie;
+  await setUpTwoStep(call, admin);
   const made = await call('POST', '/api/admin/users', { username: 'sam', password: 'password1', limitGb: 1 }, admin);
   samId = made.body.user.id;
   sam = (await call('POST', '/api/login', { username: 'sam', password: 'password1' })).cookie;
