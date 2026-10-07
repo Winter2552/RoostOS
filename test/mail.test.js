@@ -8,6 +8,7 @@ const os = require('os');
 const path = require('path');
 const { createServer } = require('../src/server');
 const { buildMessage } = require('../src/mail');
+const { setUpTwoStep } = require('./helpers');
 
 // A pretend mail relay that speaks just enough SMTP and keeps what it gets.
 const inbox = [];
@@ -77,6 +78,7 @@ before(async () => {
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
   adminCookie = (await call('POST', '/api/setup', { username: 'raven', password: 'correct horse', displayName: 'Raven' })).cookie;
+  await setUpTwoStep(call, adminCookie);
 });
 
 after(() => {
