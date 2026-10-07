@@ -1,6 +1,7 @@
 'use strict';
 
 const http = require('http');
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -9,9 +10,18 @@ const { hashPassword, verifyPassword, Sessions, RateLimiter, SESSION_TTL_MS } = 
 const storage = require('./storage');
 const { parseDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
+const twoStep = require('./twostep');
+const { qrSvg } = require('./qr');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const COOKIE = 'roost_session';
+// Remembers a device that passed two-step sign-in, so it isn't asked again for 30 days.
+const TRUST_COOKIE = 'roost_trust';
+const TRUST_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_TRUSTED = 20;
+// A password that was right waits this long for its code.
+const CODE_WAIT_MS = 5 * 60 * 1000;
+const CODE_TRIES = 5;
 const ICONS = ['play', 'orbit', 'folder', 'spark', 'grid', 'cloud', 'music', 'home'];
 
 const MIME = {
@@ -51,6 +61,15 @@ function parseCookies(req) {
 function sessionCookie(token, secure) {
   const maxAge = token ? Math.floor(SESSION_TTL_MS / 1000) : 0;
   return `${COOKIE}=${token || ''}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
+}
+
+function trustCookie(token, secure) {
+  const maxAge = token ? Math.floor(TRUST_TTL_MS / 1000) : 0;
+  return `${TRUST_COOKIE}=${token || ''}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
+}
+
+function sha256(text) {
+  return crypto.createHash('sha256').update(String(text)).digest('hex');
 }
 
 async function readJson(req) {
@@ -95,7 +114,17 @@ function validAppUrl(u) {
   }
 }
 
-function publicUser(u) {
+// Admins must use two-step sign-in unless an admin turns that off.
+function adminsNeedTwoStep(db) {
+  return db.settings.adminsNeedTwoStep !== false;
+}
+
+function twoStepNeeded(db, u) {
+  return u.role === 'admin' && adminsNeedTwoStep(db) && !u.twoStep;
+}
+
+function publicUser(db, u) {
+  const required = u.role === 'admin' && adminsNeedTwoStep(db);
   return {
     id: u.id,
     username: u.username,
@@ -103,6 +132,13 @@ function publicUser(u) {
     role: u.role,
     apps: u.apps,
     createdAt: u.createdAt,
+    twoStep: {
+      on: Boolean(u.twoStep),
+      required,
+      // Offer it once after sign-in to people who don't have to use it.
+      offer: !u.twoStep && !required && !u.twoStepSkipped,
+      recoveryLeft: u.twoStep ? u.twoStep.recovery.length : 0,
+    },
   };
 }
 
@@ -138,10 +174,14 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '' } = {}) {
+function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', maxFailedSignIns = 10 } = {}) {
   const store = new Store(dataDir);
   const sessions = new Sessions();
-  const limiter = new RateLimiter();
+  const limiter = new RateLimiter(maxFailedSignIns);
+  // Sign-ins waiting for a code, and authenticator secrets waiting to be
+  // confirmed. Both are short-lived, so they stay in memory.
+  const pendingCodes = new Map();
+  const pendingSetups = new Map();
   const cpu = new CpuMeter();
   // Drives shown on the status page. Without a list, show the system drive and
   // the drive Roost keeps its data on (the same drive is only listed once).
@@ -162,12 +202,48 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
   function requireAdmin(req) {
     const user = requireUser(req);
     if (user.role !== 'admin') throw new HttpError(403, 'Admins only');
+    if (twoStepNeeded(db(), user)) throw new HttpError(403, 'Set up two-step sign-in first');
     return user;
   }
 
-  function login(res, user, status = 200) {
+  function login(res, user, status = 200, cookies = []) {
     const token = sessions.create(user.id);
-    send(res, status, { user: publicUser(user) }, { 'Set-Cookie': sessionCookie(token, secureCookies) });
+    send(res, status, { user: publicUser(db(), user) }, { 'Set-Cookie': [sessionCookie(token, secureCookies), ...cookies] });
+  }
+
+  function forget(map) {
+    const now = Date.now();
+    for (const [k, v] of map) if (v.expires < now) map.delete(k);
+  }
+
+  function isTrusted(req, user) {
+    const token = parseCookies(req)[TRUST_COOKIE];
+    if (!token || !Array.isArray(user.trusted)) return false;
+    const hash = sha256(token);
+    return user.trusted.some((t) => t.hash === hash && t.expires > Date.now());
+  }
+
+  function trustDevice(user) {
+    const token = crypto.randomBytes(32).toString('hex');
+    const now = Date.now();
+    user.trusted = (user.trusted || []).filter((t) => t.expires > now).slice(-(MAX_TRUSTED - 1));
+    user.trusted.push({ hash: sha256(token), expires: now + TRUST_TTL_MS });
+    return trustCookie(token, secureCookies);
+  }
+
+  function checkPassword(user, password) {
+    if (typeof password !== 'string' || !verifyPassword(password, user.password)) throw new HttpError(400, 'Password is wrong');
+  }
+
+  function twoStepStatus(user) {
+    const now = Date.now();
+    return {
+      on: Boolean(user.twoStep),
+      required: user.role === 'admin' && adminsNeedTwoStep(db()),
+      recoveryLeft: user.twoStep ? user.twoStep.recovery.length : 0,
+      trustedDevices: (user.trusted || []).filter((t) => t.expires > now).length,
+      since: user.twoStep ? user.twoStep.enabledAt : null,
+    };
   }
 
   function cleanApps(input) {
@@ -197,8 +273,12 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     return limit;
   }
 
+  function settingsView() {
+    return { ...db().settings, defaultLimitGb: storage.defaultLimitGb(db()), adminsNeedTwoStep: adminsNeedTwoStep(db()) };
+  }
+
   function adminView(user) {
-    return { ...publicUser(user), storage: storage.storageOf(db(), user) };
+    return { ...publicUser(db(), user), storage: storage.storageOf(db(), user) };
   }
 
   function requireApp(req) {
@@ -218,7 +298,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       send(res, 200, {
         serverName: db().settings.serverName,
         setupRequired: db().users.length === 0,
-        user: user ? publicUser(user) : null,
+        user: user ? publicUser(db(), user) : null,
       });
     },
 
@@ -249,9 +329,51 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       const username = str(body.username, 32).toLowerCase();
       const user = db().users.find((u) => u.username === username);
       if (!user || typeof body.password !== 'string' || !verifyPassword(body.password, user.password)) {
+        limiter.fail(req.socket.remoteAddress);
         throw new HttpError(401, 'Wrong username or password');
       }
-      login(res, user);
+      if (!user.twoStep || isTrusted(req, user)) return login(res, user);
+      forget(pendingCodes);
+      const ticket = crypto.randomBytes(24).toString('hex');
+      pendingCodes.set(ticket, { userId: user.id, expires: Date.now() + CODE_WAIT_MS, tries: 0 });
+      send(res, 200, { twoStep: true, ticket });
+    },
+
+    // Second step: a code from the authenticator app, or a recovery code.
+    'POST /api/login/code': async (req, res) => {
+      if (!limiter.allow(req.socket.remoteAddress)) throw new HttpError(429, 'Too many attempts, wait a few minutes');
+      const body = await readJson(req);
+      const pending = typeof body.ticket === 'string' && pendingCodes.get(body.ticket);
+      if (!pending || pending.expires < Date.now()) throw new HttpError(401, 'That took too long. Sign in again.');
+      const user = db().users.find((u) => u.id === pending.userId);
+      if (!user || !user.twoStep) {
+        pendingCodes.delete(body.ticket);
+        throw new HttpError(401, 'Sign in again');
+      }
+      const code = str(body.code, 40);
+      let ok = false;
+      if (/^\d{6}$/.test(code.replace(/\s/g, ''))) {
+        const step = twoStep.verifyCode(user.twoStep.secret, code, user.twoStep.lastStep);
+        if (step !== null) {
+          user.twoStep.lastStep = step;
+          ok = true;
+        }
+      } else {
+        ok = twoStep.useRecoveryCode(user.twoStep, code);
+      }
+      if (!ok) {
+        limiter.fail(req.socket.remoteAddress);
+        pending.tries++;
+        if (pending.tries >= CODE_TRIES) {
+          pendingCodes.delete(body.ticket);
+          throw new HttpError(401, 'Too many wrong codes. Sign in again.');
+        }
+        throw new HttpError(400, "That code didn't work. Check your app's newest code.");
+      }
+      pendingCodes.delete(body.ticket);
+      const cookies = body.trust === true ? [trustDevice(user)] : [];
+      store.save();
+      login(res, user, 200, cookies);
     },
 
     'POST /api/logout': (req, res) => {
@@ -271,7 +393,80 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         user.password = hashPassword(body.newPassword);
       }
       store.save();
-      send(res, 200, { user: publicUser(user) });
+      send(res, 200, { user: publicUser(db(), user) });
+    },
+
+    // ---------- two-step sign-in ----------
+
+    'GET /api/me/two-step': (req, res) => {
+      send(res, 200, twoStepStatus(requireUser(req)));
+    },
+
+    // Makes a new authenticator secret; it only takes effect once a code from
+    // it is confirmed.
+    'POST /api/me/two-step/start': (req, res) => {
+      const user = requireUser(req);
+      if (user.twoStep) throw new HttpError(409, 'Two-step sign-in is already on');
+      forget(pendingSetups);
+      const secret = twoStep.newSecret();
+      pendingSetups.set(user.id, { secret, expires: Date.now() + 15 * 60 * 1000 });
+      const uri = twoStep.otpauthUri(secret, user.username, db().settings.serverName);
+      send(res, 200, { secret, uri, qr: qrSvg(uri) });
+    },
+
+    'POST /api/me/two-step/enable': async (req, res) => {
+      const user = requireUser(req);
+      if (user.twoStep) throw new HttpError(409, 'Two-step sign-in is already on');
+      const pending = pendingSetups.get(user.id);
+      if (!pending || pending.expires < Date.now()) throw new HttpError(400, 'Setup timed out. Start again.');
+      const body = await readJson(req);
+      const step = twoStep.verifyCode(pending.secret, str(body.code, 20));
+      if (step === null) throw new HttpError(400, "That code didn't work. Try the newest one in your app.");
+      pendingSetups.delete(user.id);
+      const recoveryCodes = twoStep.newRecoveryCodes();
+      user.twoStep = {
+        secret: pending.secret,
+        lastStep: step,
+        recovery: recoveryCodes.map(twoStep.hashCode),
+        enabledAt: new Date().toISOString(),
+      };
+      user.trusted = [];
+      store.save();
+      send(res, 200, { user: publicUser(db(), user), recoveryCodes });
+    },
+
+    'POST /api/me/two-step/recovery-codes': async (req, res) => {
+      const user = requireUser(req);
+      if (!user.twoStep) throw new HttpError(400, 'Two-step sign-in is off');
+      checkPassword(user, (await readJson(req)).password);
+      const recoveryCodes = twoStep.newRecoveryCodes();
+      user.twoStep.recovery = recoveryCodes.map(twoStep.hashCode);
+      store.save();
+      send(res, 200, { user: publicUser(db(), user), recoveryCodes });
+    },
+
+    'POST /api/me/two-step/disable': async (req, res) => {
+      const user = requireUser(req);
+      checkPassword(user, (await readJson(req)).password);
+      delete user.twoStep;
+      user.trusted = [];
+      store.save();
+      send(res, 200, { user: publicUser(db(), user) }, { 'Set-Cookie': trustCookie('', secureCookies) });
+    },
+
+    'POST /api/me/two-step/forget-devices': (req, res) => {
+      const user = requireUser(req);
+      user.trusted = [];
+      store.save();
+      send(res, 200, twoStepStatus(user), { 'Set-Cookie': trustCookie('', secureCookies) });
+    },
+
+    // "Not now" on the offer after sign-in; it stays available in Profile.
+    'POST /api/me/two-step/skip': (req, res) => {
+      const user = requireUser(req);
+      user.twoStepSkipped = true;
+      store.save();
+      send(res, 200, { user: publicUser(db(), user) });
     },
 
     'GET /api/apps': (req, res) => {
@@ -394,7 +589,14 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       if (body.password !== undefined) {
         if (!validPassword(body.password)) throw new HttpError(400, 'Password must be at least 8 characters');
         user.password = hashPassword(body.password);
+        user.trusted = [];
         sessions.destroyUser(user.id);
+      }
+      // For someone who lost their phone and their recovery codes: they sign
+      // in with just their password and set it up again.
+      if (body.resetTwoStep === true) {
+        delete user.twoStep;
+        user.trusted = [];
       }
       store.save();
       send(res, 200, { user: adminView(user) });
@@ -422,13 +624,19 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       send(res, 200, { apps: db().apps });
     },
 
+    'GET /api/admin/settings': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, { settings: settingsView() });
+    },
+
     'PATCH /api/admin/settings': async (req, res) => {
       requireAdmin(req);
       const body = await readJson(req);
       if (body.serverName !== undefined) db().settings.serverName = str(body.serverName, 40) || 'Roost';
       if (body.defaultLimitGb !== undefined) db().settings.defaultLimitGb = cleanLimit(body.defaultLimitGb);
+      if (body.adminsNeedTwoStep !== undefined) db().settings.adminsNeedTwoStep = body.adminsNeedTwoStep !== false;
       store.save();
-      send(res, 200, { settings: { ...db().settings, defaultLimitGb: storage.defaultLimitGb(db()) } });
+      send(res, 200, { settings: settingsView() });
     },
 
     // ---------- storage limits ----------

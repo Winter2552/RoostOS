@@ -16,7 +16,7 @@ Roost is the home-server suite: one homepage that signs you in and shows the app
 - **First run** creates the admin account.
 - **Dashboard**: greeting, live server stats (uptime, memory, load, free space on the data drive) and a card for every app you have access to, each showing whether the app is reachable.
 - **Status**: refreshes every 5 seconds. First, each app (and Roost itself) with its container state from Docker: running, stopped, restarting, unhealthy, how long it has been up and how often it restarted, plus whether it answers on its link. Admins also see every other container. Below that, server health: uptime, CPU, memory and free space on each drive. Problems are listed at the top.
-- **Profile**: change your display name and password, see your storage use and limit, and ask an admin for more space.
+- **Profile**: change your display name and password, turn two-step sign-in on or off, see your storage use and limit, and ask an admin for more space.
 - **Admin**: edit the app list and links, add or remove users, choose which apps each user sees and how much storage they get, approve or decline storage requests, rename the server.
 
 ![Signing in to Roost](docs/screenshots/sign-in.png)
@@ -36,6 +36,22 @@ GET /api/storage/users/<username>          → { storage: { limitBytes, usedByte
 PUT /api/storage/users/<username>/usage    { "app": "nest" | "glint", "bytes": 123 }
 Authorization: Bearer <ROOST_APP_TOKEN>
 ```
+
+## Two-step sign-in
+
+After the password, Roost asks for a 6-digit code from an authenticator app (Google or Microsoft Authenticator, 1Password, Bitwarden, or the phone's own passwords app). It's built into Roost with no outside service, using the standard TOTP codes (RFC 6238); Roost draws the setup QR code itself.
+
+- **Admins must use it** (turn this off under **Admin → Server**). Right after signing in, an admin without it is taken to the setup screen and can't open Admin until it's done. Everyone else is offered it once after signing in and can turn it on later from **Profile**.
+- **Setup**: scan the QR code (on a phone, tap **Open in authenticator app**; or type the key), enter one code, then save the 10 recovery codes.
+- **Signing in**: the code box opens the number keypad, phones can fill the code in, and it signs in as soon as 6 digits are in. **Trust this device for 30 days** skips the code on that device. Each code works once, and codes from a phone clock up to 30 seconds off are accepted.
+- **Lost phone**: sign in with a recovery code (each works once), or an admin presses **Reset two-step** on that user under **Admin → Users**, and they set it up again. If the only admin is locked out, run this on the server:
+
+```sh
+docker exec roost node src/cli.js reset-two-step <username>
+docker restart roost
+```
+
+Recovery codes and trusted devices are stored only as hashes. The authenticator secret has to be stored as-is in `roost.json`, so keep that file as private as the server itself.
 
 ## Stack
 
