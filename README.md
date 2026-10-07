@@ -16,6 +16,7 @@ Roost is the home-server suite: one homepage that signs you in and shows the app
 - **First run** creates the admin account.
 - **Dashboard**: greeting, live server stats (uptime, memory, load, free space on the data drive) and a card for every app you have access to, each showing whether the app is reachable.
 - **Status**: refreshes every 5 seconds. First, each app (and Roost itself) with its container state from Docker: running, stopped, restarting, unhealthy, how long it has been up and how often it restarted, plus whether it answers on its link. Admins also see every other container. Below that, server health: uptime, CPU, memory and free space on each drive. Problems are listed at the top.
+- **Alerts** (admins): Roost checks every minute in the background whether an app's container has stopped, keeps restarting or is unhealthy, and whether a drive is over 90% full (adjustable) or missing. A problem has to last 2 minutes before it counts, so restarts and updates stay quiet. The bell in the header shows a count and a list; each alert clears itself when fixed, and **Ignore** hides one you caused on purpose until it's fixed. Cleared alerts stay listed for a week. Settings are under Admin → Alerts.
 - **Profile**: change your display name and password, see your storage use and limit, and ask an admin for more space.
 - **Admin**: edit the app list and links, add or remove users, choose which apps each user sees and how much storage they get, approve or decline storage requests, rename the server.
 

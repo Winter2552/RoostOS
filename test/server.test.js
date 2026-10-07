@@ -292,3 +292,47 @@ test('status reads container state from Docker', async () => {
   }
 });
 
+
+test('alerts: admins read, ignore and tune them; users cannot', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'roost-alerts-'));
+  const docker = { containers: [{ id: 'c1', name: 'jellyfin', project: '', state: 'exited', health: null, restarts: 0, exitCode: 1 }] };
+  const s3 = createServer({ dataDir: dir, alertIntervalMs: 0, disks: [{ label: 'Data', path: dir }], readContainers: async () => docker });
+  let clock = Date.now();
+  s3.watcher.now = () => clock;
+  await new Promise((r) => s3.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${s3.address().port}`;
+  const req = async (method, p, body, cookie) => {
+    const res = await fetch(url + p, { method, headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(cookie ? { Cookie: cookie } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    return { status: res.status, body: await res.json(), cookie: (res.headers.get('set-cookie') || '').split(';')[0] };
+  };
+  try {
+    const admin = (await req('POST', '/api/setup', { username: 'raven', password: 'correct horse' })).cookie;
+    await req('POST', '/api/admin/users', { username: 'sam', password: 'correct horse' }, admin);
+    const sam = (await req('POST', '/api/login', { username: 'sam', password: 'correct horse' })).cookie;
+    assert.equal((await req('GET', '/api/alerts', null, sam)).status, 403);
+
+    await s3.watcher.check();
+    clock += 3 * 60 * 1000;
+    await s3.watcher.check();
+    let view = (await req('GET', '/api/alerts', null, admin)).body;
+    assert.deepEqual(view.active.map((a) => a.title), ['Jellyfin has stopped']);
+    assert.deepEqual(view.settings, { alertApps: true, alertDisks: true, alertDiskPct: 90 });
+    assert.ok(view.checkedAt);
+
+    assert.equal((await req('POST', `/api/alerts/${view.active[0].id}/dismiss`, null, sam)).status, 403);
+    view = (await req('POST', `/api/alerts/${view.active[0].id}/dismiss`, null, admin)).body;
+    assert.ok(view.active[0].dismissedAt);
+
+    assert.equal((await req('PATCH', '/api/admin/settings', { alertDiskPct: 101 }, admin)).status, 400);
+    const saved = await req('PATCH', '/api/admin/settings', { alertApps: false, alertDisks: false, alertDiskPct: 80 }, admin);
+    assert.equal(saved.body.settings.alertDiskPct, 80);
+    // Turning the checks off re-checks at once, so the app alert clears.
+    view = (await req('GET', '/api/alerts', null, admin)).body;
+    assert.deepEqual(view.active, []);
+    assert.deepEqual(view.recent.map((a) => a.title), ['Jellyfin has stopped']);
+    assert.equal((await req('POST', `/api/alerts/${view.recent[0].id}/dismiss`, null, admin)).status, 404);
+  } finally {
+    s3.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
