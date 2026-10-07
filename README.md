@@ -2,6 +2,8 @@
 
 Roost is the home-server suite: one homepage that signs you in and shows the apps you can use.
 
+![The Roost dashboard on a desktop browser and a phone](docs/screenshots/dashboard.png)
+
 | App | What it is |
 | --- | --- |
 | Jellyfin | Media (films, shows, music) |
@@ -16,6 +18,10 @@ Roost is the home-server suite: one homepage that signs you in and shows the app
 - **Status**: refreshes every 5 seconds. First, each app (and Roost itself) with its container state from Docker: running, stopped, restarting, unhealthy, how long it has been up and how often it restarted, plus whether it answers on its link. Admins also see every other container. Below that, server health: uptime, CPU, memory and free space on each drive. Problems are listed at the top.
 - **Profile**: change your display name and password.
 - **Admin**: edit the app list and links, add or remove users, choose which apps each user sees, rename the server.
+
+![Signing in to Roost](docs/screenshots/sign-in.png)
+
+![The admin page: users and which apps each one sees](docs/screenshots/admin.png)
 
 App links can use `{host}`, which becomes whatever address you opened Roost on. `http://{host}:8096` works from the LAN IP, the hostname or a Tailscale name without editing anything.
 
