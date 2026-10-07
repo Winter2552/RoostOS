@@ -230,7 +230,7 @@ label.field, div.field { display: flex; flex-direction: column; gap: 6px; }
 
 .field > span { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
 
-input[type='text'], input[type='password'], input[type='url'], input[type='number'], select {
+input[type='text'], input[type='password'], input[type='url'], input[type='email'], input[type='number'], select {
   background: var(--bg);
   border: 1.5px solid var(--line);
   border-radius: 12px;
@@ -733,3 +733,7 @@ a.btn { text-decoration: none; text-align: center; }
 @media (pointer: coarse) {
   .password-box .show-password { min-height: 44px; }
 }
+
+.forgot-link { align-self: center; padding: 10px; font-size: 12px; }
+#forgot-form { text-align: left; display: flex; flex-direction: column; gap: 14px; }
+.welcome-card #forgot-form .btn { width: 100%; margin-top: 6px; }
