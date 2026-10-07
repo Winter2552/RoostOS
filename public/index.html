@@ -38,6 +38,34 @@
         <div class="msg" id="forgot-msg" role="status"></div>
         <button class="link-btn mono forgot-link" type="button" id="forgot-back">Back to sign in</button>
       </form>
+      <!-- Second step, shown after a correct password when two-step sign-in is on -->
+      <form id="code-form" class="hidden" autocomplete="off" novalidate>
+        <label class="field">
+          <span id="code-label">6-digit code from your authenticator app</span>
+          <input type="text" name="code" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="7" required spellcheck="false" autocapitalize="none">
+        </label>
+        <label class="check-line"><input type="checkbox" name="trust" checked> Trust this device for 30 days</label>
+        <button class="btn" type="submit">Sign in</button>
+        <div class="split mono">
+          <button type="button" class="link-btn" id="use-recovery">Use a recovery code</button>
+          <button type="button" class="link-btn" id="code-back">Back</button>
+        </div>
+        <div class="msg error" id="code-msg" role="alert"></div>
+      </form>
+    </section>
+  </main>
+
+  <!-- Two-step setup straight after sign-in: required for admins, offered once to everyone else -->
+  <main id="secure" class="welcome hidden">
+    <section class="card welcome-card secure-card">
+      <p class="hello">Protect your account</p>
+      <h1>Two-step sign-in</h1>
+      <p class="mono muted" id="secure-lead" style="margin:0 0 22px"></p>
+      <div id="secure-setup"></div>
+      <div class="split mono" style="margin-top:18px">
+        <button type="button" class="link-btn" id="secure-later">Not now</button>
+        <button type="button" class="link-btn" id="secure-logout">Sign out</button>
+      </div>
     </section>
   </main>
 
@@ -201,6 +229,25 @@
         <p class="mono muted hidden" id="storage-admin-note" style="margin:16px 0 0">You're an admin: change your limit under Admin → Users</p>
         <div id="storage-requests"></div>
       </div>
+      <div class="card panel" id="two-step-panel">
+        <h3>Two-step sign-in</h3><span class="mono muted">A code from your phone as well as your password</span>
+        <p class="two-step-state"><span class="dot" id="two-step-dot"></span><span id="two-step-text">—</span></p>
+        <div id="two-step-off">
+          <div class="row"><button class="btn" type="button" id="two-step-begin">Set up</button></div>
+        </div>
+        <div id="two-step-setup-here"></div>
+        <form id="two-step-on" class="hidden">
+          <div class="form-grid">
+            <label class="field"><span>Your password, to make changes</span><input type="password" name="password" autocomplete="current-password" required></label>
+          </div>
+          <div class="row">
+            <button class="btn ghost small" type="button" data-act="codes">New recovery codes</button>
+            <button class="btn ghost small" type="button" data-act="off" id="two-step-off-btn">Turn off</button>
+          </div>
+          <div class="row" id="two-step-devices"></div>
+          <div class="msg" role="status"></div>
+        </form>
+      </div>
       <form class="card panel" id="password-form">
         <h3>Password</h3><span class="mono muted">At least 8 characters</span>
         <div class="form-grid">
@@ -253,12 +300,13 @@
       </form>
 
       <form class="card panel" id="settings-form">
-        <h3>Server</h3><span class="mono muted">The name shown across Roost, the storage new users start with, and the address invite links use</span>
+        <h3>Server</h3><span class="mono muted">The name shown across Roost, the storage new users start with, the address invite links use, and sign-in rules</span>
         <div class="form-grid">
           <label class="field"><span>Server name</span><input type="text" name="serverName" maxlength="40"></label>
           <div class="field"><span>Default storage limit</span><div id="default-picker"></div></div>
           <label class="field"><span>Public address (for invite links)</span><input type="text" name="publicUrl" maxlength="200" placeholder="https://roostos.network" autocapitalize="none" spellcheck="false" inputmode="url"></label>
         </div>
+        <label class="check-line" style="margin-top:18px"><input type="checkbox" name="adminsNeedTwoStep"> Admins must use two-step sign-in</label>
         <div class="row"><button class="btn" type="submit">Save</button></div>
         <div class="msg" role="status"></div>
       </form>

@@ -26,6 +26,8 @@ const KINDS = {
   'invite-removed': 'users',
   'reset-link-created': 'users',
   'password-reset': 'users',
+  'two-step-on': 'users',
+  'two-step-off': 'users',
   'storage-requested': 'storage',
   'storage-approved': 'storage',
   'storage-declined': 'storage',
