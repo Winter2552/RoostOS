@@ -8,10 +8,16 @@ const path = require('path');
 const { Store } = require('./store');
 const { hashPassword, verifyPassword, Sessions, RateLimiter, deviceName, SESSION_TTL_MS } = require('./auth');
 const storage = require('./storage');
-const { parseDisks, CpuMeter, serverHealth } = require('./status');
+const links = require('./links');
+const mail = require('./mail');
+const setup = require('./setup');
+const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
 const twoStep = require('./twostep');
 const { qrSvg } = require('./qr');
+const { ActivityLog, clientIp, FILTERS } = require('./activity');
+const { HttpError, send, readJson, str } = require('./http');
+const { Nest } = require('./nest');
 const { Jellyfin, PREFIX: JELLYFIN_PREFIX, OPENER_HTML } = require('./jellyfin');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -35,20 +41,7 @@ const MIME = {
   '.json': 'application/json',
 };
 
-class HttpError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
-
 // ---------- helpers ----------
-
-function send(res, status, body, headers = {}) {
-  const data = body === undefined ? '' : JSON.stringify(body);
-  res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers });
-  res.end(data);
-}
 
 function parseCookies(req) {
   const out = {};
@@ -73,29 +66,6 @@ function sha256(text) {
   return crypto.createHash('sha256').update(String(text)).digest('hex');
 }
 
-async function readJson(req) {
-  // Requiring a JSON content type also blocks plain cross-site form posts.
-  if (!String(req.headers['content-type'] || '').includes('application/json')) {
-    throw new HttpError(415, 'Expected JSON');
-  }
-  let size = 0;
-  const chunks = [];
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > 64 * 1024) throw new HttpError(413, 'Body too large');
-    chunks.push(chunk);
-  }
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
-  } catch {
-    throw new HttpError(400, 'Invalid JSON');
-  }
-}
-
-function str(v, max = 200) {
-  return typeof v === 'string' ? v.trim().slice(0, max) : '';
-}
-
 function validUsername(u) {
   return /^[a-z0-9._-]{2,32}$/.test(u);
 }
@@ -105,14 +75,19 @@ function validPassword(p) {
 }
 
 // App links may use {host} so they follow whatever address you opened Roost on.
+// Apps built into Roost link to their page, e.g. #/nest.
 function validAppUrl(u) {
-  if (u === '') return true;
+  if (u === '' || builtIn(u)) return true;
   try {
     const parsed = new URL(u.replace(/\{host\}/g, 'localhost'));
     return parsed.protocol === 'http:' || parsed.protocol === 'https:';
   } catch {
     return false;
   }
+}
+
+function builtIn(url) {
+  return /^#\/[a-z]+$/.test(url);
 }
 
 // Admins must use two-step sign-in unless an admin turns that off.
@@ -132,6 +107,7 @@ function publicUser(db, u) {
     displayName: u.displayName,
     role: u.role,
     apps: u.apps,
+    email: u.email || '',
     createdAt: u.createdAt,
     twoStep: {
       on: Boolean(u.twoStep),
@@ -154,8 +130,11 @@ function requestHost(req) {
   return host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.split(':')[0];
 }
 
-async function probe(url, timeoutMs) {
-  return (await timedProbe(url, timeoutMs)).state;
+// An app's reachability: built-in apps are up whenever Roost is.
+function appProbe(app, host, timeoutMs) {
+  if (!app.url) return { state: 'unset' };
+  if (builtIn(app.url)) return { state: 'online', ms: 0 };
+  return timedProbe(app.url.replace(/\{host\}/g, host), timeoutMs);
 }
 
 async function timedProbe(url, timeoutMs) {
@@ -175,8 +154,15 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', maxFailedSignIns = 10 } = {}) {
+function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10 } = {}) {
   const store = new Store(dataDir);
+  const activity = new ActivityLog(dataDir, { saveDelayMs: activitySaveDelayMs });
+  // Nest used to be an outside app with no link; it is built in now.
+  const nestApp = store.db.apps.find((a) => a.id === 'nest');
+  if (nestApp && !nestApp.url) {
+    nestApp.url = '#/nest';
+    store.save();
+  }
   const jellyfin = new Jellyfin(() => store.db.settings.jellyfin);
   // Jellyfin sign-ins still being made for a Roost sign-in, by its id.
   const jellyfinLinks = new Map();
@@ -194,6 +180,24 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
   const diskList = disks && disks.length ? disks : [{ label: 'System', path: '/' }, { label: 'Data', path: dataDir }];
   const db = () => store.db;
 
+  const nest = new Nest({
+    dir: nestDir || path.join(dataDir, 'nest'),
+    dbFile: path.join(dataDir, 'nest.db'),
+    users: (id) => db().users.find((u) => u.id === id) || null,
+    limitOf: (user) => {
+      const s = storage.storageOf(db(), user);
+      return { limitBytes: s.limitBytes, otherBytes: s.usedBytes - (s.usage.nest || 0) };
+    },
+    onUsage: (user, bytes) => {
+      user.storageUsage = { ...user.storageUsage, nest: bytes };
+      store.saveSoon();
+    },
+  });
+  nest.syncUsage();
+  const sweep = () => nest.sweep().catch((err) => console.error('Nest clean-up failed:', err));
+  sweep();
+  const sweepTimer = setInterval(sweep, 6 * 60 * 60 * 1000);
+  sweepTimer.unref();
   // Browsers send the session cookie; phone apps send their device key as a
   // Bearer token.
   function tokenOf(req) {
@@ -218,6 +222,12 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     if (twoStepNeeded(db(), user)) throw new HttpError(403, 'Set up two-step sign-in first');
     return user;
   }
+
+  function record(req, type, fields = {}) {
+    activity.add(type, { ...fields, ip: clientIp(req, trustProxy) });
+  }
+
+  const gbText = (limit) => (limit === null ? 'no limit' : `${limit} GB`);
 
   // A sign-in that names a device (an app on a phone) gets a long-lived device
   // key in the reply instead of a cookie.
@@ -357,9 +367,25 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     return limit;
   }
 
+  // The address invite and reset links use, e.g. https://roostos.network.
+  // Blank means "whatever address the admin has Roost open on".
+  function cleanPublicUrl(v) {
+    const raw = str(v, 200);
+    if (!raw) return '';
+    if (raw.includes('://') && !/^https?:\/\//i.test(raw)) throw new HttpError(400, 'Public address must start with http:// or https://');
+    let url;
+    try {
+      url = new URL(raw.includes('://') ? raw : `https://${raw}`);
+    } catch {
+      throw new HttpError(400, 'Public address must look like https://roostos.network');
+    }
+    return url.origin;
+  }
+
+  // Settings for the admin page. The mail password never leaves the server.
   function settingsView() {
-    const { jellyfin: _hidden, ...settings } = db().settings;
-    return { ...settings, defaultLimitGb: storage.defaultLimitGb(db()), adminsNeedTwoStep: adminsNeedTwoStep(db()) };
+    const { mail: _mail, jellyfin: _jellyfin, ...rest } = db().settings;
+    return { ...rest, publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()) };
   }
 
   function adminView(user) {
@@ -377,12 +403,125 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     return apps.filter((id) => ids.has(id));
   }
 
+  // ---------- email ----------
+
+  function mailSettings() {
+    return db().settings.mail || null;
+  }
+
+  // Emails need the public address so their links open from anywhere; the
+  // address in a request can't be trusted for that.
+  function mailReady() {
+    const m = mailSettings();
+    return Boolean(m && m.host && m.from && db().settings.publicUrl);
+  }
+
+  function mailView() {
+    const m = mailSettings();
+    if (!m) return { host: '', port: 587, security: 'starttls', user: '', from: '', hasPassword: false };
+    const { password, ...rest } = m;
+    return { ...rest, hasPassword: Boolean(password) };
+  }
+
+  function cleanMail(input, current) {
+    if (!input || typeof input !== 'object') throw new HttpError(400, 'Email settings must be an object');
+    const host = str(input.host, 200);
+    if (!host) return null; // Blank host turns email off.
+    if (!/^[A-Za-z0-9.-]+$/.test(host)) throw new HttpError(400, 'Mail server must be a host name like smtp.resend.com');
+    const port = Number(input.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new HttpError(400, 'Port must be a number like 587 or 465');
+    const security = mail.SECURITY.includes(input.security) ? input.security : 'starttls';
+    const from = str(input.from, 254);
+    if (!mail.validEmail(from)) throw new HttpError(400, 'Send from must be an email address like server@roostos.network');
+    const password = typeof input.password === 'string' && input.password !== ''
+      ? input.password.slice(0, 500)
+      : (current && current.password) || '';
+    const next = { host, port, security, user: str(input.user, 254), password, from };
+    // A passed test only counts for the settings it was sent with.
+    const same = current && ['host', 'port', 'security', 'user', 'password', 'from'].every((k) => current[k] === next[k]);
+    if (same && current.verifiedAt) next.verifiedAt = current.verifiedAt;
+    return next;
+  }
+
+  function cleanEmail(v) {
+    const email = str(v, 254).toLowerCase();
+    if (email && !mail.validEmail(email)) throw new HttpError(400, "That doesn't look like an email address");
+    if (email && db().users.some((u) => u.email === email)) throw new HttpError(409, 'Another account already uses that email');
+    return email;
+  }
+
+  function linkUrl(kind, token) {
+    return `${db().settings.publicUrl}/${kind === 'reset' ? 'r' : 'j'}/${token}`;
+  }
+
+  async function deliver(to, subject, text) {
+    const m = mailSettings();
+    await sendMail(m, { from: m.from, fromName: db().settings.serverName, to, subject, text });
+  }
+
+  function resetEmail(user, token, validFor) {
+    const name = db().settings.serverName;
+    return [`Reset your ${name} password`, [
+      `Hi ${user.displayName},`,
+      '',
+      `Someone (hopefully you) asked to reset the password for @${user.username} on ${name}.`,
+      '',
+      'Choose a new password here:',
+      linkUrl('reset', token),
+      '',
+      `The link works once, for ${validFor}. If you didn't ask for this, ignore this email: your password hasn't changed.`,
+    ].join('\n')];
+  }
+
+  function inviteEmail(admin, token) {
+    const name = db().settings.serverName;
+    return [`You're invited to ${name}`, [
+      `${admin.displayName} has invited you to ${name}.`,
+      '',
+      'Open this link to choose your username and password:',
+      linkUrl('join', token),
+      '',
+      'The link works once and stops working after 7 days.',
+    ].join('\n')];
+  }
+
+  // Only the newest reset link for a user works.
+  function newResetLink(user, createdBy, ttlMs) {
+    db().links = (db().links || []).filter((l) => !(l.kind === 'reset' && l.userId === user.id));
+    return links.create(db(), { id: store.newId(), kind: 'reset', userId: user.id, createdBy }, ttlMs);
+  }
+
+  const forgotSentAt = new Map();
+
+  // Finds a live link or explains why it doesn't work. Only misses count
+  // towards the rate limit, so typing a username doesn't lock anyone out.
+  function openLink(req, token) {
+    const link = links.find(db(), token);
+    if (!link) {
+      const key = `link:${clientIp(req, trustProxy)}`;
+      if (!limiter.allow(key)) throw new HttpError(429, 'Too many attempts, wait a few minutes');
+      limiter.fail(key);
+      throw new HttpError(404, 'This link has expired or was already used');
+    }
+    if (link.kind === 'reset' && !db().users.some((u) => u.id === link.userId)) {
+      throw new HttpError(404, 'This link has expired or was already used');
+    }
+    return link;
+  }
+
+  function usernameCheck(username) {
+    if (!validUsername(username)) return { available: false, reason: '2–32 of a–z, 0–9, . _ -' };
+    if (db().users.some((u) => u.username === username)) return { available: false, taken: true, reason: 'That username is taken' };
+    return { available: true };
+  }
+
   const routes = {
     'GET /api/state': (req, res) => {
       const user = currentUser(req);
       send(res, 200, {
         serverName: db().settings.serverName,
         setupRequired: db().users.length === 0,
+        mailEnabled: mailReady(),
         user: user ? publicUser(db(), user) : null,
       });
     },
@@ -405,20 +544,26 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       };
       db().users.push(user);
       store.save();
+      record(req, 'setup', { actor: user.username });
       login(req, res, user, { status: 201, password: body.password });
     },
 
     'POST /api/login': async (req, res) => {
-      if (!limiter.allow(req.socket.remoteAddress)) throw new HttpError(429, 'Too many attempts, wait a few minutes');
+      if (!limiter.allow(clientIp(req, trustProxy))) throw new HttpError(429, 'Too many attempts, wait a few minutes');
       const body = await readJson(req);
       const username = str(body.username, 32).toLowerCase();
       const user = db().users.find((u) => u.username === username);
       if (!user || typeof body.password !== 'string' || !verifyPassword(body.password, user.password)) {
-        limiter.fail(req.socket.remoteAddress);
+        limiter.fail(clientIp(req, trustProxy));
+        // Only the username typed is kept, never the password.
+        record(req, 'sign-in-failed', { target: username || null, detail: user ? 'wrong password' : 'no such user' });
         throw new HttpError(401, 'Wrong username or password');
       }
       const device = str(body.device, 60);
-      if (!user.twoStep || isTrusted(req, user)) return login(req, res, user, { device, password: body.password });
+      if (!user.twoStep || isTrusted(req, user)) {
+        record(req, 'sign-in', { actor: user.username, detail: user.twoStep ? 'trusted device' : '' });
+        return login(req, res, user, { device, password: body.password });
+      }
       forget(pendingCodes);
       const ticket = crypto.randomBytes(24).toString('hex');
       // The password is only held in memory until the code arrives, so the
@@ -429,7 +574,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
 
     // Second step: a code from the authenticator app, or a recovery code.
     'POST /api/login/code': async (req, res) => {
-      if (!limiter.allow(req.socket.remoteAddress)) throw new HttpError(429, 'Too many attempts, wait a few minutes');
+      if (!limiter.allow(clientIp(req, trustProxy))) throw new HttpError(429, 'Too many attempts, wait a few minutes');
       const body = await readJson(req);
       const pending = typeof body.ticket === 'string' && pendingCodes.get(body.ticket);
       if (!pending || pending.expires < Date.now()) throw new HttpError(401, 'That took too long. Sign in again.');
@@ -450,7 +595,8 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         ok = twoStep.useRecoveryCode(user.twoStep, code);
       }
       if (!ok) {
-        limiter.fail(req.socket.remoteAddress);
+        limiter.fail(clientIp(req, trustProxy));
+        record(req, 'sign-in-failed', { target: user.username, detail: 'wrong two-step code' });
         pending.tries++;
         if (pending.tries >= CODE_TRIES) {
           pendingCodes.delete(body.ticket);
@@ -459,12 +605,15 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         throw new HttpError(400, "That code didn't work. Check your app's newest code.");
       }
       pendingCodes.delete(body.ticket);
+      record(req, 'sign-in', { actor: user.username, detail: /^\d/.test(code) ? 'with code' : 'with recovery code' });
       const cookies = body.trust === true && !pending.device ? [trustDevice(user)] : [];
       store.save();
       login(req, res, user, { cookies, device: pending.device, password: pending.password });
     },
 
     'POST /api/logout': (req, res) => {
+      const user = currentUser(req);
+      if (user) record(req, 'sign-out', { actor: user.username });
       sessions.destroy(tokenOf(req));
       send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie('', secureCookies) });
     },
@@ -473,6 +622,10 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       const user = requireUser(req);
       const body = await readJson(req);
       if (body.displayName !== undefined) user.displayName = str(body.displayName, 60) || user.username;
+      if (body.email !== undefined) {
+        const email = str(body.email, 254).toLowerCase();
+        if (email !== (user.email || '')) user.email = cleanEmail(email);
+      }
       if (body.newPassword !== undefined) {
         if (typeof body.currentPassword !== 'string' || !verifyPassword(body.currentPassword, user.password)) {
           throw new HttpError(400, 'Current password is wrong');
@@ -482,6 +635,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         // Anyone who knew the old password is signed out; this device stays in.
         sessions.destroyUser(user.id, tokenOf(req));
         syncJellyfinPassword(user, body.newPassword);
+        record(req, 'password-changed', { actor: user.username, target: user.username });
       }
       store.save();
       send(res, 200, { user: publicUser(db(), user) });
@@ -523,6 +677,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       };
       user.trusted = [];
       store.save();
+      record(req, 'two-step-on', { actor: user.username, target: user.username });
       send(res, 200, { user: publicUser(db(), user), recoveryCodes });
     },
 
@@ -542,6 +697,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       delete user.twoStep;
       user.trusted = [];
       store.save();
+      record(req, 'two-step-off', { actor: user.username, target: user.username });
       send(res, 200, { user: publicUser(db(), user) }, { 'Set-Cookie': trustCookie('', secureCookies) });
     },
 
@@ -643,10 +799,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       const user = requireUser(req);
       const host = requestHost(req);
       const entries = await Promise.all(
-        visibleApps(db(), user).map(async (a) => [
-          a.id,
-          a.url ? await probe(a.url.replace(/\{host\}/g, host), probeTimeoutMs) : 'unset',
-        ]),
+        visibleApps(db(), user).map(async (a) => [a.id, (await appProbe(a, host, probeTimeoutMs)).state]),
       );
       send(res, 200, { status: Object.fromEntries(entries) });
     },
@@ -676,8 +829,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       const [health, docker, web] = await Promise.all([
         serverHealth({ cpu, disks: diskList }),
         listContainers(dockerHost, probeTimeoutMs),
-        Promise.all(visibleApps(db(), user).map((a) =>
-          a.url ? timedProbe(a.url.replace(/\{host\}/g, host), probeTimeoutMs) : { state: 'unset' })),
+        Promise.all(visibleApps(db(), user).map((a) => appProbe(a, host, probeTimeoutMs))),
       ]);
       const all = docker.containers || [];
       const claimed = new Set();
@@ -717,7 +869,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     },
 
     'POST /api/admin/users': async (req, res) => {
-      requireAdmin(req);
+      const admin = requireAdmin(req);
       const body = await readJson(req);
       const username = str(body.username, 32).toLowerCase();
       if (!validUsername(username)) throw new HttpError(400, 'Username: 2–32 of a–z, 0–9, . _ -');
@@ -736,6 +888,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       db().users.push(user);
       store.save();
       syncJellyfinPassword(user, body.password);
+      record(req, 'user-added', { actor: admin.username, target: user.username, detail: `${user.role}, ${gbText(user.limitGb)}` });
       send(res, 201, { user: adminView(user) });
     },
 
@@ -744,12 +897,27 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       const user = db().users.find((u) => u.id === id);
       if (!user) throw new HttpError(404, 'No such user');
       const body = await readJson(req);
-      if (body.displayName !== undefined) user.displayName = str(body.displayName, 60) || user.username;
-      if (body.apps !== undefined) user.apps = cleanAppAccess(body.apps);
-      if (body.limitGb !== undefined) user.limitGb = cleanLimit(body.limitGb);
+      const changes = [];
+      if (body.displayName !== undefined) {
+        const name = str(body.displayName, 60) || user.username;
+        if (name !== user.displayName) changes.push('name');
+        user.displayName = name;
+      }
+      if (body.apps !== undefined) {
+        const apps = cleanAppAccess(body.apps);
+        if (JSON.stringify(apps) !== JSON.stringify(user.apps)) changes.push('app access');
+        user.apps = apps;
+      }
+      if (body.limitGb !== undefined) {
+        const limit = cleanLimit(body.limitGb);
+        const before = storage.limitGbOf(db(), user);
+        if (limit !== before) changes.push(`limit ${gbText(before)} → ${gbText(limit)}`);
+        user.limitGb = limit;
+      }
       if (body.role !== undefined) {
         const role = body.role === 'admin' ? 'admin' : 'user';
         if (user.id === admin.id && role !== 'admin') throw new HttpError(400, "You can't remove your own admin role");
+        if (role !== user.role) changes.push(`role ${user.role} → ${role}`);
         user.role = role;
       }
       if (body.password !== undefined) {
@@ -758,15 +926,18 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         user.trusted = [];
         sessions.destroyUser(user.id);
         syncJellyfinPassword(user, body.password);
+        changes.push('password reset');
       }
       // For someone who lost their phone and their recovery codes: they sign
       // in with just their password and set it up again.
-      if (body.resetTwoStep === true) {
+      if (body.resetTwoStep === true && user.twoStep) {
         delete user.twoStep;
         user.trusted = [];
+        changes.push('two-step reset');
       }
       if (body.apps !== undefined || body.role !== undefined) jellyfinAccessChanged(user);
       store.save();
+      if (changes.length) record(req, 'user-changed', { actor: admin.username, target: user.username, detail: changes.join(', ') });
       send(res, 200, { user: adminView(user) });
     },
 
@@ -778,15 +949,226 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       db().users = db().users.filter((u) => u.id !== id);
       sessions.destroyUser(id);
       if (jellyfin.enabled()) jellyfin.disable(gone.username).catch(jellyfinFailed);
+      db().links = (db().links || []).filter((l) => l.userId !== id);
       db().storageRequests = storage.requestsOf(db()).filter((r) => r.userId !== id);
+      store.save();
+      record(req, 'user-removed', { actor: admin.username, target: gone.username });
+      send(res, 200, { ok: true });
+    },
+
+    // ---------- invite and reset links ----------
+
+    'GET /api/admin/invites': (req, res) => {
+      requireAdmin(req);
+      if (links.prune(db())) store.save();
+      const invites = db().links.filter((l) => l.kind === 'invite').map(links.adminView);
+      send(res, 200, { invites, publicUrl: db().settings.publicUrl || '' });
+    },
+
+    'POST /api/admin/invites': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const role = body.role === 'admin' ? 'admin' : 'user';
+      const { token, link } = links.create(db(), {
+        id: store.newId(),
+        kind: 'invite',
+        label: str(body.label, 60),
+        role,
+        apps: role === 'admin' ? null : cleanAppAccess(body.apps),
+        limitGb: body.limitGb === undefined ? storage.defaultLimitGb(db()) : cleanLimit(body.limitGb),
+        createdBy: admin.id,
+      }, links.INVITE_TTL_MS);
+      store.save();
+      const out = { invite: links.adminView(link), token };
+      const to = str(body.email, 254).toLowerCase();
+      if (to) {
+        if (!mail.validEmail(to)) out.mailError = "That doesn't look like an email address";
+        else if (!mailReady()) out.mailError = 'Email is not set up yet';
+        else {
+          try {
+            await deliver(to, ...inviteEmail(admin, token));
+            out.emailedTo = to;
+          } catch (err) { out.mailError = err.message; }
+        }
+      }
+      record(req, 'invite-created', { actor: admin.username, detail: [link.label, role, out.emailedTo && `emailed to ${out.emailedTo}`].filter(Boolean).join(', ') });
+      send(res, 201, out);
+    },
+
+    'DELETE /api/admin/invites/:id': (req, res, id) => {
+      const admin = requireAdmin(req);
+      const link = (db().links || []).find((l) => l.kind === 'invite' && l.id === id);
+      if (!link) throw new HttpError(404, 'No such invite');
+      links.remove(db(), link);
+      store.save();
+      record(req, 'invite-removed', { actor: admin.username, detail: link.label || '' });
+      send(res, 200, { ok: true });
+    },
+
+    'POST /api/admin/users/:id/reset-link': async (req, res, id) => {
+      const admin = requireAdmin(req);
+      const user = db().users.find((u) => u.id === id);
+      if (!user) throw new HttpError(404, 'No such user');
+      const body = req.headers['content-type'] ? await readJson(req) : {};
+      const { token, link } = newResetLink(user, admin.id, links.RESET_TTL_MS);
+      store.save();
+      const out = { expiresAt: link.expiresAt, token };
+      if (body.email) {
+        if (!user.email) out.mailError = `${user.displayName} hasn't added an email address`;
+        else if (!mailReady()) out.mailError = 'Email is not set up yet';
+        else {
+          try {
+            await deliver(user.email, ...resetEmail(user, token, '24 hours'));
+            out.emailedTo = user.email;
+          } catch (err) { out.mailError = err.message; }
+        }
+      }
+      record(req, 'reset-link-created', { actor: admin.username, target: user.username, detail: out.emailedTo ? `emailed to ${out.emailedTo}` : '' });
+      send(res, 201, out);
+    },
+
+    // "Forgot password?" on the sign-in page. The answer is always the same,
+    // so it can't be used to find out who has an account.
+    'POST /api/forgot': async (req, res) => {
+      // Every request counts here, not only misses, since each one can send an email.
+      const key = `forgot:${clientIp(req, trustProxy)}`;
+      if (!limiter.allow(key)) throw new HttpError(429, 'Too many attempts, wait a few minutes');
+      limiter.fail(key);
+      const body = await readJson(req);
+      const login = str(body.login, 254).toLowerCase();
+      send(res, 200, { ok: true });
+      const user = login && db().users.find((u) => u.username === login || (u.email && u.email === login));
+      if (!user || !user.email || !mailReady()) return;
+      // At most one email per user every 5 minutes.
+      if (Date.now() - (forgotSentAt.get(user.id) || 0) < 5 * 60 * 1000) return;
+      forgotSentAt.set(user.id, Date.now());
+      const { token } = newResetLink(user, null, links.FORGOT_TTL_MS);
+      store.save();
+      deliver(user.email, ...resetEmail(user, token, '1 hour')).catch((err) => console.error(`Reset email to @${user.username} failed: ${err.message}`));
+    },
+
+    // ---------- setup checklist ----------
+
+    'GET /api/admin/setup': async (req, res) => {
+      const admin = requireAdmin(req);
+      const docker = await listContainers(dockerHost, probeTimeoutMs);
+      send(res, 200, await setup.checklist({
+        db: db(),
+        admin,
+        nestDir: nestDir || path.join(dataDir, 'nest'),
+        drives: readDisks(diskList),
+        dockerOk: !docker.error,
+        secureCookies,
+        trustProxy,
+        ticked: db().settings.setupTicked || [],
+        jellyfinOk: jellyfin.enabled() && (await jellyfinView()).connected,
+      }));
+    },
+
+    // Steps Roost can't check itself (they live in Cloudflare) are ticked by hand.
+    'POST /api/admin/setup/:id': async (req, res, id) => {
+      requireAdmin(req);
+      if (!setup.MANUAL.includes(id)) throw new HttpError(400, 'Roost checks that step itself');
+      const body = await readJson(req);
+      const ticked = new Set(db().settings.setupTicked || []);
+      if (body.done) ticked.add(id);
+      else ticked.delete(id);
+      db().settings.setupTicked = [...ticked];
       store.save();
       send(res, 200, { ok: true });
     },
 
-    'PUT /api/admin/apps': async (req, res) => {
+    'GET /api/admin/settings': (req, res) => {
       requireAdmin(req);
+      send(res, 200, { settings: settingsView() });
+    },
+
+    'POST /api/admin/mail-test': async (req, res) => {
+      const admin = requireAdmin(req);
       const body = await readJson(req);
+      const to = str(body.to, 254).toLowerCase() || admin.email;
+      if (!mail.validEmail(to)) throw new HttpError(400, 'Add your email on Profile first, or type one here');
+      if (!mailSettings()) throw new HttpError(400, 'Save the email settings first');
+      try {
+        await deliver(to, `Test email from ${db().settings.serverName}`, `This is a test from ${db().settings.serverName}. Email is working.`);
+      } catch (err) {
+        throw new HttpError(502, err.message);
+      }
+      mailSettings().verifiedAt = new Date().toISOString();
+      store.save();
+      send(res, 200, { ok: true, to });
+    },
+
+    // The page a link opens asks what it is for, and (for invites) whether a
+    // username is free while the person types it.
+    'GET /api/links/:id': (req, res, token) => {
+      const link = openLink(req, token);
+      if (link.kind === 'reset') {
+        const user = db().users.find((u) => u.id === link.userId);
+        return send(res, 200, { kind: 'reset', serverName: db().settings.serverName, username: user.username, displayName: user.displayName });
+      }
+      const wanted = new URL(req.url, 'http://roost').searchParams.get('username');
+      if (wanted !== null) return send(res, 200, usernameCheck(wanted.toLowerCase()));
+      const inviter = db().users.find((u) => u.id === link.createdBy);
+      const apps = link.role === 'admin' || !Array.isArray(link.apps) ? db().apps : db().apps.filter((a) => link.apps.includes(a.id));
+      send(res, 200, {
+        kind: 'invite',
+        serverName: db().settings.serverName,
+        invitedBy: inviter ? inviter.displayName : null,
+        role: link.role,
+        apps: apps.map((a) => a.name),
+        expiresAt: link.expiresAt,
+      });
+    },
+
+    'POST /api/links/:id': async (req, res, token) => {
+      const link = openLink(req, token);
+      const body = await readJson(req);
+      if (!validPassword(body.password)) throw new HttpError(400, 'Password must be at least 8 characters');
+      if (link.kind === 'reset') {
+        const user = db().users.find((u) => u.id === link.userId);
+        user.password = hashPassword(body.password);
+        sessions.destroyUser(user.id);
+        links.remove(db(), link);
+        store.save();
+        record(req, 'password-reset', { actor: user.username, target: user.username, detail: 'reset link' });
+        return login(req, res, user, { password: body.password });
+      }
+      const username = str(body.username, 32).toLowerCase();
+      const check = usernameCheck(username);
+      if (!check.available) throw new HttpError(check.taken ? 409 : 400, check.reason);
+      const user = {
+        id: store.newId(),
+        username,
+        displayName: str(body.displayName, 60) || username,
+        role: link.role,
+        apps: link.apps,
+        limitGb: link.limitGb,
+        password: hashPassword(body.password),
+        createdAt: new Date().toISOString(),
+        invitedBy: link.createdBy,
+      };
+      if (body.email) user.email = cleanEmail(body.email);
+      db().users.push(user);
+      links.remove(db(), link);
+      store.save();
+      const inviter = db().users.find((u) => u.id === link.createdBy);
+      record(req, 'user-joined', { actor: user.username, detail: inviter ? `invited by ${inviter.username}` : 'invite link' });
+      login(req, res, user, { status: 201, password: body.password });
+    },
+
+    'PUT /api/admin/apps': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const before = new Map(db().apps.map((a) => [a.id, a]));
       db().apps = cleanApps(body.apps);
+      const after = new Set(db().apps.map((a) => a.id));
+      const changes = [
+        ...db().apps.filter((a) => !before.has(a.id)).map((a) => `added ${a.name}`),
+        ...[...before.values()].filter((a) => !after.has(a.id)).map((a) => `removed ${a.name}`),
+        ...db().apps.filter((a) => before.has(a.id) && JSON.stringify(a) !== JSON.stringify(before.get(a.id))).map((a) => `edited ${a.name}`),
+      ];
+      if (changes.length) record(req, 'apps-changed', { actor: admin.username, detail: changes.join(', ') });
       const ids = new Set(db().apps.map((a) => a.id));
       for (const u of db().users) if (Array.isArray(u.apps)) u.apps = u.apps.filter((a) => ids.has(a));
       store.save();
@@ -800,13 +1182,45 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     },
 
     'PATCH /api/admin/settings': async (req, res) => {
-      requireAdmin(req);
+      const admin = requireAdmin(req);
       const body = await readJson(req);
-      if (body.serverName !== undefined) db().settings.serverName = str(body.serverName, 40) || 'Roost';
-      if (body.defaultLimitGb !== undefined) db().settings.defaultLimitGb = cleanLimit(body.defaultLimitGb);
-      if (body.adminsNeedTwoStep !== undefined) db().settings.adminsNeedTwoStep = body.adminsNeedTwoStep !== false;
+      const changes = [];
+      if (body.serverName !== undefined) {
+        const name = str(body.serverName, 40) || 'Roost';
+        if (name !== db().settings.serverName) changes.push(`name ${db().settings.serverName} → ${name}`);
+        db().settings.serverName = name;
+      }
+      if (body.defaultLimitGb !== undefined) {
+        const limit = cleanLimit(body.defaultLimitGb);
+        const before = storage.defaultLimitGb(db());
+        if (limit !== before) changes.push(`default limit ${gbText(before)} → ${gbText(limit)}`);
+        db().settings.defaultLimitGb = limit;
+      }
+      if (body.publicUrl !== undefined) {
+        const url = cleanPublicUrl(body.publicUrl);
+        if (url !== (db().settings.publicUrl || '')) changes.push(`public address ${url || 'cleared'}`);
+        db().settings.publicUrl = url;
+      }
+      if (body.adminsNeedTwoStep !== undefined) {
+        const need = body.adminsNeedTwoStep !== false;
+        if (need !== adminsNeedTwoStep(db())) changes.push(need ? 'admins must use two-step' : 'admins may skip two-step');
+        db().settings.adminsNeedTwoStep = need;
+      }
+      if (body.mail !== undefined) {
+        db().settings.mail = cleanMail(body.mail, mailSettings());
+        changes.push(`email ${db().settings.mail ? `via ${db().settings.mail.host}` : 'turned off'}`);
+      }
       store.save();
+      if (changes.length) record(req, 'settings-changed', { actor: admin.username, detail: changes.join(', ') });
       send(res, 200, { settings: settingsView() });
+    },
+
+    'GET /api/admin/activity': (req, res) => {
+      requireAdmin(req);
+      const q = new URL(req.url, 'http://roost').searchParams;
+      const before = Number(q.get('before')) || Infinity;
+      const filter = FILTERS.includes(q.get('filter')) ? q.get('filter') : '';
+      send(res, 200, activity.page({ before, filter, limit: 50 }));
     },
 
     // ---------- storage limits ----------
@@ -840,6 +1254,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       };
       requests.push(request);
       store.save();
+      record(req, 'storage-requested', { actor: user.username, detail: `${gbText(current)} → ${gbText(requestedGb)}` });
       send(res, 201, { request });
     },
 
@@ -877,6 +1292,12 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       request.decidedBy = admin.username;
       request.reply = str(body.reply, 300);
       store.save();
+      const asker = db().users.find((u) => u.id === request.userId);
+      record(req, `storage-${request.status}`, {
+        actor: admin.username,
+        target: asker && asker.username,
+        detail: request.status === 'approved' ? gbText(request.approvedGb) : `asked ${gbText(request.requestedGb)}`,
+      });
       send(res, 200, { request });
     },
 
@@ -905,7 +1326,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/storage-requests|storage\/users|me\/devices))\/([a-z0-9._-]+)(\/usage)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/invites|admin\/storage-requests|admin\/setup|storage\/users|links|me\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }
@@ -958,6 +1379,10 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       const { pathname } = new URL(req.url, 'http://roost');
       if (pathname === JELLYFIN_PREFIX || pathname.startsWith(`${JELLYFIN_PREFIX}/`)) {
         serveJellyfin(req, res, pathname);
+      } else if (pathname.startsWith('/api/nest/')) {
+        const user = requireUser(req);
+        if (!visibleApps(db(), user).some((a) => a.id === 'nest')) throw new HttpError(403, 'You don’t have access to Nest');
+        await nest.handle(req, res, user, pathname, new URL(req.url, 'http://roost').searchParams);
       } else if (pathname.startsWith('/api/')) {
         const found = route(req.method, pathname);
         if (!found) throw new HttpError(404, 'Not found');
@@ -980,6 +1405,20 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     socket.destroy();
   });
 
+  server.on('close', () => {
+    clearInterval(sweepTimer);
+    store.flush();
+    activity.flush();
+    sessions.flush();
+    nest.close();
+  });
+  server.nest = nest;
+  // Save anything still waiting, e.g. when the container is stopped.
+  server.flushAll = () => {
+    store.flush();
+    activity.flush();
+    sessions.flush();
+  };
   return server;
 }
 
@@ -991,9 +1430,19 @@ if (require.main === module) {
   const disks = parseDisks(process.env.ROOST_DISKS);
   const dockerHost = process.env.DOCKER_HOST || '';
   const roostContainer = process.env.ROOST_CONTAINER || 'roost';
-  createServer({ dataDir, secureCookies, disks, dockerHost, roostContainer, appToken }).listen(port, () => {
+  const nestDir = process.env.NEST_DIR || path.join(dataDir, 'nest');
+  const trustProxy = process.env.BEHIND_PROXY === 'true';
+  const server = createServer({ dataDir, nestDir, secureCookies, disks, dockerHost, roostContainer, appToken, trustProxy });
+  server.listen(port, () => {
     console.log(`Roost is running on http://localhost:${port} (data in ${dataDir})`);
   });
+  // docker stop sends SIGTERM; save what is waiting and exit straight away.
+  for (const signal of ['SIGTERM', 'SIGINT']) {
+    process.on(signal, () => {
+      server.flushAll();
+      process.exit(0);
+    });
+  }
 }
 
 module.exports = { createServer };

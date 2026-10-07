@@ -86,6 +86,7 @@ const jfUser = (name) => jf.users.find((u) => u.Name === name);
 
 let admin;
 let adminSecret;
+const setupStep = async () => (await call('GET', '/api/admin/setup', null, admin)).body.steps.find((st) => st.id === 'jellyfin-sign-in').done;
 
 before(async () => {
   fake = fakeJellyfin();
@@ -116,6 +117,7 @@ test('Jellyfin is off until an admin connects it', async () => {
   const apps = await call('GET', '/api/apps', null, admin);
   assert.equal(apps.body.apps.find((a) => a.id === 'jellyfin').openUrl, undefined);
   assert.equal((await call('GET', '/jellyfin/', null, admin)).location, '/');
+  assert.equal(await setupStep(), false);
 });
 
 test('a wrong API key is refused and not saved', async () => {
@@ -131,6 +133,7 @@ test('connecting shows the server and never sends the key back', async () => {
   assert.deepEqual(ok.body, { url: jfUrl, keySaved: true, connected: true, serverName: 'Home', version: '10.10.7', accounts: 2 });
   const settings = await call('GET', '/api/admin/settings', null, admin);
   assert.equal(JSON.stringify(settings.body).includes(KEY), false);
+  assert.equal(await setupStep(), true);
   // Saving again without a key keeps the saved one.
   assert.equal((await call('PUT', '/api/admin/jellyfin', { url: jfUrl }, admin)).status, 200);
 });

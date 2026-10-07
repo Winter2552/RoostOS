@@ -122,6 +122,11 @@ class Sessions {
     this.timer.unref();
   }
 
+  // Writes "last active" times still waiting, e.g. when Roost is stopped.
+  flush() {
+    if (this.timer) this.save();
+  }
+
   save() {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;

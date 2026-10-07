@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const { createServer } = require('../src/server');
 const twoStep = require('../src/twostep');
+const { setUpTwoStep, freshCode } = require('./helpers');
 
 let server;
 let base;
@@ -19,8 +20,9 @@ before(async () => {
   base = `http://127.0.0.1:${server.address().port}`;
 });
 
-after(() => {
-  server.close();
+after(async () => {
+  server.closeAllConnections();
+  await new Promise((r) => server.close(r));
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
@@ -39,9 +41,6 @@ let userCookie;
 let userId;
 let adminSecret;
 let adminRecovery;
-
-// A valid code that hasn't been used yet: the next step is accepted too.
-const freshCode = (secret) => twoStep.codeAt(secret, twoStep.currentStep() + 1);
 
 test('first run asks for setup and serves the page', async () => {
   const s = await call('GET', '/api/state');
@@ -459,6 +458,93 @@ test('repeated wrong passwords are slowed down', async () => {
 test('static files cannot escape the public folder', async () => {
   const res = await fetch(base + '/..%2fsrc%2fserver.js');
   assert.equal(res.status, 404);
+});
+
+test('activity log records sign-ins, failures and admin changes', async () => {
+  const { status, body } = await call('GET', '/api/admin/activity', null, adminCookie);
+  assert.equal(status, 200);
+  const types = body.entries.map((e) => e.type);
+  for (const t of ['setup', 'sign-in', 'sign-in-failed', 'user-added', 'user-changed', 'user-removed', 'storage-requested', 'storage-approved', 'storage-declined', 'settings-changed', 'password-changed']) {
+    assert.ok(types.includes(t), `missing ${t}`);
+  }
+  // Newest first.
+  assert.ok(body.entries[0].seq > body.entries[body.entries.length - 1].seq);
+  const failed = body.entries.find((e) => e.type === 'sign-in-failed' && e.target === 'raven' && e.detail === 'wrong password');
+  assert.ok(failed);
+  assert.ok(body.entries.some((e) => e.type === 'sign-in-failed' && e.detail === 'wrong two-step code'));
+  assert.ok(types.includes('two-step-on'));
+  assert.equal(failed.kind, 'failed');
+  // Without the proxy setting a forwarded header is ignored.
+  assert.equal(failed.ip, '127.0.0.1');
+  assert.doesNotMatch(JSON.stringify(body), /"wrong pass"|correct horse|new pass 123|scrypt/, 'passwords are never logged');
+  const limit = body.entries.find((e) => e.type === 'user-changed' && /limit/.test(e.detail));
+  assert.equal(limit.actor, 'raven');
+});
+
+test('activity log filters and is admins only', async () => {
+  const { body } = await call('GET', '/api/admin/activity?filter=storage', null, adminCookie);
+  assert.ok(body.entries.length > 0);
+  assert.ok(body.entries.every((e) => e.kind === 'storage'));
+  assert.equal((await call('GET', '/api/admin/activity')).status, 401);
+});
+
+test('activity log pages, reads the proxy address when told to, and survives a restart', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'roost-activity-'));
+  const start = async () => {
+    const srv = createServer({ dataDir: dir, trustProxy: true, activitySaveDelayMs: 60000 });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    return [srv, `http://127.0.0.1:${srv.address().port}`];
+  };
+  let [s2, url] = await start();
+  const post = (p, body, headers = {}) => fetch(url + p, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+  try {
+    const setup = await post('/api/setup', { username: 'raven', password: 'correct horse' });
+    const cookie = setup.headers.get('set-cookie').split(';')[0];
+    const call2 = async (method, p, body, c) => {
+      const r = await fetch(url + p, { method, headers: { 'Content-Type': 'application/json', Cookie: c }, body: body ? JSON.stringify(body) : undefined });
+      return { status: r.status, body: await r.json() };
+    };
+    const secret = await setUpTwoStep(call2, cookie);
+    for (let i = 0; i < 55; i++) {
+      // Earlier X-Forwarded-For entries can be faked; the proxy's own one is last.
+      await post('/api/login', { username: 'mia', password: 'guess guess' }, { 'X-Forwarded-For': `6.6.6.6, 10.0.0.${i}` });
+    }
+    const get = async (q) => (await fetch(`${url}/api/admin/activity${q}`, { headers: { Cookie: cookie } })).json();
+    const first = await get('?filter=failed');
+    assert.equal(first.entries.length, 50);
+    assert.equal(first.more, true);
+    assert.equal(first.entries[0].ip, '10.0.0.54');
+    assert.equal(first.entries[0].detail, 'no such user');
+    const second = await get(`?filter=failed&before=${first.entries[49].seq}`);
+    assert.equal(second.entries.length, 5);
+    assert.equal(second.more, false);
+    s2.flushAll();
+    s2.close();
+    [s2, url] = await start();
+    const { ticket } = await (await post('/api/login', { username: 'raven', password: 'correct horse' })).json();
+    const login = await post('/api/login/code', { ticket, code: freshCode(secret) });
+    const again = await (await fetch(`${url}/api/admin/activity`, { headers: { Cookie: login.headers.get('set-cookie').split(';')[0] } })).json();
+    assert.equal(again.entries[0].type, 'sign-in');
+    assert.equal(again.entries[1].ip, '10.0.0.54');
+    assert.ok(again.entries[0].seq > again.entries[1].seq);
+  } finally {
+    s2.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('activity log keeps only the newest entries', () => {
+  const { ActivityLog } = require('../src/activity');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'roost-cap-'));
+  try {
+    const log = new ActivityLog(dir, { max: 3 });
+    for (let i = 0; i < 5; i++) log.add('sign-in', { actor: `u${i}` });
+    log.flush();
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, 'activity.json'), 'utf8'));
+    assert.deepEqual(saved.entries.map((e) => e.actor), ['u2', 'u3', 'u4']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('logout ends the session', async () => {
