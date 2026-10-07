@@ -78,6 +78,19 @@ const STEPS = [
     action: { label: 'Edit apps', view: 'admin', focus: 'apps-form' },
     check: (ctx) => ctx.db.apps.every((a) => a.url),
   },
+  {
+    id: 'jellyfin-sign-in',
+    group: 'Server',
+    title: 'Connect Jellyfin sign-in',
+    why: 'Everyone uses their Roost username and password in Jellyfin, and the Jellyfin card opens it already signed in.',
+    how: [
+      'In Jellyfin, open Dashboard → API Keys, press +, name it Roost and copy the key.',
+      'Under Admin → Jellyfin sign-in, enter Jellyfin\'s address as Roost reaches it (e.g. http://192.168.1.20:8096) and paste the key.',
+      'Press Connect. Each person is linked the next time they sign in to Roost.',
+    ],
+    action: { label: 'Connect Jellyfin', view: 'admin', focus: 'jellyfin-form', field: 'url' },
+    check: (ctx) => ctx.jellyfinOk,
+  },
 
   // ---------- reaching Roost from anywhere ----------
   {

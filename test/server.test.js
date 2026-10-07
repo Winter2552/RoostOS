@@ -336,6 +336,101 @@ test('storage apps need the app token to read limits and report usage', async ()
   assert.equal((await call('GET', '/api/me/storage', null, userCookie)).body.storage.usage.nest, 1024 ** 3);
 });
 
+const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+
+async function withKey(method, url, key) {
+  const res = await fetch(base + url, { method, headers: { Authorization: `Bearer ${key}` } });
+  return { status: res.status, body: await res.json().catch(() => null) };
+}
+
+test('changing your password signs out your other devices', async () => {
+  const other = (await call('POST', '/api/login', { username: 'guest', password: 'new pass 123' })).cookie;
+  const ok = await call('PATCH', '/api/me', { currentPassword: 'new pass 123', newPassword: 'guest pass 1' }, userCookie);
+  assert.equal(ok.status, 200);
+  assert.equal((await call('GET', '/api/apps', null, other)).status, 401);
+  assert.equal((await call('GET', '/api/apps', null, userCookie)).status, 200);
+});
+
+test('signed-in devices are listed by name and can be signed out', async () => {
+  const res = await fetch(base + '/api/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': IPHONE },
+    body: JSON.stringify({ username: 'guest', password: 'guest pass 1' }),
+  });
+  const phone = res.headers.getSetCookie()[0].split(';')[0];
+  const { body } = await call('GET', '/api/me/devices', null, userCookie);
+  assert.equal(body.devices.length, 2);
+  const iphone = body.devices.find((d) => d.name === 'Safari on iPhone');
+  assert.equal(iphone.current, false);
+  assert.equal(body.devices.find((d) => d.current).kind, 'browser');
+  assert.equal(body.devices.some((d) => 'hash' in d), false);
+  assert.equal((await call('DELETE', `/api/me/devices/${iphone.id}`, null, userCookie)).status, 200);
+  assert.equal((await call('GET', '/api/apps', null, phone)).status, 401);
+  assert.equal((await call('DELETE', `/api/me/devices/${iphone.id}`, null, userCookie)).status, 404);
+});
+
+test('sign out everywhere else keeps this device', async () => {
+  const other = (await call('POST', '/api/login', { username: 'guest', password: 'guest pass 1' })).cookie;
+  assert.equal((await call('POST', '/api/me/devices/sign-out-others', null, userCookie)).status, 200);
+  assert.equal((await call('GET', '/api/apps', null, other)).status, 401);
+  const { body } = await call('GET', '/api/me/devices', null, userCookie);
+  assert.equal(body.devices.length, 1);
+});
+
+test('apps on a phone sign in with a device key', async () => {
+  const res = await call('POST', '/api/login', { username: 'guest', password: 'guest pass 1', device: "Guest's phone" });
+  assert.equal(res.cookie, null);
+  assert.match(res.body.key, /^[0-9a-f]{64}$/);
+  const apps = await withKey('GET', '/api/apps', res.body.key);
+  assert.deepEqual(apps.body.apps.map((a) => a.id), ['jellyfin', 'glint']);
+  const { body } = await call('GET', '/api/me/devices', null, userCookie);
+  const key = body.devices.find((d) => d.kind === 'app');
+  assert.equal(key.name, "Guest's phone");
+  assert.equal((await withKey('POST', '/api/logout', res.body.key)).status, 200);
+  assert.equal((await withKey('GET', '/api/apps', res.body.key)).status, 401);
+});
+
+test('device keys go through two-step sign-in too', async () => {
+  const { body } = await call('GET', '/api/admin/users', null, adminCookie);
+  assert.ok(body.users.find((u) => u.username === 'raven').twoStep.on);
+  const first = await call('POST', '/api/login', { username: 'raven', password: 'correct horse', device: 'Raven phone' });
+  assert.equal(first.body.twoStep, true);
+  const done = await call('POST', '/api/login/code', { ticket: first.body.ticket, code: adminRecovery.at(-1), trust: true });
+  assert.equal(done.status, 200);
+  assert.ok(done.body.key);
+  assert.deepEqual(done.headers, []);
+});
+
+test('apps check who is signed in and whether they may use the app', async () => {
+  assert.equal((await call('GET', '/api/auth/check?app=glint')).status, 401);
+  const ok = await call('GET', '/api/auth/check?app=glint', null, userCookie);
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.user.username, 'guest');
+  assert.equal(ok.body.user.password, undefined);
+  assert.equal((await call('GET', '/api/auth/check?app=nest', null, userCookie)).status, 403);
+  assert.equal((await call('GET', '/api/auth/check?app=nest', null, adminCookie)).status, 200);
+});
+
+test('sign-ins survive a restart and only token hashes are saved', async () => {
+  const saved = fs.readFileSync(path.join(dataDir, 'sessions.json'), 'utf8');
+  assert.equal(saved.includes(userCookie.split('=')[1]), false);
+  const again = createServer({ dataDir });
+  await new Promise((r) => again.listen(0, '127.0.0.1', r));
+  try {
+    const res = await fetch(`http://127.0.0.1:${again.address().port}/api/apps`, { headers: { Cookie: userCookie } });
+    assert.equal(res.status, 200);
+  } finally {
+    again.close();
+  }
+});
+
+test('the device name comes from the browser', () => {
+  const { deviceName } = require('../src/auth');
+  assert.equal(deviceName(IPHONE), 'Safari on iPhone');
+  assert.equal(deviceName('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 Edg/120.0'), 'Edge on Windows');
+  assert.equal(deviceName('Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36'), 'Chrome on Android');
+  assert.equal(deviceName(''), 'Unknown browser');
+});
+
 test('admin cannot delete themselves but can delete others', async () => {
   const { body } = await call('GET', '/api/admin/users', null, adminCookie);
   const me = body.users.find((u) => u.username === 'raven');
