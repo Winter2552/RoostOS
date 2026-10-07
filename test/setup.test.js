@@ -6,8 +6,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { createServer } = require('../src/server');
-const twoStep = require('../src/twostep');
 const { STEPS, NO_STEP } = require('../src/setup');
+const { setUpTwoStep } = require('./helpers');
 
 let server;
 let base;
@@ -21,9 +21,7 @@ before(async () => {
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
   adminCookie = (await call('POST', '/api/setup', { username: 'raven', password: 'correct horse' })).cookie;
-  // Admins set up two-step sign-in before any admin page opens.
-  const { secret } = (await call('POST', '/api/me/two-step/start', null, adminCookie)).body;
-  await call('POST', '/api/me/two-step/enable', { code: twoStep.codeAt(secret, twoStep.currentStep()) }, adminCookie);
+  await setUpTwoStep(call, adminCookie);
 });
 
 after(() => {
