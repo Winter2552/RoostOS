@@ -13,7 +13,7 @@ const ICONS = {
   home: '<path d="M3 11l9-7 9 7v9h-6v-6H9v6H3z"/>',
 };
 
-const state = { serverName: 'Roost', user: null, apps: [], status: {}, users: [], defaultLimitGb: null, diskGb: null };
+const state = { serverName: 'Roost', publicUrl: '', user: null, apps: [], status: {}, users: [], defaultLimitGb: null, diskGb: null };
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -175,15 +175,18 @@ $('#welcome-form').addEventListener('submit', async (e) => {
 
 // ---------- invite and reset links ----------
 
-const LINK_RE = /^#\/(join|reset)\/([0-9a-f]{64})$/;
+// Invite links look like https://roostos.network/j/K7PX-2QM9 (reset: /r/).
+const LINK_RE = /^\/[jr]\/([A-Za-z0-9-]{8,9})\/?$/;
 
 function linkToken() {
-  const m = location.hash.match(LINK_RE);
-  return m ? m[2] : null;
+  const m = location.pathname.match(LINK_RE);
+  return m ? m[1] : null;
 }
 
+// Links use the public address from Admin → Server when one is set, so a link
+// made at home still opens from anywhere.
 function linkUrl(kind, token) {
-  return `${location.origin}/#/${kind}/${token}`;
+  return `${state.publicUrl || location.origin}/${kind === 'reset' ? 'r' : 'j'}/${token}`;
 }
 
 let joinToken = null;
@@ -280,7 +283,7 @@ $('#join-form').addEventListener('submit', async (e) => {
     const { user } = await api('POST', `/api/links/${joinToken}`, body);
     joinToken = null;
     $('#join').classList.add('hidden');
-    history.replaceState(null, '', '#/apps');
+    history.replaceState(null, '', '/#/apps');
     await enter(user);
   } catch (err) {
     $('#join-msg').textContent = err.message;
@@ -291,7 +294,7 @@ $('#join-form').addEventListener('submit', async (e) => {
 
 $('#join-signin').addEventListener('click', (e) => {
   e.preventDefault();
-  history.replaceState(null, '', '#/');
+  history.replaceState(null, '', '/');
   $('#join').classList.add('hidden');
   showWelcome(false);
 });
@@ -363,11 +366,7 @@ function route() {
   if (view === 'status') loadStatus();
 }
 
-window.addEventListener('hashchange', () => {
-  const token = linkToken();
-  if (token) showJoin(token);
-  else if (state.user) route();
-});
+window.addEventListener('hashchange', () => { if (state.user) route(); });
 
 $('#logout').addEventListener('click', async () => {
   await api('POST', '/api/logout').catch(() => {});
@@ -665,12 +664,14 @@ function renderStorageRequests(requests) {
 // ---------- admin ----------
 
 async function loadAdmin() {
-  const [{ users }, { apps }, { requests, defaultLimitGb }, { invites }] = await Promise.all([
+  const [{ users }, { apps }, { requests, defaultLimitGb }, { invites, publicUrl }] = await Promise.all([
     api('GET', '/api/admin/users'), api('GET', '/api/apps'), api('GET', '/api/admin/storage-requests'), api('GET', '/api/admin/invites')]);
   state.users = users;
   state.apps = apps;
   state.defaultLimitGb = defaultLimitGb;
+  state.publicUrl = publicUrl;
   $('#settings-form').serverName.value = state.serverName;
+  $('#settings-form').publicUrl.value = publicUrl;
   pickers.default.setValue(defaultLimitGb);
   pickers.newUser.setValue(defaultLimitGb);
   renderStorageRequests(requests);
@@ -828,8 +829,11 @@ $('#settings-form').addEventListener('submit', async (e) => {
     const { settings } = await api('PATCH', '/api/admin/settings', {
       serverName: e.target.serverName.value,
       defaultLimitGb: pickers.default.getValue(),
+      publicUrl: e.target.publicUrl.value,
     });
     setServerName(settings.serverName);
+    state.publicUrl = settings.publicUrl || '';
+    e.target.publicUrl.value = state.publicUrl;
     flash(e.target, 'Saved');
   } catch (err) { flash(e.target, err.message, false); }
 });

@@ -1,20 +1,39 @@
 'use strict';
 
 // One-time links: invites (a new person picks a username and password) and
-// password resets (an existing user picks a new password). Only a hash of each
-// link is stored, so a copy of roost.json can't be used to open one.
+// password resets (an existing user picks a new password). Links carry a short
+// code like K7PX-2QM9: 8 characters from 31 that can't be mistaken for each
+// other (no 0/O, 1/I/L), so it can be read out or typed. That is nearly a
+// trillion codes; with the per-address limit on wrong guesses and a 7-day life,
+// guessing a live one isn't practical. Codes are stored hashed.
 
 const crypto = require('crypto');
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const RESET_TTL_MS = 24 * 60 * 60 * 1000;
 
-function hashToken(token) {
-  return crypto.createHash('sha256').update(String(token)).digest('hex');
+const ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+const CODE_LENGTH = 8;
+
+function hashToken(code) {
+  return crypto.createHash('sha256').update(code).digest('hex');
 }
 
-function newToken() {
-  return crypto.randomBytes(32).toString('hex');
+function newCode() {
+  let code = '';
+  for (let i = 0; i < CODE_LENGTH; i++) code += ALPHABET[crypto.randomInt(ALPHABET.length)];
+  return code;
+}
+
+// Accepts any case, with or without the dash or spaces.
+function normalize(input) {
+  const code = String(input).toUpperCase().replace(/[\s-]/g, '');
+  return code.length === CODE_LENGTH && [...code].every((c) => ALPHABET.includes(c)) ? code : null;
+}
+
+// Shown and linked as K7PX-2QM9.
+function format(code) {
+  return `${code.slice(0, 4)}-${code.slice(4)}`;
 }
 
 // Drops expired links. Returns true if anything was removed, so the caller
@@ -27,7 +46,8 @@ function prune(db, now = Date.now()) {
 }
 
 function create(db, fields, ttlMs) {
-  const token = newToken();
+  let token;
+  do token = newCode(); while ((db.links || []).some((l) => l.tokenHash === hashToken(token)));
   const link = {
     ...fields,
     tokenHash: hashToken(token),
@@ -36,12 +56,13 @@ function create(db, fields, ttlMs) {
   };
   db.links = db.links || [];
   db.links.push(link);
-  return { token, link };
+  return { token: format(token), link };
 }
 
 function find(db, token) {
-  if (typeof token !== 'string' || !/^[0-9a-f]{64}$/.test(token)) return null;
-  const hash = hashToken(token);
+  const code = normalize(token);
+  if (!code) return null;
+  const hash = hashToken(code);
   return (db.links || []).find((l) => l.tokenHash === hash && Date.parse(l.expiresAt) > Date.now()) || null;
 }
 

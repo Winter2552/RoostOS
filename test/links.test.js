@@ -43,12 +43,15 @@ test('only admins can make invites', async () => {
 test('an invite link lets someone make their own account, once', async () => {
   const made = await call('POST', '/api/admin/invites', { label: 'Mum', apps: ['jellyfin', 'glint'], limitGb: 20 }, adminCookie);
   assert.equal(made.status, 201);
-  assert.match(made.body.token, /^[0-9a-f]{64}$/);
+  assert.match(made.body.token, /^[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}$/);
   assert.equal(made.body.invite.tokenHash, undefined);
   const { token } = made.body;
 
   // Only a hash of the link is written to disk.
-  assert.ok(!JSON.stringify(readDb()).includes(token));
+  assert.ok(!JSON.stringify(readDb()).includes(token.replace('-', '')));
+
+  // Typed by hand: any case, with or without the dash.
+  assert.equal((await call('GET', `/api/links/${token.replace('-', '').toLowerCase()}`)).status, 200);
 
   const info = await call('GET', `/api/links/${token}`);
   assert.equal(info.body.kind, 'invite');
@@ -132,8 +135,23 @@ test('deleting a user removes their reset links', async () => {
 });
 
 test('bad links are refused and guessing is rate limited', async () => {
-  assert.equal((await call('GET', '/api/links/nothex')).status, 404);
+  assert.equal((await call('GET', '/api/links/OOOO-1111')).status, 404);
   let last;
-  for (let i = 0; i < 12; i++) last = await call('GET', `/api/links/${'0'.repeat(64)}`);
+  for (let i = 0; i < 12; i++) last = await call('GET', '/api/links/2222-2222');
   assert.equal(last.status, 429);
+});
+
+test('the public address is used for links and must be a web address', async () => {
+  const bad = await call('PATCH', '/api/admin/settings', { publicUrl: 'ftp://x' }, adminCookie);
+  assert.equal(bad.status, 400);
+  const ok = await call('PATCH', '/api/admin/settings', { publicUrl: 'roostos.network/' }, adminCookie);
+  assert.equal(ok.body.settings.publicUrl, 'https://roostos.network');
+  assert.equal((await call('GET', '/api/admin/invites', null, adminCookie)).body.publicUrl, 'https://roostos.network');
+  assert.equal((await call('PATCH', '/api/admin/settings', { publicUrl: '' }, adminCookie)).body.settings.publicUrl, '');
+});
+
+test('link pages are served at /j/ and /r/', async () => {
+  const res = await fetch(`${base}/j/K7PX-2QM9`);
+  assert.equal(res.status, 200);
+  assert.match(await res.text(), /id="join"/);
 });

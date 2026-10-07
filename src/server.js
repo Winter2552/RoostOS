@@ -198,6 +198,21 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     return limit;
   }
 
+  // The address invite and reset links use, e.g. https://roostos.network.
+  // Blank means "whatever address the admin has Roost open on".
+  function cleanPublicUrl(v) {
+    const raw = str(v, 200);
+    if (!raw) return '';
+    if (raw.includes('://') && !/^https?:\/\//i.test(raw)) throw new HttpError(400, 'Public address must start with http:// or https://');
+    let url;
+    try {
+      url = new URL(raw.includes('://') ? raw : `https://${raw}`);
+    } catch {
+      throw new HttpError(400, 'Public address must look like https://roostos.network');
+    }
+    return url.origin;
+  }
+
   function adminView(user) {
     return { ...publicUser(user), storage: storage.storageOf(db(), user) };
   }
@@ -440,7 +455,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       requireAdmin(req);
       if (links.prune(db())) store.save();
       const invites = db().links.filter((l) => l.kind === 'invite').map(links.adminView);
-      send(res, 200, { invites });
+      send(res, 200, { invites, publicUrl: db().settings.publicUrl || '' });
     },
 
     'POST /api/admin/invites': async (req, res) => {
@@ -549,6 +564,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       const body = await readJson(req);
       if (body.serverName !== undefined) db().settings.serverName = str(body.serverName, 40) || 'Roost';
       if (body.defaultLimitGb !== undefined) db().settings.defaultLimitGb = cleanLimit(body.defaultLimitGb);
+      if (body.publicUrl !== undefined) db().settings.publicUrl = cleanPublicUrl(body.publicUrl);
       store.save();
       send(res, 200, { settings: { ...db().settings, defaultLimitGb: storage.defaultLimitGb(db()) } });
     },
@@ -649,7 +665,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/invites|admin\/storage-requests|storage\/users|links))\/([a-z0-9._-]+)(\/usage|\/reset-link)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/invites|admin\/storage-requests|storage\/users|links))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }

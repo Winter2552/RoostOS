@@ -56,7 +56,7 @@
         <button class="btn" type="submit" id="join-submit">Create account</button>
         <div class="msg error" id="join-msg" role="alert"></div>
       </form>
-      <a class="btn ghost hidden" id="join-signin" href="#/">Go to sign in</a>
+      <a class="btn ghost hidden" id="join-signin" href="/">Go to sign in</a>
     </section>
   </main>
 
@@ -201,10 +201,11 @@
       </form>
 
       <form class="card panel" id="settings-form">
-        <h3>Server</h3><span class="mono muted">The name shown across Roost, and the storage new users start with</span>
+        <h3>Server</h3><span class="mono muted">The name shown across Roost, the storage new users start with, and the address invite links use</span>
         <div class="form-grid">
           <label class="field"><span>Server name</span><input type="text" name="serverName" maxlength="40"></label>
           <div class="field"><span>Default storage limit</span><div id="default-picker"></div></div>
+          <label class="field"><span>Public address (for invite links)</span><input type="text" name="publicUrl" maxlength="200" placeholder="https://roostos.network" autocapitalize="none" spellcheck="false" inputmode="url"></label>
         </div>
         <div class="row"><button class="btn" type="submit">Save</button></div>
         <div class="msg" role="status"></div>

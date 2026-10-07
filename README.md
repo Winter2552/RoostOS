@@ -27,13 +27,13 @@ App links can use `{host}`, which becomes whatever address you opened Roost on. 
 
 ## Invites and password resets
 
-Nobody needs to be in the room to get an account. Under **Admin → Invite someone**, pick their role, apps and storage limit and press **Create invite link**. Copy the link (or use **Share** on a phone) and send it any way you like. They open it, choose their own username and password, and are signed straight in.
+Nobody needs to be in the room to get an account. Under **Admin → Invite someone**, pick their role, apps and storage limit and press **Create invite link**. Copy the link (or use **Share** on a phone) and send it any way you like. It looks like `https://roostos.network/j/K7PX-2QM9`. They open it, choose their own username and password, and are signed straight in.
 
 - An invite works once and stops working after 7 days. Pending invites are listed under the form, where you can cancel one.
 - The link is only shown when you make it. Lost it? Cancel it and make a new one.
-- If someone forgets their password, press **Password reset link** next to their name under **Admin → Users** and send them that. It works once for 24 hours, and saving the new password signs them out everywhere else.
-- Roost stores only a hash of each link, so a copy of `roost.json` can't be used to open one.
-- The link uses the address you opened Roost on. One made on your home network (say `http://192.168.1.20:8080`) only opens at home, so make invites from your outside address once remote access is set up.
+- If someone forgets their password, press **Password reset link** next to their name under **Admin → Users** and send them that (`/r/…`). It works once for 24 hours, and saving the new password signs them out everywhere else.
+- Codes are 8 characters with no look-alikes (no 0/O or 1/I/L), so they can be read out and typed in any case, with or without the dash. Wrong guesses are rate limited per address and codes are stored hashed.
+- Set **Admin → Server → Public address** (for example `https://roostos.network`) so links use it even when you make them at home. Left blank, links use whatever address you opened Roost on, so one made on `http://192.168.1.20:8080` only opens at home.
 
 ## Storage limits
 
