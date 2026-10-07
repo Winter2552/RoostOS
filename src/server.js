@@ -1,6 +1,7 @@
 'use strict';
 
 const http = require('http');
+const https = require('https');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
@@ -13,6 +14,7 @@ const mail = require('./mail');
 const setup = require('./setup');
 const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
+const { CertManager, validDomain } = require('./tls');
 const twoStep = require('./twostep');
 const { qrSvg } = require('./qr');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
@@ -124,6 +126,12 @@ function visibleApps(db, user) {
     : db.apps.filter((a) => user.apps.includes(a.id));
 }
 
+// True when the browser reached Roost over HTTPS: directly, or through a
+// trusted proxy such as Cloudflare, which talks HTTPS to the browser.
+function isSecure(req, trustProxy) {
+  return !!req.socket.encrypted || (trustProxy && req.headers['x-forwarded-proto'] === 'https');
+}
+
 function requestHost(req) {
   const host = String(req.headers.host || 'localhost');
   return host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.split(':')[0];
@@ -153,8 +161,9 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10 } = {}) {
+function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, tls: tlsOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10 } = {}) {
   const store = new Store(dataDir);
+  const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
   const activity = new ActivityLog(dataDir, { saveDelayMs: activitySaveDelayMs });
   // Nest used to be an outside app with no link; it is built in now.
   const nestApp = store.db.apps.find((a) => a.id === 'nest');
@@ -217,9 +226,12 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
 
   const gbText = (limit) => (limit === null ? 'no limit' : `${limit} GB`);
 
-  function login(res, user, status = 200, cookies = []) {
+  // Cookies are marked Secure whenever this request came over HTTPS.
+  const secure = (req) => secureCookies || isSecure(req, trustProxy);
+
+  function login(req, res, user, status = 200, cookies = []) {
     const token = sessions.create(user.id);
-    send(res, status, { user: publicUser(db(), user) }, { 'Set-Cookie': [sessionCookie(token, secureCookies), ...cookies] });
+    send(res, status, { user: publicUser(db(), user) }, { 'Set-Cookie': [sessionCookie(token, secure(req)), ...cookies] });
   }
 
   function forget(map) {
@@ -234,12 +246,12 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     return user.trusted.some((t) => t.hash === hash && t.expires > Date.now());
   }
 
-  function trustDevice(user) {
+  function trustDevice(req, user) {
     const token = crypto.randomBytes(32).toString('hex');
     const now = Date.now();
     user.trusted = (user.trusted || []).filter((t) => t.expires > now).slice(-(MAX_TRUSTED - 1));
     user.trusted.push({ hash: sha256(token), expires: now + TRUST_TTL_MS });
-    return trustCookie(token, secureCookies);
+    return trustCookie(token, secure(req));
   }
 
   function checkPassword(user, password) {
@@ -311,6 +323,20 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
 
   function requireApp(req) {
     if (!storage.appTokenOk(req, appToken)) throw new HttpError(401, 'App token missing or wrong');
+  }
+
+  function certSummary() {
+    const s = certs.status();
+    if (s.state === 'off') return null;
+    return { state: s.state, domain: s.domain, daysLeft: s.certificate ? s.certificate.daysLeft : null, expiresAt: s.certificate ? s.certificate.expiresAt : null, error: s.lastError };
+  }
+
+  // What the admin page shows, plus how this browser reached Roost.
+  function tlsView(req) {
+    return {
+      ...certs.status(),
+      connection: { secure: isSecure(req, trustProxy), viaCloudflare: !!req.headers['cf-connecting-ip'], host: requestHost(req) },
+    };
   }
 
   function cleanAppAccess(apps) {
@@ -462,7 +488,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       db().users.push(user);
       store.save();
       record(req, 'setup', { actor: user.username });
-      login(res, user, 201);
+      login(req, res, user, 201);
     },
 
     'POST /api/login': async (req, res) => {
@@ -478,7 +504,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       }
       if (!user.twoStep || isTrusted(req, user)) {
         record(req, 'sign-in', { actor: user.username, detail: user.twoStep ? 'trusted device' : '' });
-        return login(res, user);
+        return login(req, res, user);
       }
       forget(pendingCodes);
       const ticket = crypto.randomBytes(24).toString('hex');
@@ -520,16 +546,16 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       }
       pendingCodes.delete(body.ticket);
       record(req, 'sign-in', { actor: user.username, detail: /^\d/.test(code) ? 'with code' : 'with recovery code' });
-      const cookies = body.trust === true ? [trustDevice(user)] : [];
+      const cookies = body.trust === true ? [trustDevice(req, user)] : [];
       store.save();
-      login(res, user, 200, cookies);
+      login(req, res, user, 200, cookies);
     },
 
     'POST /api/logout': (req, res) => {
       const user = currentUser(req);
       if (user) record(req, 'sign-out', { actor: user.username });
       sessions.destroy(parseCookies(req)[COOKIE]);
-      send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie('', secureCookies) });
+      send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie('', secure(req)) });
     },
 
     'PATCH /api/me': async (req, res) => {
@@ -609,14 +635,14 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       user.trusted = [];
       store.save();
       record(req, 'two-step-off', { actor: user.username, target: user.username });
-      send(res, 200, { user: publicUser(db(), user) }, { 'Set-Cookie': trustCookie('', secureCookies) });
+      send(res, 200, { user: publicUser(db(), user) }, { 'Set-Cookie': trustCookie('', secure(req)) });
     },
 
     'POST /api/me/two-step/forget-devices': (req, res) => {
       const user = requireUser(req);
       user.trusted = [];
       store.save();
-      send(res, 200, twoStepStatus(user), { 'Set-Cookie': trustCookie('', secureCookies) });
+      send(res, 200, twoStepStatus(user), { 'Set-Cookie': trustCookie('', secure(req)) });
     },
 
     // "Not now" on the offer after sign-in; it stays available in Profile.
@@ -696,6 +722,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         apps,
         // Everything else Docker runs, for admins only.
         otherContainers: user.role === 'admin' ? all.filter((c) => !claimed.has(c.id)) : [],
+        // Certificate health, for admins once HTTPS is set up.
+        certificate: user.role === 'admin' ? certSummary() : null,
         checkedAt: new Date().toISOString(),
       });
     },
@@ -893,6 +921,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         dockerOk: !docker.error,
         secureCookies,
         trustProxy,
+        tls: certs.status(),
         ticked: db().settings.setupTicked || [],
       }));
     },
@@ -964,7 +993,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         links.remove(db(), link);
         store.save();
         record(req, 'password-reset', { actor: user.username, target: user.username, detail: 'reset link' });
-        return login(res, user);
+        return login(req, res, user);
       }
       const username = str(body.username, 32).toLowerCase();
       const check = usernameCheck(username);
@@ -986,7 +1015,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       store.save();
       const inviter = db().users.find((u) => u.id === link.createdBy);
       record(req, 'user-joined', { actor: user.username, detail: inviter ? `invited by ${inviter.username}` : 'invite link' });
-      login(res, user, 201);
+      login(req, res, user, 201);
     },
 
     'PUT /api/admin/apps': async (req, res) => {
@@ -1052,6 +1081,47 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       const before = Number(q.get('before')) || Infinity;
       const filter = FILTERS.includes(q.get('filter')) ? q.get('filter') : '';
       send(res, 200, activity.page({ before, filter, limit: 50 }));
+    },
+
+    // ---------- HTTPS certificate ----------
+
+    'GET /api/admin/tls': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, tlsView(req));
+    },
+
+    'PUT /api/admin/tls': async (req, res) => {
+      requireAdmin(req);
+      const body = await readJson(req);
+      const current = db().settings.tls || {};
+      const domain = str(body.domain, 200).toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^\*\./, '');
+      if (!validDomain(domain)) throw new HttpError(400, 'Enter the domain on its own, like roostos.network');
+      const email = str(body.email, 200);
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'That email address looks wrong');
+      // A blank token keeps the one already saved; it is never sent back to the browser.
+      const token = str(body.token, 200) || current.token || '';
+      if (!token) throw new HttpError(400, 'Paste a Cloudflare API token');
+      db().settings.tls = { domain, token, email };
+      store.save();
+      certs.lastError = null;
+      if (body.renew !== false) certs.renew();
+      send(res, 200, tlsView(req));
+    },
+
+    'POST /api/admin/tls/renew': (req, res) => {
+      requireAdmin(req);
+      if (!(db().settings.tls || {}).token) throw new HttpError(400, 'Save a domain and Cloudflare token first');
+      certs.renew();
+      send(res, 202, tlsView(req));
+    },
+
+    'DELETE /api/admin/tls': (req, res) => {
+      requireAdmin(req);
+      if (certs.busy) throw new HttpError(409, 'Wait for the current certificate request to finish');
+      delete db().settings.tls;
+      store.save();
+      certs.clear();
+      send(res, 200, tlsView(req));
     },
 
     // ---------- storage limits ----------
@@ -1177,7 +1247,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     });
   }
 
-  const server = http.createServer(async (req, res) => {
+  async function handle(req, res) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
     res.setHeader('X-Frame-Options', 'DENY');
@@ -1201,9 +1271,17 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       if (status === 500) console.error(err);
       if (!res.headersSent) send(res, status, { error: status === 500 ? 'Something went wrong' : err.message });
     }
-  });
+  }
 
+  const server = http.createServer(handle);
+  server.certs = certs;
+  // The HTTPS side shares every route; the certificate is looked up per
+  // connection, so a renewal takes effect without a restart.
+  // Browsers opening Roost by IP address send no name and get no certificate,
+  // which is right: the certificate is only valid for the domain.
+  server.createHttpsServer = () => https.createServer({ SNICallback: (name, cb) => cb(null, certs.context) }, handle);
   server.on('close', () => {
+    certs.stop();
     clearInterval(sweepTimer);
     store.flush();
     activity.flush();
@@ -1228,9 +1306,15 @@ if (require.main === module) {
   const roostContainer = process.env.ROOST_CONTAINER || 'roost';
   const nestDir = process.env.NEST_DIR || path.join(dataDir, 'nest');
   const trustProxy = process.env.BEHIND_PROXY === 'true';
-  const server = createServer({ dataDir, nestDir, secureCookies, disks, dockerHost, roostContainer, appToken, trustProxy });
+  const httpsPort = Number(process.env.HTTPS_PORT) || 8443;
+  const staging = process.env.ROOST_ACME_STAGING === 'true';
+  const server = createServer({ dataDir, nestDir, secureCookies, disks, dockerHost, roostContainer, appToken, trustProxy, tls: { staging } });
   server.listen(port, () => {
     console.log(`Roost is running on http://localhost:${port} (data in ${dataDir})`);
+  });
+  server.certs.start();
+  server.createHttpsServer().listen(httpsPort, () => {
+    console.log(`HTTPS is listening on port ${httpsPort}${server.certs.cert ? '' : ' (no certificate yet; set one up under Admin)'}`);
   });
   // docker stop sends SIGTERM; save what is waiting and exit straight away.
   for (const signal of ['SIGTERM', 'SIGINT']) {

@@ -769,6 +769,14 @@ function setSummary(kind, text) {
   $('#status-summary').replaceChildren(el('span', { class: `dot ${kind}` }), el('span', { text }));
 }
 
+// Admins only: the HTTPS certificate needs a look well before it runs out.
+function certProblem(c) {
+  if (!c) return null;
+  if (c.state === 'error') return 'HTTPS certificate: couldn\'t get one (see Admin)';
+  if (c.daysLeft !== null && c.daysLeft < 14) return `HTTPS certificate runs out in ${Math.max(0, c.daysLeft)} days (see Admin)`;
+  return null;
+}
+
 function renderStatus(s) {
   const memUsed = s.memory.total - s.memory.available;
   const memPct = pct(memUsed, s.memory.total);
@@ -804,6 +812,7 @@ function renderStatus(s) {
     ...s.disks.filter((d) => !d.missing && pct(d.total - d.free, d.total) >= FULL_AT).map((d) => `${d.label} drive is nearly full`),
     ...s.disks.filter((d) => d.missing).map((d) => `${d.label} drive not found`),
     ...(memPct >= FULL_AT ? ['Memory is nearly full'] : []),
+    ...(certProblem(s.certificate) ? [certProblem(s.certificate)] : []),
   ];
   setSummary(problems.length ? 'offline' : 'online', problems.length ? problems.join(' · ') : 'Everything is running');
   $('#status-updated').textContent = `Updated ${new Date(s.checkedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
@@ -1087,6 +1096,7 @@ async function loadAdmin() {
   renderUsers();
   renderInvites(invites);
   $('#new-user-apps').replaceChildren(...appChecks(null));
+  loadTls();
 }
 
 function appChecks(selected) {
@@ -1387,6 +1397,81 @@ $('#activity-filters').addEventListener('click', (e) => {
 });
 
 $('#activity-more').addEventListener('click', () => loadActivity(true));
+
+// ---------- secure connection ----------
+
+let tlsTimer = null;
+
+function longDate(iso) {
+  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function renderTls(t) {
+  const f = $('#tls-form');
+  const c = t.certificate;
+  const [kind, headline] = {
+    off: ['', 'Off: Roost is only on plain HTTP'],
+    pending: ['starting', 'Waiting to get a certificate'],
+    working: ['starting', t.step || 'Getting a certificate'],
+    active: ['online', `Secure: ${t.domain} and *.${t.domain}`],
+    warning: ['starting', `Secure for now, but renewal is failing`],
+    error: ['offline', "Couldn't get a certificate"],
+  }[t.state] || ['', t.state];
+  $('#tls-state').replaceChildren(el('span', { class: `dot ${kind}` }), el('span', { text: headline }));
+
+  const lines = [];
+  if (c && t.state !== 'working') lines.push(`${t.staging ? 'Test certificate' : `From ${c.issuer}`} · valid until ${longDate(c.expiresAt)} (${c.daysLeft} days) · renews 30 days before`);
+  if (t.lastError && t.state !== 'working') lines.push(t.lastError);
+  if (t.state === 'working') lines.push('This usually takes under a minute.');
+  if (t.connection.viaCloudflare) lines.push('You opened this page through Cloudflare.');
+  else if (t.connection.secure) lines.push('You opened this page directly over HTTPS.');
+  $('#tls-detail').textContent = lines.join(' · ');
+
+  // Don't overwrite what someone is typing; an empty field is always filled in.
+  for (const name of ['domain', 'email']) {
+    if (document.activeElement !== f[name] || !f[name].value) f[name].value = t[name] || '';
+  }
+  f.token.placeholder = t.tokenSaved ? 'Saved (leave blank to keep)' : 'Paste the token';
+  f.token.required = !t.tokenSaved;
+  const busy = t.state === 'working';
+  $('#tls-save').disabled = busy;
+  $('#tls-save').textContent = t.tokenSaved ? 'Save' : 'Save and get certificate';
+  $('#tls-renew').classList.toggle('hidden', !t.tokenSaved);
+  $('#tls-renew').disabled = busy;
+  $('#tls-off').classList.toggle('hidden', !t.tokenSaved);
+  $('#tls-off').disabled = busy;
+
+  // Follow progress while a request runs; stop as soon as it finishes.
+  clearTimeout(tlsTimer);
+  if (busy) tlsTimer = setTimeout(loadTls, 1500);
+}
+
+async function loadTls() {
+  if ($('#view-admin').classList.contains('hidden')) return;
+  try { renderTls(await api('GET', '/api/admin/tls')); } catch { /* the rest of Admin still works */ }
+}
+
+$('#tls-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    const t = await api('PUT', '/api/admin/tls', { domain: f.domain.value, token: f.token.value, email: f.email.value });
+    f.token.value = '';
+    renderTls(t);
+    flash(f, 'Saved. Getting the certificate…');
+  } catch (err) { flash(f, err.message, false); }
+});
+
+$('#tls-renew').addEventListener('click', async () => {
+  const f = $('#tls-form');
+  try { renderTls(await api('POST', '/api/admin/tls/renew')); flash(f, 'Renewing…'); } catch (err) { flash(f, err.message, false); }
+});
+
+$('#tls-off').addEventListener('click', async () => {
+  const f = $('#tls-form');
+  if (!confirm('Turn off HTTPS? Roost forgets the Cloudflare token and the certificate. Links using your domain will stop working securely.')) return;
+  try { renderTls(await api('DELETE', '/api/admin/tls')); flash(f, 'HTTPS turned off'); } catch (err) { flash(f, err.message, false); }
+});
 
 // ---------- boot ----------
 
