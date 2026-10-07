@@ -7,6 +7,8 @@ const path = require('path');
 const { Store } = require('./store');
 const { hashPassword, verifyPassword, Sessions, RateLimiter, SESSION_TTL_MS } = require('./auth');
 const storage = require('./storage');
+const { parseDisks, CpuMeter, serverHealth } = require('./status');
+const { listContainers, containersFor } = require('./docker');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const COOKIE = 'roost_session';
@@ -116,14 +118,19 @@ function requestHost(req) {
 }
 
 async function probe(url, timeoutMs) {
+  return (await timedProbe(url, timeoutMs)).state;
+}
+
+async function timedProbe(url, timeoutMs) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const started = Date.now();
   try {
     // Any HTTP answer at all (even a redirect or 401) means the app is up.
     await fetch(url, { method: 'GET', redirect: 'manual', signal: ctrl.signal });
-    return 'online';
+    return { state: 'online', ms: Date.now() - started };
   } catch {
-    return 'offline';
+    return { state: 'offline' };
   } finally {
     clearTimeout(timer);
   }
@@ -131,10 +138,14 @@ async function probe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, appToken = '' } = {}) {
+function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '' } = {}) {
   const store = new Store(dataDir);
   const sessions = new Sessions();
   const limiter = new RateLimiter();
+  const cpu = new CpuMeter();
+  // Drives shown on the status page. Without a list, show the system drive and
+  // the drive Roost keeps its data on (the same drive is only listed once).
+  const diskList = disks && disks.length ? disks : [{ label: 'System', path: '/' }, { label: 'Data', path: dataDir }];
   const db = () => store.db;
 
   function currentUser(req) {
@@ -169,6 +180,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, a
         tagline: str(a.tagline, 40),
         description: str(a.description, 200),
         url: str(a.url, 500),
+        container: str(a.container, 200),
         icon: ICONS.includes(a.icon) ? a.icon : 'grid',
       };
       if (!app.name) throw new HttpError(400, 'Every app needs a name');
@@ -291,10 +303,51 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, a
       send(res, 200, {
         hostname: os.hostname(),
         uptime: os.uptime(),
-        load: os.loadavg(),
+        load: os.platform() === 'win32' ? null : os.loadavg(),
         cpus: os.cpus().length,
         memory: { total: os.totalmem(), free: os.freemem() },
         disk,
+      });
+    },
+
+    'GET /api/status': async (req, res) => {
+      const user = requireUser(req);
+      const host = requestHost(req);
+      const [health, docker, web] = await Promise.all([
+        serverHealth({ cpu, disks: diskList }),
+        listContainers(dockerHost, probeTimeoutMs),
+        Promise.all(visibleApps(db(), user).map((a) =>
+          a.url ? timedProbe(a.url.replace(/\{host\}/g, host), probeTimeoutMs) : { state: 'unset' })),
+      ]);
+      const all = docker.containers || [];
+      const claimed = new Set();
+      const claim = (list) => { list.forEach((c) => claimed.add(c.id)); return list; };
+      const apps = [
+        {
+          id: 'roost',
+          name: db().settings.serverName,
+          tagline: 'Homepage',
+          icon: 'home',
+          web: { state: 'online', ms: 0 },
+          uptime: process.uptime(),
+          containers: claim(containersFor({ id: 'roost', container: roostContainer }, all)),
+        },
+        ...visibleApps(db(), user).map((a, i) => ({
+          id: a.id,
+          name: a.name,
+          tagline: a.tagline,
+          icon: a.icon,
+          web: web[i],
+          containers: claim(containersFor(a, all)),
+        })),
+      ];
+      send(res, 200, {
+        ...health,
+        docker: docker.error ? { ok: false, error: docker.error } : { ok: true },
+        apps,
+        // Everything else Docker runs, for admins only.
+        otherContainers: user.role === 'admin' ? all.filter((c) => !claimed.has(c.id)) : [],
+        checkedAt: new Date().toISOString(),
       });
     },
 
@@ -524,7 +577,10 @@ if (require.main === module) {
   const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
   const secureCookies = process.env.SECURE_COOKIES === 'true';
   const appToken = process.env.ROOST_APP_TOKEN || '';
-  createServer({ dataDir, secureCookies, appToken }).listen(port, () => {
+  const disks = parseDisks(process.env.ROOST_DISKS);
+  const dockerHost = process.env.DOCKER_HOST || '';
+  const roostContainer = process.env.ROOST_CONTAINER || 'roost';
+  createServer({ dataDir, secureCookies, disks, dockerHost, roostContainer, appToken }).listen(port, () => {
     console.log(`Roost is running on http://localhost:${port} (data in ${dataDir})`);
   });
 }

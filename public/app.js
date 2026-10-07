@@ -196,14 +196,17 @@ function renderUser() {
   $('#profile-form').username.value = u.username;
 }
 
+const VIEWS = ['apps', 'status', 'profile', 'admin'];
+
 function route() {
   if (!state.user) return;
   let view = (location.hash.replace('#/', '') || 'apps');
-  if (!['apps', 'profile', 'admin'].includes(view) || (view === 'admin' && state.user.role !== 'admin')) view = 'apps';
-  for (const v of ['apps', 'profile', 'admin']) $(`#view-${v}`).classList.toggle('hidden', v !== view);
+  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin')) view = 'apps';
+  for (const v of VIEWS) $(`#view-${v}`).classList.toggle('hidden', v !== view);
   document.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
   if (view === 'admin') loadAdmin();
   if (view === 'profile') loadStorage();
+  if (view === 'status') loadStatus();
 }
 
 window.addEventListener('hashchange', route);
@@ -255,13 +258,152 @@ async function loadSystem() {
     const used = s.memory.total - s.memory.free;
     $('#stat-uptime').textContent = duration(s.uptime);
     $('#stat-mem').textContent = `${bytes(used)} / ${bytes(s.memory.total)}`;
-    $('#stat-load').textContent = `${s.load[0].toFixed(2)} · ${s.cpus} cpu`;
+    $('#stat-load').textContent = s.load ? `${s.load[0].toFixed(2)} · ${s.cpus} cpu` : `${s.cpus} cpu`;
     $('#stat-disk').textContent = s.disk ? `${bytes(s.disk.free)} free` : '—';
     if (s.disk) state.diskGb = Math.floor(s.disk.total / 1024 ** 3);
     $('#foot-host').textContent = s.hostname;
   } catch {
     // The panel just keeps its dashes if stats aren't available.
   }
+}
+
+// ---------- status page ----------
+
+const STATUS_REFRESH_MS = 5 * 1000;
+const FULL_AT = 90;
+let statusBusy = false;
+
+function pct(used, total) {
+  return total ? Math.round((used / total) * 100) : 0;
+}
+
+function meter(percent) {
+  return el('div', { class: `meter${percent >= FULL_AT ? ' high' : ''}`, role: 'meter', 'aria-valuenow': percent, 'aria-valuemin': 0, 'aria-valuemax': 100 },
+    el('i', { style: `width:${Math.min(100, percent)}%` }));
+}
+
+function statCard(label, value, sub, bar) {
+  return el('div', { class: 'card stat-card' },
+    el('div', { class: 'mono muted', text: label }),
+    el('div', { class: 'stat-value', text: value }),
+    bar === undefined ? null : meter(bar),
+    el('div', { class: 'mono muted stat-sub', text: sub }));
+}
+
+function ago(iso) {
+  return duration(Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000));
+}
+
+// Docker state → a dot colour and a short label.
+function containerState(c) {
+  if (c.state === 'running') {
+    if (c.health === 'unhealthy') return { kind: 'offline', label: 'Unhealthy', rank: 3 };
+    if (c.health === 'starting') return { kind: 'starting', label: 'Starting', rank: 1 };
+    return { kind: 'online', label: c.health === 'healthy' ? 'Running · healthy' : 'Running', rank: 0 };
+  }
+  if (c.state === 'restarting') return { kind: 'offline', label: 'Restarting', rank: 4 };
+  if (c.state === 'paused') return { kind: 'starting', label: 'Paused', rank: 2 };
+  return { kind: 'offline', label: 'Stopped', rank: 5 };
+}
+
+function containerSince(c) {
+  const exit = c.exitCode ? ` (exit ${c.exitCode})` : '';
+  if (c.startedAt) return `up ${ago(c.startedAt)}`;
+  if (c.state === 'restarting') return `crashing${exit}`;
+  if (c.finishedAt) return `stopped ${ago(c.finishedAt)} ago${exit}`;
+  return c.state;
+}
+
+function worstContainer(list) {
+  return list.slice().sort((x, y) => containerState(y).rank - containerState(x).rank)[0];
+}
+
+const WEB_LABEL = { online: 'Online', offline: 'Offline', unset: 'Not set up' };
+
+// An app's state comes from its containers when Docker can see them,
+// otherwise from the web check.
+function appState(a, dockerOk) {
+  if (a.containers.length) return containerState(worstContainer(a.containers));
+  if (dockerOk && a.web.state !== 'online') return { kind: a.web.state === 'unset' ? 'unset' : 'offline', label: 'No container' };
+  return { kind: a.web.state, label: WEB_LABEL[a.web.state] };
+}
+
+function appStatusCard(a, dockerOk) {
+  const st = appState(a, dockerOk);
+  const lines = [];
+  if (a.containers.length) {
+    const c = worstContainer(a.containers);
+    lines.push(containerSince(c) + (c.restarts ? ` · ${c.restarts} restart${c.restarts > 1 ? 's' : ''}` : ''));
+    lines.push(a.containers.map((x) => x.name).join(', '));
+  } else if (a.id === 'roost') {
+    lines.push(`up ${duration(a.uptime)}`);
+  }
+  if (a.id !== 'roost') {
+    lines.push(a.web.state === 'online' ? `Web online · ${a.web.ms} ms` : a.web.state === 'offline' ? 'Web offline' : 'No link set');
+  }
+  lines.push(a.containers.length ? 'Source: Docker' : 'Source: web check');
+  return el('div', { class: `card stat-card app-status ${st.kind}` },
+    el('div', { class: 'app-status-head' }, icon(a.icon), el('div', { class: 'mono muted', text: a.tagline })),
+    el('div', { class: 'stat-value', text: a.name }),
+    el('div', { class: 'mono stat-state' }, el('span', { class: `dot ${st.kind}` }), st.label),
+    el('div', { class: 'stat-lines mono muted' }, lines.map((t) => el('div', { text: t }))));
+}
+
+async function loadStatus() {
+  if (statusBusy) return;
+  statusBusy = true;
+  try {
+    renderStatus(await api('GET', '/api/status'));
+  } catch {
+    $('#status-updated').textContent = 'Roost is not answering';
+    setSummary('offline', "Can't reach the server right now");
+  } finally {
+    statusBusy = false;
+  }
+}
+
+function setSummary(kind, text) {
+  $('#status-summary').replaceChildren(el('span', { class: `dot ${kind}` }), el('span', { text }));
+}
+
+function renderStatus(s) {
+  const memUsed = s.memory.total - s.memory.available;
+  const memPct = pct(memUsed, s.memory.total);
+  $('#status-server').replaceChildren(
+    statCard('Uptime', duration(s.uptime), `Roost up ${duration(s.roostUptime)}`),
+    statCard('CPU', `${Math.round(s.cpu.percent)}%`, `${s.cpu.load ? `Load ${s.cpu.load[0].toFixed(2)} · ` : ''}${s.cpu.cores} cores`, s.cpu.percent),
+    statCard('Memory', bytes(memUsed), `${memPct}% of ${bytes(s.memory.total)}`, memPct),
+    statCard('Host', s.hostname, s.platform),
+  );
+
+  $('#status-disks').replaceChildren(...s.disks.map((d) => {
+    if (d.missing) return statCard(d.label, 'Not found', d.path);
+    const used = d.total - d.free;
+    return statCard(d.label, `${bytes(d.free)} free`, `${bytes(used)} of ${bytes(d.total)} used`, pct(used, d.total));
+  }));
+
+  $('#status-apps').replaceChildren(...s.apps.map((a) => appStatusCard(a, s.docker.ok)));
+
+  const note = $('#status-note');
+  note.classList.toggle('hidden', s.docker.ok);
+  note.textContent = s.docker.ok ? '' : "Docker isn't connected, so apps show a web check only (does the app answer on its link).";
+
+  $('#status-others-wrap').classList.toggle('hidden', !s.otherContainers.length);
+  $('#status-others').replaceChildren(...s.otherContainers.map((c) => {
+    const st = containerState(c);
+    return el('div', { class: 'container-row' },
+      el('span', { class: 'mono' }, el('span', { class: `dot ${st.kind}` }), c.name),
+      el('span', { class: 'mono muted', text: `${st.label} · ${containerSince(c)}` }));
+  }));
+
+  const problems = [
+    ...s.apps.map((a) => [a, appState(a, s.docker.ok)]).filter(([, st]) => st.kind === 'offline').map(([a, st]) => `${a.name}: ${st.label.toLowerCase()}`),
+    ...s.disks.filter((d) => !d.missing && pct(d.total - d.free, d.total) >= FULL_AT).map((d) => `${d.label} drive is nearly full`),
+    ...s.disks.filter((d) => d.missing).map((d) => `${d.label} drive not found`),
+    ...(memPct >= FULL_AT ? ['Memory is nearly full'] : []),
+  ];
+  setSummary(problems.length ? 'offline' : 'online', problems.length ? problems.join(' · ') : 'Everything is running');
+  $('#status-updated').textContent = `Updated ${new Date(s.checkedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
 }
 
 function tickClock() {
@@ -396,6 +538,7 @@ function appEditorRow(app) {
       el('label', { class: 'field' }, el('span', { text: 'Tagline' }), el('input', { type: 'text', name: 'tagline', value: app.tagline || '', maxlength: 40 })),
       el('label', { class: 'field' }, el('span', { text: 'Link' }), el('input', { type: 'text', name: 'url', value: app.url || '', placeholder: 'http://{host}:8096', spellcheck: 'false' })),
       el('label', { class: 'field' }, el('span', { text: 'Icon' }), iconSelect),
+      el('label', { class: 'field' }, el('span', { text: 'Container' }), el('input', { type: 'text', name: 'container', value: app.container || '', placeholder: 'Found by name if empty', spellcheck: 'false' })),
     ),
     el('div', { class: 'row' },
       el('label', { class: 'field', style: 'flex:1' }, el('span', { text: 'Description' }), el('input', { type: 'text', name: 'description', value: app.description || '', maxlength: 200 })),
@@ -416,7 +559,7 @@ $('#apps-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const apps = [...document.querySelectorAll('#apps-editor .admin-app')].map((row) => {
     const get = (n) => $(`[name=${n}]`, row).value;
-    const app = { name: get('name'), tagline: get('tagline'), url: get('url'), icon: get('icon'), description: get('description') };
+    const app = { name: get('name'), tagline: get('tagline'), url: get('url'), icon: get('icon'), description: get('description'), container: get('container') };
     if (row.dataset.id) app.id = row.dataset.id;
     return app;
   });
@@ -503,6 +646,10 @@ $('#settings-form').addEventListener('submit', async (e) => {
   tickClock();
   setInterval(tickClock, 30 * 1000);
   setInterval(() => { if (state.user && !$('#view-apps').classList.contains('hidden')) loadSystem(); }, 15 * 1000);
+  // The status page refreshes itself while it is open and the tab is visible.
+  setInterval(() => {
+    if (state.user && !document.hidden && !$('#view-status').classList.contains('hidden')) loadStatus();
+  }, STATUS_REFRESH_MS);
   const s = await api('GET', '/api/state');
   setServerName(s.serverName);
   if (s.user) await enter(s.user);
