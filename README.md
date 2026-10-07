@@ -17,13 +17,23 @@ Roost is the home-server suite: one homepage that signs you in and shows the app
 - **Dashboard**: greeting, live server stats (uptime, memory, load, free space on the data drive) and a card for every app you have access to, each showing whether the app is reachable.
 - **Status**: refreshes every 5 seconds. First, each app (and Roost itself) with its container state from Docker: running, stopped, restarting, unhealthy, how long it has been up and how often it restarted, plus whether it answers on its link. Admins also see every other container. Below that, server health: uptime, CPU, memory and free space on each drive. Problems are listed at the top.
 - **Profile**: change your display name and password, see your storage use and limit, and ask an admin for more space.
-- **Admin**: edit the app list and links, add or remove users, choose which apps each user sees and how much storage they get, approve or decline storage requests, rename the server.
+- **Admin**: edit the app list and links, invite or remove users, make password reset links, choose which apps each user sees and how much storage they get, approve or decline storage requests, rename the server.
 
 ![Signing in to Roost](docs/screenshots/sign-in.png)
 
 ![The admin page: users and which apps each one sees](docs/screenshots/admin.png)
 
 App links can use `{host}`, which becomes whatever address you opened Roost on. `http://{host}:8096` works from the LAN IP, the hostname or a Tailscale name without editing anything.
+
+## Invites and password resets
+
+Nobody needs to be in the room to get an account. Under **Admin → Invite someone**, pick their role, apps and storage limit and press **Create invite link**. Copy the link (or use **Share** on a phone) and send it any way you like. They open it, choose their own username and password, and are signed straight in.
+
+- An invite works once and stops working after 7 days. Pending invites are listed under the form, where you can cancel one.
+- The link is only shown when you make it. Lost it? Cancel it and make a new one.
+- If someone forgets their password, press **Password reset link** next to their name under **Admin → Users** and send them that. It works once for 24 hours, and saving the new password signs them out everywhere else.
+- Roost stores only a hash of each link, so a copy of `roost.json` can't be used to open one.
+- The link uses the address you opened Roost on. One made on your home network (say `http://192.168.1.20:8080`) only opens at home, so make invites from your outside address once remote access is set up.
 
 ## Storage limits
 
