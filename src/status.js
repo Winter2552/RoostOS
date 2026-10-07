@@ -83,7 +83,8 @@ async function serverHealth({ cpu, disks }) {
       percent: await cpu.read(),
       cores: cpus.length,
       model: cpus[0] ? cpus[0].model.replace(/\s+/g, ' ').trim() : '',
-      load: os.loadavg(),
+      // Windows has no load average (Node reports zeros), so leave it out there.
+      load: os.platform() === 'win32' ? null : os.loadavg(),
     },
     memory: { total: os.totalmem(), free: os.freemem(), available: availableMemory() },
     disks: readDisks(disks),

@@ -287,7 +287,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       send(res, 200, {
         hostname: os.hostname(),
         uptime: os.uptime(),
-        load: os.loadavg(),
+        load: os.platform() === 'win32' ? null : os.loadavg(),
         cpus: os.cpus().length,
         memory: { total: os.totalmem(), free: os.freemem() },
         disk,

@@ -2,13 +2,16 @@
 
 // Read-only container info from the Docker Engine API, for the status page.
 // DOCKER_HOST can be a TCP address (the docker-proxy service in
-// docker-compose.yml, which only allows reading containers) or a unix socket.
+// docker-compose.yml, which only allows reading containers), a unix socket,
+// or the Docker Desktop pipe on Windows.
 
 const http = require('http');
 
 function target(dockerHost) {
   const h = String(dockerHost || '');
   if (h.startsWith('unix://')) return { socketPath: h.slice('unix://'.length) };
+  // Docker Desktop on Windows: npipe:////./pipe/docker_engine
+  if (h.startsWith('npipe://')) return { socketPath: h.slice('npipe://'.length).replace(/\//g, '\\') };
   if (h.startsWith('/')) return { socketPath: h };
   if (h.startsWith('tcp://') || h.startsWith('http://')) {
     const u = new URL(h.replace(/^tcp:/, 'http:'));

@@ -196,7 +196,7 @@ async function loadSystem() {
     const used = s.memory.total - s.memory.free;
     $('#stat-uptime').textContent = duration(s.uptime);
     $('#stat-mem').textContent = `${bytes(used)} / ${bytes(s.memory.total)}`;
-    $('#stat-load').textContent = `${s.load[0].toFixed(2)} · ${s.cpus} cpu`;
+    $('#stat-load').textContent = s.load ? `${s.load[0].toFixed(2)} · ${s.cpus} cpu` : `${s.cpus} cpu`;
     $('#stat-disk').textContent = s.disk ? `${bytes(s.disk.free)} free` : '—';
     $('#foot-host').textContent = s.hostname;
   } catch {
@@ -308,7 +308,7 @@ function renderStatus(s) {
   const memPct = pct(memUsed, s.memory.total);
   $('#status-server').replaceChildren(
     statCard('Uptime', duration(s.uptime), `Roost up ${duration(s.roostUptime)}`),
-    statCard('CPU', `${Math.round(s.cpu.percent)}%`, `Load ${s.cpu.load[0].toFixed(2)} · ${s.cpu.cores} cores`, s.cpu.percent),
+    statCard('CPU', `${Math.round(s.cpu.percent)}%`, `${s.cpu.load ? `Load ${s.cpu.load[0].toFixed(2)} · ` : ''}${s.cpu.cores} cores`, s.cpu.percent),
     statCard('Memory', bytes(memUsed), `${memPct}% of ${bytes(s.memory.total)}`, memPct),
     statCard('Host', s.hostname, s.platform),
   );
