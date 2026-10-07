@@ -18,8 +18,9 @@ before(async () => {
   base = `http://127.0.0.1:${server.address().port}`;
 });
 
-after(() => {
-  server.close();
+after(async () => {
+  server.closeAllConnections();
+  await new Promise((r) => server.close(r));
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
@@ -292,7 +293,7 @@ test('activity log pages, reads the proxy address when told to, and survives a r
     const second = await get(`?filter=failed&before=${first.entries[49].seq}`);
     assert.equal(second.entries.length, 5);
     assert.equal(second.more, false);
-    s2.flushActivity();
+    s2.flushAll();
     s2.close();
     [s2, url] = await start();
     const login = await post('/api/login', { username: 'raven', password: 'correct horse' });

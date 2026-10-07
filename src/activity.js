@@ -21,6 +21,11 @@ const KINDS = {
   'user-added': 'users',
   'user-changed': 'users',
   'user-removed': 'users',
+  'user-joined': 'users',
+  'invite-created': 'users',
+  'invite-removed': 'users',
+  'reset-link-created': 'users',
+  'password-reset': 'users',
   'storage-requested': 'storage',
   'storage-approved': 'storage',
   'storage-declined': 'storage',
@@ -70,12 +75,19 @@ class ActivityLog {
     return { entries: out, more };
   }
 
+  // Writes only when something is waiting. A failed write is reported, never
+  // allowed to take the server down: the log is a record, not account data.
   flush() {
+    if (!this.timer) return;
     clearTimeout(this.timer);
     this.timer = null;
-    const tmp = `${this.file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ entries: this.entries }));
-    fs.renameSync(tmp, this.file);
+    try {
+      const tmp = `${this.file}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify({ entries: this.entries }));
+      fs.renameSync(tmp, this.file);
+    } catch (err) {
+      console.error('Could not save the activity log:', err.message);
+    }
   }
 }
 
