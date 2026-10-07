@@ -193,6 +193,8 @@ $('#welcome-form').addEventListener('submit', async (e) => {
       return;
     }
     f.reset();
+    // A brand-new Roost opens on the setup checklist (after two-step sign-in).
+    if (setupMode) location.hash = '#/admin';
     await enter(res.user);
   } catch (err) {
     $('#welcome-msg').textContent = err.message;
@@ -596,7 +598,8 @@ const VIEWS = ['apps', 'nest', 'status', 'profile', 'admin'];
 const hasNest = () => state.apps.some((a) => a.id === 'nest' && a.url === '#/nest');
 
 function route() {
-  if (!state.user) return;
+  // Nothing opens behind the two-step screen; enter() routes once it is done.
+  if (!state.user || needsSecureStep(state.user)) return;
   const [first, ...rest] = location.hash.replace(/^#\/?/, '').split('/');
   let view = first || 'apps';
   if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'nest' && !hasNest())) view = 'apps';
