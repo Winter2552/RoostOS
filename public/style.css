@@ -355,3 +355,18 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
   .stat-sub { font-size: 11px; white-space: normal; }
   .status-summary { font-size: 16px; }
 }
+
+.dot.starting { background: #f5d77a; }
+.status-note { margin: 0 0 8px; font-size: 12px; text-transform: none; letter-spacing: 0; }
+.stat-state { font-size: 13px; }
+.stat-lines { font-size: 11px; display: flex; flex-direction: column; gap: 3px; border-top: 1px solid var(--line); padding-top: 10px; }
+.stat-lines div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.container-list { padding: 6px 22px; box-shadow: none; border-width: 1px; border-color: var(--line); }
+.container-row { display: flex; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.container-row:first-child { border-top: 0; }
+.container-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 600px) {
+  .container-list { padding: 4px 16px; }
+  .container-row { flex-direction: column; gap: 4px; font-size: 12px; }
+}

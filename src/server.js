@@ -7,6 +7,7 @@ const path = require('path');
 const { Store } = require('./store');
 const { hashPassword, verifyPassword, Sessions, RateLimiter, SESSION_TTL_MS } = require('./auth');
 const { parseDisks, CpuMeter, serverHealth } = require('./status');
+const { listContainers, containersFor } = require('./docker');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const COOKIE = 'roost_session';
@@ -136,7 +137,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, disks } = {}) {
+function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost' } = {}) {
   const store = new Store(dataDir);
   const sessions = new Sessions();
   const limiter = new RateLimiter();
@@ -178,6 +179,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         tagline: str(a.tagline, 40),
         description: str(a.description, 200),
         url: str(a.url, 500),
+        container: str(a.container, 200),
         icon: ICONS.includes(a.icon) ? a.icon : 'grid',
       };
       if (!app.name) throw new HttpError(400, 'Every app needs a name');
@@ -295,17 +297,42 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     'GET /api/status': async (req, res) => {
       const user = requireUser(req);
       const host = requestHost(req);
-      const [health, apps] = await Promise.all([
+      const [health, docker, web] = await Promise.all([
         serverHealth({ cpu, disks: diskList }),
-        Promise.all(visibleApps(db(), user).map(async (a) => ({
+        listContainers(dockerHost, probeTimeoutMs),
+        Promise.all(visibleApps(db(), user).map((a) =>
+          a.url ? timedProbe(a.url.replace(/\{host\}/g, host), probeTimeoutMs) : { state: 'unset' })),
+      ]);
+      const all = docker.containers || [];
+      const claimed = new Set();
+      const claim = (list) => { list.forEach((c) => claimed.add(c.id)); return list; };
+      const apps = [
+        {
+          id: 'roost',
+          name: db().settings.serverName,
+          tagline: 'Homepage',
+          icon: 'home',
+          web: { state: 'online', ms: 0 },
+          uptime: process.uptime(),
+          containers: claim(containersFor({ id: 'roost', container: roostContainer }, all)),
+        },
+        ...visibleApps(db(), user).map((a, i) => ({
           id: a.id,
           name: a.name,
           tagline: a.tagline,
           icon: a.icon,
-          ...(a.url ? await timedProbe(a.url.replace(/\{host\}/g, host), probeTimeoutMs) : { state: 'unset' }),
-        }))),
-      ]);
-      send(res, 200, { ...health, apps, checkedAt: new Date().toISOString() });
+          web: web[i],
+          containers: claim(containersFor(a, all)),
+        })),
+      ];
+      send(res, 200, {
+        ...health,
+        docker: docker.error ? { ok: false, error: docker.error } : { ok: true },
+        apps,
+        // Everything else Docker runs, for admins only.
+        otherContainers: user.role === 'admin' ? all.filter((c) => !claimed.has(c.id)) : [],
+        checkedAt: new Date().toISOString(),
+      });
     },
 
     'GET /api/admin/users': (req, res) => {
@@ -438,7 +465,9 @@ if (require.main === module) {
   const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
   const secureCookies = process.env.SECURE_COOKIES === 'true';
   const disks = parseDisks(process.env.ROOST_DISKS);
-  createServer({ dataDir, secureCookies, disks }).listen(port, () => {
+  const dockerHost = process.env.DOCKER_HOST || '';
+  const roostContainer = process.env.ROOST_CONTAINER || 'roost';
+  createServer({ dataDir, secureCookies, disks, dockerHost, roostContainer }).listen(port, () => {
     console.log(`Roost is running on http://localhost:${port} (data in ${dataDir})`);
   });
 }
