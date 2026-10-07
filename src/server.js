@@ -8,8 +8,12 @@ const { Store } = require('./store');
 const { hashPassword, verifyPassword, Sessions, RateLimiter, SESSION_TTL_MS } = require('./auth');
 const storage = require('./storage');
 const links = require('./links');
+const mail = require('./mail');
 const { parseDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
+const { ActivityLog, clientIp, FILTERS } = require('./activity');
+const { HttpError, send, readJson, str } = require('./http');
+const { Nest } = require('./nest');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const COOKIE = 'roost_session';
@@ -25,20 +29,7 @@ const MIME = {
   '.json': 'application/json',
 };
 
-class HttpError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
-
 // ---------- helpers ----------
-
-function send(res, status, body, headers = {}) {
-  const data = body === undefined ? '' : JSON.stringify(body);
-  res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers });
-  res.end(data);
-}
 
 function parseCookies(req) {
   const out = {};
@@ -54,29 +45,6 @@ function sessionCookie(token, secure) {
   return `${COOKIE}=${token || ''}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
 }
 
-async function readJson(req) {
-  // Requiring a JSON content type also blocks plain cross-site form posts.
-  if (!String(req.headers['content-type'] || '').includes('application/json')) {
-    throw new HttpError(415, 'Expected JSON');
-  }
-  let size = 0;
-  const chunks = [];
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > 64 * 1024) throw new HttpError(413, 'Body too large');
-    chunks.push(chunk);
-  }
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
-  } catch {
-    throw new HttpError(400, 'Invalid JSON');
-  }
-}
-
-function str(v, max = 200) {
-  return typeof v === 'string' ? v.trim().slice(0, max) : '';
-}
-
 function validUsername(u) {
   return /^[a-z0-9._-]{2,32}$/.test(u);
 }
@@ -86,14 +54,19 @@ function validPassword(p) {
 }
 
 // App links may use {host} so they follow whatever address you opened Roost on.
+// Apps built into Roost link to their page, e.g. #/nest.
 function validAppUrl(u) {
-  if (u === '') return true;
+  if (u === '' || builtIn(u)) return true;
   try {
     const parsed = new URL(u.replace(/\{host\}/g, 'localhost'));
     return parsed.protocol === 'http:' || parsed.protocol === 'https:';
   } catch {
     return false;
   }
+}
+
+function builtIn(url) {
+  return /^#\/[a-z]+$/.test(url);
 }
 
 function publicUser(u) {
@@ -103,6 +76,7 @@ function publicUser(u) {
     displayName: u.displayName,
     role: u.role,
     apps: u.apps,
+    email: u.email || '',
     createdAt: u.createdAt,
   };
 }
@@ -118,8 +92,11 @@ function requestHost(req) {
   return host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.split(':')[0];
 }
 
-async function probe(url, timeoutMs) {
-  return (await timedProbe(url, timeoutMs)).state;
+// An app's reachability: built-in apps are up whenever Roost is.
+function appProbe(app, host, timeoutMs) {
+  if (!app.url) return { state: 'unset' };
+  if (builtIn(app.url)) return { state: 'online', ms: 0 };
+  return timedProbe(app.url.replace(/\{host\}/g, host), timeoutMs);
 }
 
 async function timedProbe(url, timeoutMs) {
@@ -139,8 +116,15 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '' } = {}) {
+function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, activitySaveDelayMs, sendMail = mail.send } = {}) {
   const store = new Store(dataDir);
+  const activity = new ActivityLog(dataDir, { saveDelayMs: activitySaveDelayMs });
+  // Nest used to be an outside app with no link; it is built in now.
+  const nestApp = store.db.apps.find((a) => a.id === 'nest');
+  if (nestApp && !nestApp.url) {
+    nestApp.url = '#/nest';
+    store.save();
+  }
   const sessions = new Sessions();
   const limiter = new RateLimiter();
   const cpu = new CpuMeter();
@@ -148,6 +132,25 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
   // the drive Roost keeps its data on (the same drive is only listed once).
   const diskList = disks && disks.length ? disks : [{ label: 'System', path: '/' }, { label: 'Data', path: dataDir }];
   const db = () => store.db;
+
+  const nest = new Nest({
+    dir: nestDir || path.join(dataDir, 'nest'),
+    dbFile: path.join(dataDir, 'nest.db'),
+    users: (id) => db().users.find((u) => u.id === id) || null,
+    limitOf: (user) => {
+      const s = storage.storageOf(db(), user);
+      return { limitBytes: s.limitBytes, otherBytes: s.usedBytes - (s.usage.nest || 0) };
+    },
+    onUsage: (user, bytes) => {
+      user.storageUsage = { ...user.storageUsage, nest: bytes };
+      store.saveSoon();
+    },
+  });
+  nest.syncUsage();
+  const sweep = () => nest.sweep().catch((err) => console.error('Nest clean-up failed:', err));
+  sweep();
+  const sweepTimer = setInterval(sweep, 6 * 60 * 60 * 1000);
+  sweepTimer.unref();
 
   function currentUser(req) {
     const s = sessions.get(parseCookies(req)[COOKIE]);
@@ -165,6 +168,12 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     if (user.role !== 'admin') throw new HttpError(403, 'Admins only');
     return user;
   }
+
+  function record(req, type, fields = {}) {
+    activity.add(type, { ...fields, ip: clientIp(req, trustProxy) });
+  }
+
+  const gbText = (limit) => (limit === null ? 'no limit' : `${limit} GB`);
 
   function login(res, user, status = 200) {
     const token = sessions.create(user.id);
@@ -213,6 +222,12 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     return url.origin;
   }
 
+  // Settings for the admin page. The mail password never leaves the server.
+  function settingsView() {
+    const { mail: _mail, ...rest } = db().settings;
+    return { ...rest, publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady() };
+  }
+
   function adminView(user) {
     return { ...publicUser(user), storage: storage.storageOf(db(), user) };
   }
@@ -227,6 +242,92 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     const ids = new Set(db().apps.map((a) => a.id));
     return apps.filter((id) => ids.has(id));
   }
+
+  // ---------- email ----------
+
+  function mailSettings() {
+    return db().settings.mail || null;
+  }
+
+  // Emails need the public address so their links open from anywhere; the
+  // address in a request can't be trusted for that.
+  function mailReady() {
+    const m = mailSettings();
+    return Boolean(m && m.host && m.from && db().settings.publicUrl);
+  }
+
+  function mailView() {
+    const m = mailSettings();
+    if (!m) return { host: '', port: 587, security: 'starttls', user: '', from: '', hasPassword: false };
+    const { password, ...rest } = m;
+    return { ...rest, hasPassword: Boolean(password) };
+  }
+
+  function cleanMail(input, current) {
+    if (!input || typeof input !== 'object') throw new HttpError(400, 'Email settings must be an object');
+    const host = str(input.host, 200);
+    if (!host) return null; // Blank host turns email off.
+    if (!/^[A-Za-z0-9.-]+$/.test(host)) throw new HttpError(400, 'Mail server must be a host name like smtp.resend.com');
+    const port = Number(input.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new HttpError(400, 'Port must be a number like 587 or 465');
+    const security = mail.SECURITY.includes(input.security) ? input.security : 'starttls';
+    const from = str(input.from, 254);
+    if (!mail.validEmail(from)) throw new HttpError(400, 'Send from must be an email address like server@roostos.network');
+    const password = typeof input.password === 'string' && input.password !== ''
+      ? input.password.slice(0, 500)
+      : (current && current.password) || '';
+    return { host, port, security, user: str(input.user, 254), password, from };
+  }
+
+  function cleanEmail(v) {
+    const email = str(v, 254).toLowerCase();
+    if (email && !mail.validEmail(email)) throw new HttpError(400, "That doesn't look like an email address");
+    if (email && db().users.some((u) => u.email === email)) throw new HttpError(409, 'Another account already uses that email');
+    return email;
+  }
+
+  function linkUrl(kind, token) {
+    return `${db().settings.publicUrl}/${kind === 'reset' ? 'r' : 'j'}/${token}`;
+  }
+
+  async function deliver(to, subject, text) {
+    const m = mailSettings();
+    await sendMail(m, { from: m.from, fromName: db().settings.serverName, to, subject, text });
+  }
+
+  function resetEmail(user, token, validFor) {
+    const name = db().settings.serverName;
+    return [`Reset your ${name} password`, [
+      `Hi ${user.displayName},`,
+      '',
+      `Someone (hopefully you) asked to reset the password for @${user.username} on ${name}.`,
+      '',
+      'Choose a new password here:',
+      linkUrl('reset', token),
+      '',
+      `The link works once, for ${validFor}. If you didn't ask for this, ignore this email: your password hasn't changed.`,
+    ].join('\n')];
+  }
+
+  function inviteEmail(admin, token) {
+    const name = db().settings.serverName;
+    return [`You're invited to ${name}`, [
+      `${admin.displayName} has invited you to ${name}.`,
+      '',
+      'Open this link to choose your username and password:',
+      linkUrl('join', token),
+      '',
+      'The link works once and stops working after 7 days.',
+    ].join('\n')];
+  }
+
+  // Only the newest reset link for a user works.
+  function newResetLink(user, createdBy, ttlMs) {
+    db().links = (db().links || []).filter((l) => !(l.kind === 'reset' && l.userId === user.id));
+    return links.create(db(), { id: store.newId(), kind: 'reset', userId: user.id, createdBy }, ttlMs);
+  }
+
+  const forgotSentAt = new Map();
 
   // Finds a live link or explains why it doesn't work. Only misses count
   // towards the rate limit, so typing a username doesn't lock anyone out.
@@ -254,6 +355,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       send(res, 200, {
         serverName: db().settings.serverName,
         setupRequired: db().users.length === 0,
+        mailEnabled: mailReady(),
         user: user ? publicUser(user) : null,
       });
     },
@@ -276,21 +378,27 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       };
       db().users.push(user);
       store.save();
+      record(req, 'setup', { actor: user.username });
       login(res, user, 201);
     },
 
     'POST /api/login': async (req, res) => {
-      if (!limiter.allow(req.socket.remoteAddress)) throw new HttpError(429, 'Too many attempts, wait a few minutes');
+      if (!limiter.allow(clientIp(req, trustProxy))) throw new HttpError(429, 'Too many attempts, wait a few minutes');
       const body = await readJson(req);
       const username = str(body.username, 32).toLowerCase();
       const user = db().users.find((u) => u.username === username);
       if (!user || typeof body.password !== 'string' || !verifyPassword(body.password, user.password)) {
+        // Only the username typed is kept, never the password.
+        record(req, 'sign-in-failed', { target: username || null, detail: user ? 'wrong password' : 'no such user' });
         throw new HttpError(401, 'Wrong username or password');
       }
+      record(req, 'sign-in', { actor: user.username });
       login(res, user);
     },
 
     'POST /api/logout': (req, res) => {
+      const user = currentUser(req);
+      if (user) record(req, 'sign-out', { actor: user.username });
       sessions.destroy(parseCookies(req)[COOKIE]);
       send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie('', secureCookies) });
     },
@@ -299,12 +407,17 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       const user = requireUser(req);
       const body = await readJson(req);
       if (body.displayName !== undefined) user.displayName = str(body.displayName, 60) || user.username;
+      if (body.email !== undefined) {
+        const email = str(body.email, 254).toLowerCase();
+        if (email !== (user.email || '')) user.email = cleanEmail(email);
+      }
       if (body.newPassword !== undefined) {
         if (typeof body.currentPassword !== 'string' || !verifyPassword(body.currentPassword, user.password)) {
           throw new HttpError(400, 'Current password is wrong');
         }
         if (!validPassword(body.newPassword)) throw new HttpError(400, 'Password must be at least 8 characters');
         user.password = hashPassword(body.newPassword);
+        record(req, 'password-changed', { actor: user.username, target: user.username });
       }
       store.save();
       send(res, 200, { user: publicUser(user) });
@@ -319,10 +432,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       const user = requireUser(req);
       const host = requestHost(req);
       const entries = await Promise.all(
-        visibleApps(db(), user).map(async (a) => [
-          a.id,
-          a.url ? await probe(a.url.replace(/\{host\}/g, host), probeTimeoutMs) : 'unset',
-        ]),
+        visibleApps(db(), user).map(async (a) => [a.id, (await appProbe(a, host, probeTimeoutMs)).state]),
       );
       send(res, 200, { status: Object.fromEntries(entries) });
     },
@@ -352,8 +462,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       const [health, docker, web] = await Promise.all([
         serverHealth({ cpu, disks: diskList }),
         listContainers(dockerHost, probeTimeoutMs),
-        Promise.all(visibleApps(db(), user).map((a) =>
-          a.url ? timedProbe(a.url.replace(/\{host\}/g, host), probeTimeoutMs) : { state: 'unset' })),
+        Promise.all(visibleApps(db(), user).map((a) => appProbe(a, host, probeTimeoutMs))),
       ]);
       const all = docker.containers || [];
       const claimed = new Set();
@@ -393,7 +502,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     },
 
     'POST /api/admin/users': async (req, res) => {
-      requireAdmin(req);
+      const admin = requireAdmin(req);
       const body = await readJson(req);
       const username = str(body.username, 32).toLowerCase();
       if (!validUsername(username)) throw new HttpError(400, 'Username: 2–32 of a–z, 0–9, . _ -');
@@ -411,6 +520,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       };
       db().users.push(user);
       store.save();
+      record(req, 'user-added', { actor: admin.username, target: user.username, detail: `${user.role}, ${gbText(user.limitGb)}` });
       send(res, 201, { user: adminView(user) });
     },
 
@@ -419,33 +529,51 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       const user = db().users.find((u) => u.id === id);
       if (!user) throw new HttpError(404, 'No such user');
       const body = await readJson(req);
-      if (body.displayName !== undefined) user.displayName = str(body.displayName, 60) || user.username;
-      if (body.apps !== undefined) user.apps = cleanAppAccess(body.apps);
-      if (body.limitGb !== undefined) user.limitGb = cleanLimit(body.limitGb);
+      const changes = [];
+      if (body.displayName !== undefined) {
+        const name = str(body.displayName, 60) || user.username;
+        if (name !== user.displayName) changes.push('name');
+        user.displayName = name;
+      }
+      if (body.apps !== undefined) {
+        const apps = cleanAppAccess(body.apps);
+        if (JSON.stringify(apps) !== JSON.stringify(user.apps)) changes.push('app access');
+        user.apps = apps;
+      }
+      if (body.limitGb !== undefined) {
+        const limit = cleanLimit(body.limitGb);
+        const before = storage.limitGbOf(db(), user);
+        if (limit !== before) changes.push(`limit ${gbText(before)} → ${gbText(limit)}`);
+        user.limitGb = limit;
+      }
       if (body.role !== undefined) {
         const role = body.role === 'admin' ? 'admin' : 'user';
         if (user.id === admin.id && role !== 'admin') throw new HttpError(400, "You can't remove your own admin role");
+        if (role !== user.role) changes.push(`role ${user.role} → ${role}`);
         user.role = role;
       }
       if (body.password !== undefined) {
         if (!validPassword(body.password)) throw new HttpError(400, 'Password must be at least 8 characters');
         user.password = hashPassword(body.password);
         sessions.destroyUser(user.id);
+        changes.push('password reset');
       }
       store.save();
+      if (changes.length) record(req, 'user-changed', { actor: admin.username, target: user.username, detail: changes.join(', ') });
       send(res, 200, { user: adminView(user) });
     },
 
     'DELETE /api/admin/users/:id': (req, res, id) => {
       const admin = requireAdmin(req);
       if (id === admin.id) throw new HttpError(400, "You can't delete yourself");
-      const before = db().users.length;
+      const gone = db().users.find((u) => u.id === id);
+      if (!gone) throw new HttpError(404, 'No such user');
       db().users = db().users.filter((u) => u.id !== id);
-      if (db().users.length === before) throw new HttpError(404, 'No such user');
       sessions.destroyUser(id);
       db().links = (db().links || []).filter((l) => l.userId !== id);
       db().storageRequests = storage.requestsOf(db()).filter((r) => r.userId !== id);
       store.save();
+      record(req, 'user-removed', { actor: admin.username, target: gone.username });
       send(res, 200, { ok: true });
     },
 
@@ -472,27 +600,88 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         createdBy: admin.id,
       }, links.INVITE_TTL_MS);
       store.save();
-      send(res, 201, { invite: links.adminView(link), token });
+      const out = { invite: links.adminView(link), token };
+      const to = str(body.email, 254).toLowerCase();
+      if (to) {
+        if (!mail.validEmail(to)) out.mailError = "That doesn't look like an email address";
+        else if (!mailReady()) out.mailError = 'Email is not set up yet';
+        else {
+          try {
+            await deliver(to, ...inviteEmail(admin, token));
+            out.emailedTo = to;
+          } catch (err) { out.mailError = err.message; }
+        }
+      }
+      record(req, 'invite-created', { actor: admin.username, detail: [link.label, role, out.emailedTo && `emailed to ${out.emailedTo}`].filter(Boolean).join(', ') });
+      send(res, 201, out);
     },
 
     'DELETE /api/admin/invites/:id': (req, res, id) => {
-      requireAdmin(req);
+      const admin = requireAdmin(req);
       const link = (db().links || []).find((l) => l.kind === 'invite' && l.id === id);
       if (!link) throw new HttpError(404, 'No such invite');
       links.remove(db(), link);
       store.save();
+      record(req, 'invite-removed', { actor: admin.username, detail: link.label || '' });
       send(res, 200, { ok: true });
     },
 
-    'POST /api/admin/users/:id/reset-link': (req, res, id) => {
+    'POST /api/admin/users/:id/reset-link': async (req, res, id) => {
       const admin = requireAdmin(req);
       const user = db().users.find((u) => u.id === id);
       if (!user) throw new HttpError(404, 'No such user');
-      // Only the newest reset link for a user works.
-      db().links = (db().links || []).filter((l) => !(l.kind === 'reset' && l.userId === id));
-      const { token, link } = links.create(db(), { id: store.newId(), kind: 'reset', userId: id, createdBy: admin.id }, links.RESET_TTL_MS);
+      const body = req.headers['content-type'] ? await readJson(req) : {};
+      const { token, link } = newResetLink(user, admin.id, links.RESET_TTL_MS);
       store.save();
-      send(res, 201, { expiresAt: link.expiresAt, token });
+      const out = { expiresAt: link.expiresAt, token };
+      if (body.email) {
+        if (!user.email) out.mailError = `${user.displayName} hasn't added an email address`;
+        else if (!mailReady()) out.mailError = 'Email is not set up yet';
+        else {
+          try {
+            await deliver(user.email, ...resetEmail(user, token, '24 hours'));
+            out.emailedTo = user.email;
+          } catch (err) { out.mailError = err.message; }
+        }
+      }
+      record(req, 'reset-link-created', { actor: admin.username, target: user.username, detail: out.emailedTo ? `emailed to ${out.emailedTo}` : '' });
+      send(res, 201, out);
+    },
+
+    // "Forgot password?" on the sign-in page. The answer is always the same,
+    // so it can't be used to find out who has an account.
+    'POST /api/forgot': async (req, res) => {
+      if (!limiter.allow(`forgot:${clientIp(req, trustProxy)}`)) throw new HttpError(429, 'Too many attempts, wait a few minutes');
+      const body = await readJson(req);
+      const login = str(body.login, 254).toLowerCase();
+      send(res, 200, { ok: true });
+      const user = login && db().users.find((u) => u.username === login || (u.email && u.email === login));
+      if (!user || !user.email || !mailReady()) return;
+      // At most one email per user every 5 minutes.
+      if (Date.now() - (forgotSentAt.get(user.id) || 0) < 5 * 60 * 1000) return;
+      forgotSentAt.set(user.id, Date.now());
+      const { token } = newResetLink(user, null, links.FORGOT_TTL_MS);
+      store.save();
+      deliver(user.email, ...resetEmail(user, token, '1 hour')).catch((err) => console.error(`Reset email to @${user.username} failed: ${err.message}`));
+    },
+
+    'GET /api/admin/settings': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, { settings: settingsView() });
+    },
+
+    'POST /api/admin/mail-test': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const to = str(body.to, 254).toLowerCase() || admin.email;
+      if (!mail.validEmail(to)) throw new HttpError(400, 'Add your email on Profile first, or type one here');
+      if (!mailSettings()) throw new HttpError(400, 'Save the email settings first');
+      try {
+        await deliver(to, `Test email from ${db().settings.serverName}`, `This is a test from ${db().settings.serverName}. Email is working.`);
+      } catch (err) {
+        throw new HttpError(502, err.message);
+      }
+      send(res, 200, { ok: true, to });
     },
 
     // The page a link opens asks what it is for, and (for invites) whether a
@@ -527,6 +716,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         sessions.destroyUser(user.id);
         links.remove(db(), link);
         store.save();
+        record(req, 'password-reset', { actor: user.username, target: user.username, detail: 'reset link' });
         return login(res, user);
       }
       const username = str(body.username, 32).toLowerCase();
@@ -543,16 +733,27 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         createdAt: new Date().toISOString(),
         invitedBy: link.createdBy,
       };
+      if (body.email) user.email = cleanEmail(body.email);
       db().users.push(user);
       links.remove(db(), link);
       store.save();
+      const inviter = db().users.find((u) => u.id === link.createdBy);
+      record(req, 'user-joined', { actor: user.username, detail: inviter ? `invited by ${inviter.username}` : 'invite link' });
       login(res, user, 201);
     },
 
     'PUT /api/admin/apps': async (req, res) => {
-      requireAdmin(req);
+      const admin = requireAdmin(req);
       const body = await readJson(req);
+      const before = new Map(db().apps.map((a) => [a.id, a]));
       db().apps = cleanApps(body.apps);
+      const after = new Set(db().apps.map((a) => a.id));
+      const changes = [
+        ...db().apps.filter((a) => !before.has(a.id)).map((a) => `added ${a.name}`),
+        ...[...before.values()].filter((a) => !after.has(a.id)).map((a) => `removed ${a.name}`),
+        ...db().apps.filter((a) => before.has(a.id) && JSON.stringify(a) !== JSON.stringify(before.get(a.id))).map((a) => `edited ${a.name}`),
+      ];
+      if (changes.length) record(req, 'apps-changed', { actor: admin.username, detail: changes.join(', ') });
       const ids = new Set(db().apps.map((a) => a.id));
       for (const u of db().users) if (Array.isArray(u.apps)) u.apps = u.apps.filter((a) => ids.has(a));
       store.save();
@@ -560,13 +761,40 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     },
 
     'PATCH /api/admin/settings': async (req, res) => {
-      requireAdmin(req);
+      const admin = requireAdmin(req);
       const body = await readJson(req);
-      if (body.serverName !== undefined) db().settings.serverName = str(body.serverName, 40) || 'Roost';
-      if (body.defaultLimitGb !== undefined) db().settings.defaultLimitGb = cleanLimit(body.defaultLimitGb);
-      if (body.publicUrl !== undefined) db().settings.publicUrl = cleanPublicUrl(body.publicUrl);
+      const changes = [];
+      if (body.serverName !== undefined) {
+        const name = str(body.serverName, 40) || 'Roost';
+        if (name !== db().settings.serverName) changes.push(`name ${db().settings.serverName} → ${name}`);
+        db().settings.serverName = name;
+      }
+      if (body.defaultLimitGb !== undefined) {
+        const limit = cleanLimit(body.defaultLimitGb);
+        const before = storage.defaultLimitGb(db());
+        if (limit !== before) changes.push(`default limit ${gbText(before)} → ${gbText(limit)}`);
+        db().settings.defaultLimitGb = limit;
+      }
+      if (body.publicUrl !== undefined) {
+        const url = cleanPublicUrl(body.publicUrl);
+        if (url !== (db().settings.publicUrl || '')) changes.push(`public address ${url || 'cleared'}`);
+        db().settings.publicUrl = url;
+      }
+      if (body.mail !== undefined) {
+        db().settings.mail = cleanMail(body.mail, mailSettings());
+        changes.push(`email ${db().settings.mail ? `via ${db().settings.mail.host}` : 'turned off'}`);
+      }
       store.save();
-      send(res, 200, { settings: { ...db().settings, defaultLimitGb: storage.defaultLimitGb(db()) } });
+      if (changes.length) record(req, 'settings-changed', { actor: admin.username, detail: changes.join(', ') });
+      send(res, 200, { settings: settingsView() });
+    },
+
+    'GET /api/admin/activity': (req, res) => {
+      requireAdmin(req);
+      const q = new URL(req.url, 'http://roost').searchParams;
+      const before = Number(q.get('before')) || Infinity;
+      const filter = FILTERS.includes(q.get('filter')) ? q.get('filter') : '';
+      send(res, 200, activity.page({ before, filter, limit: 50 }));
     },
 
     // ---------- storage limits ----------
@@ -600,6 +828,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       };
       requests.push(request);
       store.save();
+      record(req, 'storage-requested', { actor: user.username, detail: `${gbText(current)} → ${gbText(requestedGb)}` });
       send(res, 201, { request });
     },
 
@@ -637,6 +866,12 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       request.decidedBy = admin.username;
       request.reply = str(body.reply, 300);
       store.save();
+      const asker = db().users.find((u) => u.id === request.userId);
+      record(req, `storage-${request.status}`, {
+        actor: admin.username,
+        target: asker && asker.username,
+        detail: request.status === 'approved' ? gbText(request.approvedGb) : `asked ${gbText(request.requestedGb)}`,
+      });
       send(res, 200, { request });
     },
 
@@ -691,7 +926,11 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     res.setHeader('X-Frame-Options', 'DENY');
     try {
       const { pathname } = new URL(req.url, 'http://roost');
-      if (pathname.startsWith('/api/')) {
+      if (pathname.startsWith('/api/nest/')) {
+        const user = requireUser(req);
+        if (!visibleApps(db(), user).some((a) => a.id === 'nest')) throw new HttpError(403, 'You don’t have access to Nest');
+        await nest.handle(req, res, user, pathname, new URL(req.url, 'http://roost').searchParams);
+      } else if (pathname.startsWith('/api/')) {
         const found = route(req.method, pathname);
         if (!found) throw new HttpError(404, 'Not found');
         await found[0](req, res, found[1]);
@@ -707,6 +946,18 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     }
   });
 
+  server.on('close', () => {
+    clearInterval(sweepTimer);
+    store.flush();
+    activity.flush();
+    nest.close();
+  });
+  server.nest = nest;
+  // Save anything still waiting, e.g. when the container is stopped.
+  server.flushAll = () => {
+    store.flush();
+    activity.flush();
+  };
   return server;
 }
 
@@ -718,9 +969,19 @@ if (require.main === module) {
   const disks = parseDisks(process.env.ROOST_DISKS);
   const dockerHost = process.env.DOCKER_HOST || '';
   const roostContainer = process.env.ROOST_CONTAINER || 'roost';
-  createServer({ dataDir, secureCookies, disks, dockerHost, roostContainer, appToken }).listen(port, () => {
+  const nestDir = process.env.NEST_DIR || path.join(dataDir, 'nest');
+  const trustProxy = process.env.BEHIND_PROXY === 'true';
+  const server = createServer({ dataDir, nestDir, secureCookies, disks, dockerHost, roostContainer, appToken, trustProxy });
+  server.listen(port, () => {
     console.log(`Roost is running on http://localhost:${port} (data in ${dataDir})`);
   });
+  // docker stop sends SIGTERM; save what is waiting and exit straight away.
+  for (const signal of ['SIGTERM', 'SIGINT']) {
+    process.on(signal, () => {
+      server.flushAll();
+      process.exit(0);
+    });
+  }
 }
 
 module.exports = { createServer };

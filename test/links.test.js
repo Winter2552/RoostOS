@@ -155,3 +155,12 @@ test('link pages are served at /j/ and /r/', async () => {
   assert.equal(res.status, 200);
   assert.match(await res.text(), /id="join"/);
 });
+
+test('invites and reset links show in the activity log', async () => {
+  const { body } = await call('GET', '/api/admin/activity?filter=users', null, adminCookie);
+  const types = body.entries.map((e) => e.type);
+  for (const t of ['invite-created', 'invite-removed', 'user-joined', 'reset-link-created', 'password-reset']) {
+    assert.ok(types.includes(t), `missing ${t}`);
+  }
+  assert.equal(body.entries.find((e) => e.type === 'user-joined').actor, 'mum');
+});

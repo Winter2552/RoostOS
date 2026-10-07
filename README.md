@@ -8,7 +8,7 @@ Roost is the home-server suite: one homepage that signs you in and shows the app
 | --- | --- |
 | Jellyfin | Media (films, shows, music) |
 | Nova | The galaxies, starting with Coffee Galaxy (own repo for now, merging in later) |
-| Nest | File storage |
+| Nest | File storage, built into Roost (the Files page) |
 | Glint | Photo storage |
 
 ## The homepage
@@ -25,6 +25,19 @@ Roost is the home-server suite: one homepage that signs you in and shows the app
 
 App links can use `{host}`, which becomes whatever address you opened Roost on. `http://{host}:8096` works from the LAN IP, the hostname or a Tailscale name without editing anything.
 
+## Nest (Files)
+
+Nest is Roost's own file storage, built to work like Google Drive. Open it from **Files** in the menu or the Nest card.
+
+- **My Drive**: make folders, upload files or whole folders (button or drag and drop), download (folders and several items come as one zip), rename, move, make copies. List or grid view, sorted by name, date or size.
+- **Trash**: deleted items wait 30 days, then go for good. Restore puts them back where they were. Everything in the trash still counts toward your storage.
+- **Undo** follows every move, rename and delete.
+- **On a computer**: click selects (Ctrl/Cmd to add, Shift for a range), double-click opens, right-click for actions, drag onto a folder to move. Delete, F2 (rename), Ctrl/Cmd+A and Esc work as expected.
+- **On a phone**: tap opens, long-press starts selecting, ⋯ or a tap on a file shows its actions, and the round + button uploads or makes a folder.
+- **Big uploads** go in 16 MB pieces, three files at a time. A dropped connection picks up where it stopped, and the upload panel keeps going while you browse.
+
+Files are stored as ordinary files and folders, laid out the way you see them, so they stay readable even without Roost: `NEST_DIR/<username>_<id>/files/...` (the trash is next to it in `trash/`). Folder details (ids, trash dates) are kept in `/data/nest.db` (SQLite, built into Node). Uploads are refused when they would go over your storage limit or leave less than 1 GB free on the drive. Removing a user leaves their Nest folder on the drive.
+
 ## Invites and password resets
 
 Nobody needs to be in the room to get an account. Under **Admin → Invite someone**, pick their role, apps and storage limit and press **Create invite link**. Copy the link (or use **Share** on a phone) and send it any way you like. It looks like `https://roostos.network/j/K7PX-2QM9`. They open it, choose their own username and password, and are signed straight in.
@@ -35,11 +48,29 @@ Nobody needs to be in the room to get an account. Under **Admin → Invite someo
 - Codes are 8 characters with no look-alikes (no 0/O or 1/I/L), so they can be read out and typed in any case, with or without the dash. Wrong guesses are rate limited per address and codes are stored hashed.
 - Set **Admin → Server → Public address** (for example `https://roostos.network`) so links use it even when you make them at home. Left blank, links use whatever address you opened Roost on, so one made on `http://192.168.1.20:8080` only opens at home.
 
+## Email (Forgot password and emailed invites)
+
+Optional. With email set up, the sign-in page gets **Forgot password?**, which emails a reset link that works once for 1 hour. Invites and reset links can also be emailed straight from Admin. Users add their email address on **Profile**, or when they join from an invite.
+
+A home connection can't deliver email reliably: most providers block outgoing mail, and home addresses are on spam blocklists. So Roost hands each email to a relay over SMTP, using its own built-in sender (no packages). Any SMTP relay works. Two with free plans that let you send as your own domain:
+
+- **Resend**: 3,000 emails a month, 100 a day. SMTP host `smtp.resend.com`, port 587 (STARTTLS), username `resend`, password = an API key.
+- **Brevo**: 300 emails a day. SMTP host `smtp-relay.brevo.com`, port 587, with the login and SMTP key from its SMTP settings.
+
+To send as `server@roostos.network`:
+
+1. Sign up with the relay and add `roostos.network` as a sending domain. It gives you a few DNS records (SPF and DKIM). Add them in Cloudflare → DNS. Without them, mail lands in spam.
+2. In Roost, open **Admin → Server**, set **Public address** to `https://roostos.network`, and save. Email links always use this address.
+3. Fill in **Admin → Email** with the relay's details and **Send from** `server@roostos.network`, then press **Send me a test email**. It goes to the email on your Profile.
+4. Optional: so replies to `server@` reach you, turn on Cloudflare **Email Routing** and forward that address to your own inbox.
+
+The relay password is kept in `roost.json` and is never sent back to the browser. Leave **Mail server** blank to turn email off.
+
 ## Storage limits
 
 Every user has a storage limit in GB, picked with a slider that runs up to the size of the data drive (or typed exactly; admins can also tick "No limit"). New users start with the default set under **Admin → Server** (50 GB unless changed); only admins can change a limit. Other users can ask for more from their Profile, and the request waits under **Admin → Storage requests** until an admin approves it (optionally with a different amount) or declines it.
 
-Roost stores the limits and the usage each storage app reports, but holds no files itself, so the limit is *enforced* by Nest and Glint once they exist. They talk to Roost with the token in `ROOST_APP_TOKEN` (the app API is off when it is unset):
+Nest is part of Roost, so it enforces the limit itself and its usage shows up on the Profile straight away. Glint, once it exists, reads the limit and reports its usage with the token in `ROOST_APP_TOKEN` (the app API is off when it is unset):
 
 ```
 GET /api/storage/users/<username>          → { storage: { limitBytes, usedBytes, remainingBytes, ... } }
@@ -49,7 +80,7 @@ Authorization: Bearer <ROOST_APP_TOKEN>
 
 ## Stack
 
-Plain Node.js (20+) with no npm dependencies, and a vanilla HTML/CSS/JS front end with no build step. Accounts and the app list live in one JSON file (`/data/roost.json`). Passwords are hashed with scrypt; sessions are HttpOnly, SameSite=Strict cookies held in memory, so a restart signs everyone out.
+Plain Node.js (22.13+) with no npm dependencies, and a vanilla HTML/CSS/JS front end with no build step. Accounts and the app list live in one JSON file (`/data/roost.json`); Nest's folder details live in SQLite (`/data/nest.db`, using Node's built-in `node:sqlite`). Passwords are hashed with scrypt; sessions are HttpOnly, SameSite=Strict cookies held in memory, so a restart signs everyone out.
 
 ## Run it on ZimaOS
 
@@ -58,9 +89,11 @@ Plain Node.js (20+) with no npm dependencies, and a vanilla HTML/CSS/JS front en
 3. Open `http://<server-ip>:8080` and create the admin account.
 4. Under **Admin**, fill in each app's link once those apps are installed (Jellyfin defaults to `http://{host}:8096`).
 
-Data is kept in `/DATA/AppData/roost` on the host. For the status page to show the data drive, change the second `/DATA` mount in `docker-compose.yml` to the folder ZimaOS mounted the 3 TB drive on; `ROOST_DISKS` sets the labels.
+Data is kept in `/DATA/AppData/roost` on the host, and Nest's files in `/DATA/roost-nest`. Before storing real files, change that `/DATA/roost-nest` mount in `docker-compose.yml` to a folder on the 3 TB data drive. For the status page to show the data drive, change the second `/DATA` mount in `docker-compose.yml` to the folder ZimaOS mounted the 3 TB drive on; `ROOST_DISKS` sets the labels.
 
 Container status comes through the `docker-proxy` service in the compose file, which only lets Roost read the container list (it can't start, stop or change anything). Apps are matched to containers by name; if a container is named differently, put its name in the app's **Container** field under Admin. Without Docker access the status page falls back to checking each app's link and says so. Set `SECURE_COOKIES=true` only when Roost is served over HTTPS.
+
+The **Activity** section under Admin lists sign-ins, failed sign-in attempts (the username typed, never the password), user and app changes, and storage requests and approvals. It keeps the newest 1,000 entries in `/data/activity.json`. If Roost is reached through a tunnel or reverse proxy, set `BEHIND_PROXY=true` so the log shows each visitor's address instead of the proxy's; leave it off otherwise, since the forwarded-address header can be faked.
 
 ## Develop
 

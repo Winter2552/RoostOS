@@ -30,6 +30,13 @@
         <label class="field"><span>Password</span><input type="password" name="password" autocomplete="current-password" required minlength="8"></label>
         <button class="btn" type="submit" id="welcome-submit">Continue</button>
         <div class="msg error" id="welcome-msg" role="alert"></div>
+        <button class="link-btn mono forgot-link hidden" type="button" id="forgot-open">Forgot password?</button>
+      </form>
+      <form id="forgot-form" class="hidden">
+        <label class="field"><span>Username or email</span><input type="text" name="login" autocomplete="username" required autocapitalize="none" spellcheck="false"></label>
+        <button class="btn" type="submit">Email me a reset link</button>
+        <div class="msg" id="forgot-msg" role="status"></div>
+        <button class="link-btn mono forgot-link" type="button" id="forgot-back">Back to sign in</button>
       </form>
     </section>
   </main>
@@ -48,6 +55,7 @@
       <form id="join-form" class="hidden" autocomplete="on">
         <label class="field join-invite"><span>Your name</span><input type="text" name="displayName" autocomplete="name" maxlength="60"></label>
         <label class="field join-invite"><span>Username</span><input type="text" name="username" autocomplete="username" maxlength="32" autocapitalize="none" spellcheck="false"><small class="hint mono muted" id="join-username-hint">Letters, numbers, . _ - · you can't change it later</small></label>
+        <label class="field join-invite"><span>Email (optional)</span><input type="email" name="email" autocomplete="email" maxlength="254" autocapitalize="none" spellcheck="false"><small class="hint mono muted">Only used to send you a link if you forget your password</small></label>
         <input type="text" name="resetUsername" class="hidden" autocomplete="username" tabindex="-1" aria-hidden="true">
         <label class="field"><span>Password</span>
           <span class="password-box"><input type="password" name="password" autocomplete="new-password" required minlength="8"><button type="button" class="link-btn mono show-password">Show</button></span>
@@ -101,6 +109,47 @@
       </div>
     </section>
 
+    <!-- Nest: My Drive and Trash (public/nest.js) -->
+    <section id="view-nest" class="nest hidden">
+      <aside class="nest-side">
+        <button class="btn nest-new" type="button" id="nest-new"><span aria-hidden="true">+</span> New</button>
+        <nav class="nest-places mono" aria-label="Nest">
+          <a href="#/nest" data-place="drive">My Drive</a>
+          <a href="#/nest/trash" data-place="trash">Trash</a>
+        </nav>
+        <div class="nest-storage">
+          <div class="meter" aria-hidden="true"><i id="nest-meter"></i></div>
+          <span class="mono muted" id="nest-used"></span>
+        </div>
+      </aside>
+      <div class="nest-main" id="nest-main">
+        <div class="nest-bar">
+        <div class="nest-head">
+          <nav class="nest-crumbs" id="nest-crumbs" aria-label="Folder path"></nav>
+          <div class="nest-tools" id="nest-tools">
+            <label class="nest-sort"><span class="sr">Sort by</span>
+              <select id="nest-sort"><option value="name">Name</option><option value="modified">Last modified</option><option value="size">Size</option></select>
+            </label>
+            <button class="nest-icon-btn" type="button" id="nest-dir" aria-label="Reverse order"></button>
+            <div class="nest-views" role="group" aria-label="View">
+              <button class="nest-icon-btn" type="button" data-view-mode="list" aria-label="List view"></button>
+              <button class="nest-icon-btn" type="button" data-view-mode="grid" aria-label="Grid view"></button>
+            </div>
+          </div>
+          <button class="btn ghost small hidden" type="button" id="nest-empty-trash">Empty trash</button>
+        </div>
+        <!-- Covers the header while items are selected, so nothing below moves. -->
+        <div class="nest-selbar hidden" id="nest-selbar" role="toolbar" aria-label="Selected items"></div>
+        </div>
+        <div class="nest-cols mono muted" id="nest-cols"></div>
+        <div class="nest-list" id="nest-list" tabindex="0" aria-label="Files"></div>
+        <div class="nest-sentinel" id="nest-sentinel"></div>
+        <div class="nest-drop hidden" id="nest-drop"><span>Drop to upload to <b id="nest-drop-where"></b></span></div>
+      </div>
+      <input type="file" id="nest-pick-files" multiple hidden>
+      <input type="file" id="nest-pick-folder" webkitdirectory multiple hidden>
+    </section>
+
     <!-- Status view -->
     <section id="view-status" class="section hidden">
       <div class="section-head">
@@ -133,6 +182,7 @@
         <div class="form-grid">
           <label class="field"><span>Display name</span><input type="text" name="displayName" maxlength="60"></label>
           <label class="field"><span>Username</span><input type="text" name="username" disabled></label>
+          <label class="field"><span>Email (for password resets)</span><input type="email" name="email" autocomplete="email" maxlength="254" autocapitalize="none" spellcheck="false"></label>
         </div>
         <div class="row"><button class="btn" type="submit">Save</button></div>
         <div class="msg" role="status"></div>
@@ -192,6 +242,7 @@
         <h3>Invite someone</h3><span class="mono muted">Send them a link. They pick their own username and password. Works once, for 7 days.</span>
         <div class="form-grid">
           <label class="field"><span>Who it's for (only you see this)</span><input type="text" name="label" maxlength="60" placeholder="e.g. Mum"></label>
+          <label class="field mail-only"><span>Email it to (optional)</span><input type="email" name="email" maxlength="254" autocapitalize="none" spellcheck="false" placeholder="mum@example.com"></label>
           <label class="field"><span>Role</span><select name="role"><option value="user">User</option><option value="admin">Admin</option></select></label>
           <div class="field"><span>Storage limit</span><div id="new-user-picker"></div></div>
         </div>
@@ -212,6 +263,39 @@
         <div class="row"><button class="btn" type="submit">Save</button></div>
         <div class="msg" role="status"></div>
       </form>
+
+      <form class="card panel" id="mail-form">
+        <h3>Email</h3><span class="mono muted">For "Forgot password?" and emailed invites. Roost hands mail to a relay such as Resend or Brevo; see the README.</span>
+        <div class="form-grid">
+          <label class="field"><span>Mail server</span><input type="text" name="host" placeholder="smtp.resend.com" autocapitalize="none" spellcheck="false"></label>
+          <label class="field"><span>Port</span><input type="number" name="port" inputmode="numeric" min="1" max="65535" placeholder="587"></label>
+          <label class="field"><span>Security</span><select name="security"><option value="starttls">STARTTLS (port 587)</option><option value="tls">TLS (port 465)</option><option value="none">None (local relay)</option></select></label>
+          <label class="field"><span>Username</span><input type="text" name="user" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+          <label class="field"><span>Password</span><input type="password" name="password" autocomplete="new-password"></label>
+          <label class="field"><span>Send from</span><input type="email" name="from" placeholder="server@roostos.network" autocapitalize="none" spellcheck="false"></label>
+        </div>
+        <p class="mono muted hidden" id="mail-needs-url" style="margin:16px 0 0">Set the public address above too, so links in emails open from anywhere</p>
+        <div class="row">
+          <button class="btn" type="submit">Save</button>
+          <button class="btn ghost small" type="button" id="mail-test">Send me a test email</button>
+        </div>
+        <div class="msg" role="status"></div>
+      </form>
+
+      <div class="card panel" id="activity-panel">
+        <h3>Activity</h3><span class="mono muted">Sign-ins and changes, newest first. Tap a time for the exact date.</span>
+        <div class="chips" id="activity-filters" role="group" aria-label="Show">
+          <button type="button" class="chip" data-filter="" aria-pressed="true">All</button>
+          <button type="button" class="chip" data-filter="sign-ins" aria-pressed="false">Sign-ins</button>
+          <button type="button" class="chip" data-filter="failed" aria-pressed="false">Failed</button>
+          <button type="button" class="chip" data-filter="users" aria-pressed="false">Users</button>
+          <button type="button" class="chip" data-filter="storage" aria-pressed="false">Storage</button>
+          <button type="button" class="chip" data-filter="settings" aria-pressed="false">Settings</button>
+        </div>
+        <ol class="activity" id="activity"></ol>
+        <div class="row hidden" id="activity-more-row"><button class="btn ghost small" type="button" id="activity-more">Show more</button></div>
+        <div class="msg" role="status"></div>
+      </div>
     </section>
 
     <footer class="footer mono muted">
@@ -221,5 +305,6 @@
   </div>
 
   <script src="/app.js"></script>
+  <script src="/nest.js"></script>
 </body>
 </html>

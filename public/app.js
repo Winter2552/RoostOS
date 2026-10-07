@@ -13,7 +13,7 @@ const ICONS = {
   home: '<path d="M3 11l9-7 9 7v9h-6v-6H9v6H3z"/>',
 };
 
-const state = { serverName: 'Roost', publicUrl: '', user: null, apps: [], status: {}, users: [], defaultLimitGb: null, diskGb: null };
+const state = { serverName: 'Roost', publicUrl: '', mailEnabled: false, user: null, apps: [], status: {}, users: [], defaultLimitGb: null, diskGb: null };
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -156,6 +156,8 @@ function showWelcome(setup) {
   $('#welcome-lead').textContent = setup ? 'First run · create the admin account' : 'Sign in to your home server';
   $('#welcome-form [name=password]').autocomplete = setup ? 'new-password' : 'current-password';
   $('#welcome-submit').textContent = setup ? 'Create account' : 'Continue';
+  showForgot(false);
+  setMailEnabled(state.mailEnabled);
 }
 
 $('#welcome-form').addEventListener('submit', async (e) => {
@@ -172,6 +174,41 @@ $('#welcome-form').addEventListener('submit', async (e) => {
     $('#welcome-msg').textContent = err.message;
   }
 });
+
+function showForgot(show) {
+  $('#welcome-form').classList.toggle('hidden', show);
+  $('#forgot-form').classList.toggle('hidden', !show);
+  $('#forgot-msg').textContent = '';
+  $('#welcome-lead').textContent = show ? "We'll email you a link to choose a new password"
+    : setupMode ? 'First run · create the admin account' : 'Sign in to your home server';
+  if (show) {
+    const f = $('#forgot-form');
+    f.login.value = $('#welcome-form').username.value;
+    f.login.focus();
+  }
+}
+
+$('#forgot-open').addEventListener('click', () => showForgot(true));
+$('#forgot-back').addEventListener('click', () => showForgot(false));
+
+$('#forgot-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const msg = $('#forgot-msg');
+  try {
+    await api('POST', '/api/forgot', { login: e.target.login.value });
+    msg.className = 'msg ok';
+    msg.textContent = 'If that account has an email address, a reset link is on its way. It works for 1 hour.';
+  } catch (err) {
+    msg.className = 'msg error';
+    msg.textContent = err.message;
+  }
+});
+
+function setMailEnabled(on) {
+  state.mailEnabled = on;
+  document.querySelectorAll('.mail-only').forEach((n) => n.classList.toggle('hidden', !on));
+  $('#forgot-open').classList.toggle('hidden', !on || setupMode);
+}
 
 // ---------- invite and reset links ----------
 
@@ -276,7 +313,7 @@ $('#join-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = e.target;
   const body = { password: f.password.value };
-  if (joinKind === 'invite') Object.assign(body, { username: f.username.value, displayName: f.displayName.value });
+  if (joinKind === 'invite') Object.assign(body, { username: f.username.value, displayName: f.displayName.value, email: f.email.value });
   const button = $('#join-submit');
   button.disabled = true;
   try {
@@ -353,24 +390,31 @@ function renderUser() {
   $('#profile-role').textContent = u.role;
   $('#profile-form').displayName.value = u.displayName;
   $('#profile-form').username.value = u.username;
+  $('#profile-form').email.value = u.email || '';
 }
 
-const VIEWS = ['apps', 'status', 'profile', 'admin'];
+const VIEWS = ['apps', 'nest', 'status', 'profile', 'admin'];
+
+const hasNest = () => state.apps.some((a) => a.id === 'nest' && a.url === '#/nest');
 
 function route() {
   if (!state.user) return;
-  let view = (location.hash.replace('#/', '') || 'apps');
-  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin')) view = 'apps';
+  const [first, ...rest] = location.hash.replace(/^#\/?/, '').split('/');
+  let view = first || 'apps';
+  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'nest' && !hasNest())) view = 'apps';
   for (const v of VIEWS) $(`#view-${v}`).classList.toggle('hidden', v !== view);
   document.querySelectorAll('#account-menu a').forEach((a) => {
     if (a.dataset.view === view) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   });
-  $('#account-btn').classList.toggle('active', view !== 'apps');
+  document.querySelectorAll('#app-bar a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
+  $('#account-btn').classList.toggle('active', ['status', 'profile', 'admin'].includes(view));
   closeMenu(false);
   if (view === 'admin') loadAdmin();
   if (view === 'profile') loadStorage();
   if (view === 'status') loadStatus();
+  if (view === 'nest') window.nestOpen(rest);
+  else document.title = state.serverName;
 }
 
 window.addEventListener('hashchange', () => { if (state.user) route(); });
@@ -466,7 +510,8 @@ async function loadApps() {
 
 function renderAppBar() {
   $('#app-bar').replaceChildren(...state.apps.filter((app) => app.url).map((app) =>
-    el('a', { href: resolveUrl(app.url), target: '_blank', rel: 'noopener' }, icon(app.icon, 'bar-icon'), el('span', { text: app.name }))));
+    el('a', app.url.startsWith('#/') ? { href: app.url, 'data-view': app.url.slice(2), class: location.hash.startsWith(app.url) ? 'active' : '' } : { href: resolveUrl(app.url), target: '_blank', rel: 'noopener' },
+      icon(app.icon, 'bar-icon'), el('span', { text: app.name }))));
 }
 
 function renderApps() {
@@ -488,8 +533,10 @@ function renderApps() {
         el('span', {}, el('span', { class: `dot ${status}` }), label),
         el('span', { text: app.url ? 'Open →' : isAdmin ? 'Add link' : '' })),
     ];
+    // Apps built into Roost (like Nest) open in place; the rest in a new tab.
+    const builtIn = app.url.startsWith('#/');
     return app.url
-      ? el('a', { class: 'card app-card', href: resolveUrl(app.url), target: '_blank', rel: 'noopener' }, children)
+      ? el('a', builtIn ? { class: 'card app-card', href: app.url } : { class: 'card app-card', href: resolveUrl(app.url), target: '_blank', rel: 'noopener' }, children)
       : el('div', { class: 'card app-card disabled' }, children);
   }));
 }
@@ -662,7 +709,7 @@ function tickClock() {
 $('#profile-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
-    const { user } = await api('PATCH', '/api/me', { displayName: e.target.displayName.value });
+    const { user } = await api('PATCH', '/api/me', { displayName: e.target.displayName.value, email: e.target.email.value });
     state.user = user;
     renderUser();
     flash(e.target, 'Saved');
@@ -751,8 +798,10 @@ function renderStorageRequests(requests) {
 // ---------- admin ----------
 
 async function loadAdmin() {
-  const [{ users }, { apps }, { requests, defaultLimitGb }, { invites, publicUrl }] = await Promise.all([
-    api('GET', '/api/admin/users'), api('GET', '/api/apps'), api('GET', '/api/admin/storage-requests'), api('GET', '/api/admin/invites')]);
+  const [{ users }, { apps }, { requests, defaultLimitGb }, { invites, publicUrl }, { settings }] = await Promise.all([
+    api('GET', '/api/admin/users'), api('GET', '/api/apps'), api('GET', '/api/admin/storage-requests'), api('GET', '/api/admin/invites'),
+    api('GET', '/api/admin/settings')]);
+  renderMailSettings(settings);
   state.users = users;
   state.apps = apps;
   state.defaultLimitGb = defaultLimitGb;
@@ -762,6 +811,7 @@ async function loadAdmin() {
   pickers.default.setValue(defaultLimitGb);
   pickers.newUser.setValue(defaultLimitGb);
   renderStorageRequests(requests);
+  loadActivity();
   renderAppsEditor();
   renderUsers();
   renderInvites(invites);
@@ -836,10 +886,11 @@ function renderUsers() {
       } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
     };
     const resetSpot = el('div', { class: 'reset-spot' });
-    const resetLink = async () => {
+    const resetLink = async (email) => {
       try {
-        const r = await api('POST', `/api/admin/users/${u.id}/reset-link`);
-        resetSpot.replaceChildren(linkBox(linkUrl('reset', r.token), `Works once · until ${untilDate(r.expiresAt)} · makes any older reset link stop working`,
+        const r = await api('POST', `/api/admin/users/${u.id}/reset-link`, { email });
+        const note = r.emailedTo ? `Emailed to ${r.emailedTo} · ` : r.mailError ? `Not emailed: ${r.mailError} · ` : '';
+        resetSpot.replaceChildren(linkBox(linkUrl('reset', r.token), `${note}Works once · until ${untilDate(r.expiresAt)} · makes any older reset link stop working`,
           `Set a new password for ${state.serverName}`));
       } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
     };
@@ -853,7 +904,7 @@ function renderUsers() {
     return el('div', { class: 'user-row' },
       el('div', { class: 'who' },
         el('span', { class: 'avatar', text: (u.displayName || u.username).charAt(0).toUpperCase() }),
-        el('div', {}, el('div', { text: u.displayName }), el('div', { class: 'mono muted', text: `@${u.username}` })),
+        el('div', {}, el('div', { text: u.displayName }), el('div', { class: 'mono muted', text: [`@${u.username}`, u.email].filter(Boolean).join(' · ') })),
         el('span', { class: 'pill', text: u.role })),
       u.role === 'admin' ? el('span', { class: 'mono muted', text: 'Sees every app' }) : checks,
       el('div', { class: 'row user-storage' },
@@ -861,7 +912,8 @@ function renderUsers() {
         limit,
         el('button', { class: 'btn ghost small', type: 'button', text: 'Save', onclick: save })),
       isMe ? null : el('div', { class: 'row', style: 'margin:0' },
-        el('button', { class: 'btn ghost small', type: 'button', text: 'Password reset link', onclick: resetLink }),
+        el('button', { class: 'btn ghost small', type: 'button', text: 'Password reset link', onclick: () => resetLink(false) }),
+        u.email && state.mailEnabled ? el('button', { class: 'btn ghost small', type: 'button', text: 'Email reset link', onclick: () => resetLink(true) }) : null,
         el('button', { class: 'btn danger small', type: 'button', text: 'Remove', onclick: remove })),
       resetSpot,
       msg);
@@ -894,8 +946,9 @@ $('#invite-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = e.target;
   try {
-    const { invite, token } = await api('POST', '/api/admin/invites', {
+    const { invite, token, emailedTo, mailError } = await api('POST', '/api/admin/invites', {
       label: f.label.value,
+      email: state.mailEnabled ? f.email.value : '',
       role: f.role.value,
       apps: checkedApps($('#new-user-apps')),
       limitGb: pickers.newUser.getValue(),
@@ -905,8 +958,61 @@ $('#invite-form').addEventListener('submit', async (e) => {
     flash(f, '');
     await loadAdmin();
     $('#invite-result').replaceChildren(linkBox(linkUrl('join', token),
-      `Works once · until ${untilDate(invite.expiresAt)} · the link is only shown now`,
+      `${emailedTo ? `Emailed to ${emailedTo} · ` : mailError ? `Not emailed: ${mailError} · ` : ''}Works once · until ${untilDate(invite.expiresAt)} · the link is only shown now`,
       `You're invited to ${state.serverName}`));
+  } catch (err) { flash(f, err.message, false); }
+});
+
+function renderMailSettings(settings) {
+  const f = $('#mail-form');
+  const m = settings.mail;
+  f.host.value = m.host;
+  f.port.value = m.host ? m.port : '';
+  f.security.value = m.security;
+  f.user.value = m.user;
+  f.password.value = '';
+  f.password.placeholder = m.hasPassword ? 'Saved · type to change' : '';
+  f.from.value = m.from;
+  $('#mail-needs-url').classList.toggle('hidden', !m.host || Boolean(settings.publicUrl));
+  setMailEnabled(settings.mailEnabled);
+}
+
+// Picking a security type fills in its usual port.
+$('#mail-form').security.addEventListener('change', (e) => {
+  const port = { starttls: 587, tls: 465, none: 25 }[e.target.value];
+  e.target.form.port.value = port;
+});
+
+async function saveMail(f) {
+  const { settings } = await api('PATCH', '/api/admin/settings', {
+    mail: {
+      host: f.host.value,
+      port: Number(f.port.value) || ({ starttls: 587, tls: 465, none: 25 }[f.security.value]),
+      security: f.security.value,
+      user: f.user.value,
+      password: f.password.value,
+      from: f.from.value,
+    },
+  });
+  renderMailSettings(settings);
+  renderUsers();
+}
+
+$('#mail-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await saveMail(e.target);
+    flash(e.target, e.target.host.value ? 'Saved' : 'Email turned off');
+  } catch (err) { flash(e.target, err.message, false); }
+});
+
+$('#mail-test').addEventListener('click', async () => {
+  const f = $('#mail-form');
+  flash(f, 'Sending…');
+  try {
+    await saveMail(f);
+    const { to } = await api('POST', '/api/admin/mail-test', {});
+    flash(f, `Sent to ${to}. Check that inbox (and spam).`);
   } catch (err) { flash(f, err.message, false); }
 });
 
@@ -921,9 +1027,84 @@ $('#settings-form').addEventListener('submit', async (e) => {
     setServerName(settings.serverName);
     state.publicUrl = settings.publicUrl || '';
     e.target.publicUrl.value = state.publicUrl;
+    renderMailSettings(settings);
     flash(e.target, 'Saved');
   } catch (err) { flash(e.target, err.message, false); }
 });
+
+// ---------- activity log ----------
+
+const ACTIVITY_LABELS = {
+  'sign-in': 'Signed in',
+  'sign-out': 'Signed out',
+  setup: 'Set up Roost',
+  'sign-in-failed': 'Failed sign-in',
+  'password-changed': 'Changed password',
+  'user-added': 'Added user',
+  'user-changed': 'Changed user',
+  'user-removed': 'Removed user',
+  'user-joined': 'Joined with an invite',
+  'invite-created': 'Made an invite link',
+  'invite-removed': 'Cancelled an invite link',
+  'reset-link-created': 'Made a password reset link',
+  'password-reset': 'Reset password',
+  'storage-requested': 'Asked for storage',
+  'storage-approved': 'Approved storage',
+  'storage-declined': 'Declined storage',
+  'apps-changed': 'Changed apps',
+  'settings-changed': 'Changed server settings',
+};
+
+const activity = { filter: '', last: null };
+
+function ago(iso) {
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  if (s < 7 * 86400) return `${Math.floor(s / 86400)} d ago`;
+  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function activityRow(e) {
+  const exact = new Date(e.at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  const time = el('button', { type: 'button', class: 'activity-time mono muted', title: exact, text: ago(e.at) });
+  time.addEventListener('click', () => { time.textContent = time.textContent === exact ? ago(e.at) : exact; });
+  // "raven → mia" when an admin acted on someone else; just the name otherwise.
+  const who = e.actor && e.target && e.actor !== e.target ? `${e.actor} → ${e.target}` : e.actor || e.target || 'unknown';
+  return el('li', { class: `activity-row${e.kind === 'failed' ? ' failed' : ''}` },
+    el('div', { class: 'activity-main' },
+      el('div', {}, el('span', { class: 'activity-what', text: ACTIVITY_LABELS[e.type] || e.type }), el('span', { class: 'activity-who', text: ` · ${who}` })),
+      el('div', { class: 'activity-detail mono muted', text: [e.detail, e.ip].filter(Boolean).join(' · ') })),
+    time);
+}
+
+async function loadActivity(more = false) {
+  const list = $('#activity');
+  const params = new URLSearchParams();
+  if (activity.filter) params.set('filter', activity.filter);
+  if (more && activity.last) params.set('before', activity.last);
+  try {
+    const { entries, more: hasMore } = await api('GET', `/api/admin/activity?${params}`);
+    const rows = entries.map(activityRow);
+    if (more) list.append(...rows);
+    else list.replaceChildren(...(rows.length ? rows : [el('li', { class: 'empty mono', text: 'Nothing here yet' })]));
+    activity.last = entries.length ? entries[entries.length - 1].seq : activity.last;
+    $('#activity-more-row').classList.toggle('hidden', !hasMore);
+    $('#activity-panel > .msg').textContent = '';
+  } catch (err) { flash($('#activity-panel'), err.message, false); }
+}
+
+$('#activity-filters').addEventListener('click', (e) => {
+  const chip = e.target.closest('.chip');
+  if (!chip) return;
+  activity.filter = chip.dataset.filter;
+  activity.last = null;
+  for (const c of $('#activity-filters').children) c.setAttribute('aria-pressed', String(c === chip));
+  loadActivity();
+});
+
+$('#activity-more').addEventListener('click', () => loadActivity(true));
 
 // ---------- boot ----------
 
@@ -939,6 +1120,7 @@ $('#settings-form').addEventListener('submit', async (e) => {
   if (token) return showJoin(token);
   const s = await api('GET', '/api/state');
   setServerName(s.serverName);
+  state.mailEnabled = s.mailEnabled;
   if (s.user) await enter(s.user);
   else showWelcome(s.setupRequired);
 })();
