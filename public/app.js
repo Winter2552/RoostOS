@@ -576,6 +576,7 @@ async function enter(user) {
   renderUser();
   await Promise.all([loadApps(), loadSystem()]);
   route();
+  if (user.role === 'admin' && !location.hash.startsWith('#/admin')) loadSetup();
 }
 
 function renderUser() {
@@ -974,7 +975,99 @@ function renderStorageRequests(requests) {
 
 // ---------- admin ----------
 
+// ---------- setup checklist ----------
+
+const setupState = { steps: [], current: null, open: null };
+
+async function loadSetup() {
+  try {
+    const data = await api('GET', '/api/admin/setup');
+    setupState.steps = data.steps;
+    renderSetup(data);
+  } catch { /* the panel keeps its last state */ }
+}
+
+function renderSetup({ steps, done, total }) {
+  const complete = done === total;
+  const nudge = $('#setup-nudge');
+  nudge.classList.toggle('hidden', complete);
+  nudge.textContent = `Setup · ${done} of ${total} done · Continue →`;
+  $('#setup-count').textContent = complete ? `All ${total} steps done` : `${done} of ${total} done`;
+  $('#setup-fill').style.width = `${Math.round((done / total) * 100)}%`;
+  // Once everything is done the panel folds away until asked for.
+  if (setupState.open === null) setupState.open = !complete;
+  $('#setup-toggle').classList.toggle('hidden', !complete);
+  $('#setup-toggle').textContent = setupState.open ? 'Hide steps' : 'Show steps';
+  $('#setup-body').classList.toggle('hidden', !setupState.open);
+  if (!steps.some((st) => st.id === setupState.current)) setupState.current = null;
+  if (!setupState.current) setupState.current = (steps.find((st) => !st.done && !st.optional) || steps.find((st) => !st.done) || steps[0]).id;
+
+  let group = null;
+  $('#setup-list').replaceChildren(...steps.flatMap((st) => {
+    const items = [];
+    if (st.group !== group) {
+      group = st.group;
+      items.push(el('li', { class: 'setup-group mono muted', text: group }));
+    }
+    items.push(el('li', {},
+      el('button', {
+        type: 'button',
+        class: `setup-row${st.id === setupState.current ? ' current' : ''}`,
+        'aria-current': st.id === setupState.current ? 'step' : false,
+        onclick: () => { setupState.current = st.id; renderSetup({ steps, done, total }); },
+      },
+      el('span', { class: `setup-tick${st.done ? ' done' : ''}`, 'aria-label': st.done ? 'Done' : 'Not done' }, st.done ? '✓' : ''),
+      el('span', { class: 'setup-title', text: st.title }),
+      st.optional ? el('span', { class: 'mono muted', text: 'Optional' }) : null)));
+    return items;
+  }));
+
+  const st = steps.find((x) => x.id === setupState.current);
+  const i = steps.indexOf(st);
+  const go = (to) => { setupState.current = steps[to].id; renderSetup({ steps, done, total }); };
+  const action = st.action ? el('button', { class: 'btn small', type: 'button', text: st.action.label, onclick: () => openSetupAction(st.action) }) : null;
+  const tick = st.manual ? el('button', {
+    class: `btn ${st.done ? 'ghost ' : ''}small`, type: 'button', text: st.done ? 'Mark not done' : 'Mark done',
+    onclick: async () => { await api('POST', `/api/admin/setup/${st.id}`, { done: !st.done }); loadSetup(); },
+  }) : null;
+  $('#setup-step').replaceChildren(
+    el('div', { class: 'mono muted', text: `${st.group} · step ${i + 1} of ${steps.length}${st.done ? ' · done' : ''}` }),
+    el('h4', { text: st.title }),
+    el('p', { class: 'setup-why', text: st.why }),
+    el('ol', { class: 'setup-how' }, st.how.map((h) => el('li', { text: h }))),
+    el('div', { class: 'row', style: 'margin-top:16px' },
+      action, tick,
+      st.manual ? null : el('button', { class: 'btn ghost small', type: 'button', text: 'Check again', onclick: loadSetup }),
+      el('span', { class: 'setup-nav' },
+        el('button', { class: 'link-btn mono', type: 'button', text: '← Back', disabled: i === 0, onclick: () => go(i - 1) }),
+        el('button', { class: 'link-btn mono', type: 'button', text: 'Next →', disabled: i === steps.length - 1, onclick: () => go(i + 1) }))));
+}
+
+// Jumps to the form a step is done in and puts the cursor in it.
+function openSetupAction({ view, focus, field }) {
+  const target = `#/${view}`;
+  const jump = () => {
+    const form = focus && document.getElementById(focus);
+    if (!form) return;
+    form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const input = (field && form.elements[field]) || form.querySelector('input:not([type=hidden]):not([disabled]), select, textarea');
+    if (input) input.focus({ preventScroll: true });
+  };
+  if (location.hash === target) jump();
+  else {
+    location.hash = target;
+    setTimeout(jump, 150);
+  }
+}
+
+$('#setup-toggle').addEventListener('click', () => {
+  setupState.open = !setupState.open;
+  $('#setup-body').classList.toggle('hidden', !setupState.open);
+  $('#setup-toggle').textContent = setupState.open ? 'Hide steps' : 'Show steps';
+});
+
 async function loadAdmin() {
+  loadSetup();
   const [{ users }, { apps }, { requests, defaultLimitGb }, { invites, publicUrl }, { settings }] = await Promise.all([
     api('GET', '/api/admin/users'), api('GET', '/api/apps'), api('GET', '/api/admin/storage-requests'), api('GET', '/api/admin/invites'),
     api('GET', '/api/admin/settings')]);
@@ -1200,6 +1293,7 @@ $('#mail-test').addEventListener('click', async () => {
     await saveMail(f);
     const { to } = await api('POST', '/api/admin/mail-test', {});
     flash(f, `Sent to ${to}. Check that inbox (and spam).`);
+    loadSetup();
   } catch (err) { flash(f, err.message, false); }
 });
 
