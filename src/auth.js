@@ -50,7 +50,9 @@ class Sessions {
   }
 }
 
-// Simple per-IP limiter for login attempts.
+// Per-IP limiter for sign-in. Only failed attempts count, so a household
+// signing in through one address (or one tunnel) isn't locked out by
+// ordinary use.
 class RateLimiter {
   constructor(max = 10, windowMs = 5 * 60 * 1000) {
     this.max = max;
@@ -58,12 +60,20 @@ class RateLimiter {
     this.hits = new Map();
   }
 
-  allow(key) {
+  recent(key) {
     const now = Date.now();
     const recent = (this.hits.get(key) || []).filter((t) => now - t < this.windowMs);
-    recent.push(now);
-    this.hits.set(key, recent);
-    return recent.length <= this.max;
+    if (recent.length) this.hits.set(key, recent);
+    else this.hits.delete(key);
+    return recent;
+  }
+
+  allow(key) {
+    return this.recent(key).length < this.max;
+  }
+
+  fail(key) {
+    this.hits.set(key, [...this.recent(key), Date.now()]);
   }
 }
 

@@ -17,11 +17,16 @@ services:
       DATA_DIR: /data
       # Sign-in cookies are marked Secure automatically on HTTPS; "true" forces it on plain HTTP too.
       SECURE_COOKIES: "false"
+      # Set to "true" only when Roost is reached through a tunnel or reverse proxy, so the
+      # Admin activity log shows each visitor's real address instead of the proxy's.
+      BEHIND_PROXY: "false"
       # Shared secret Nest and Glint use to read limits and report usage. Leave blank until they exist.
       ROOST_APP_TOKEN: ""
       # Drives on the status page, as Label=path inside the container; the paths are
       # the read-only mounts below. Without this, Roost shows the drive it runs on.
       ROOST_DISKS: "System=/hostfs/system;Data=/hostfs/data"
+      # Where Nest keeps everyone's files (the mount below).
+      NEST_DIR: /nest
       # Container status comes from the docker-proxy service below, which only lets
       # Roost read the container list. Remove both to fall back to web checks.
       DOCKER_HOST: tcp://docker-proxy:2375
@@ -30,6 +35,9 @@ services:
     volumes:
       # On ZimaOS this keeps Roost's accounts and app list with the other app data.
       - /DATA/AppData/roost:/data
+      # Nest's files, as normal folders: one per user. Point the left side at a
+      # folder on the 3 TB data drive (ZimaOS shows its mount under Storage).
+      - /DATA/roost-nest:/nest
       # Read-only, only so the status page can see how full each drive is.
       # /DATA is on the system SSD. Point the second line at the 3 TB data drive's
       # mount folder (ZimaOS shows it under Storage); until then it repeats /DATA

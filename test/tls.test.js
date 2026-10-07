@@ -15,6 +15,7 @@ const tls = require('tls');
 const { execFileSync } = require('child_process');
 const { createServer } = require('../src/server');
 const { createCsr, newKey, dnsTxtValue } = require('../src/acme');
+const twoStep = require('../src/twostep');
 
 let hasOpenssl = true;
 try { execFileSync('openssl', ['version']); } catch { hasOpenssl = false; }
@@ -192,11 +193,15 @@ before(async () => {
   cfBase = `http://127.0.0.1:${cf.address().port}`;
   server = createServer({
     dataDir: path.join(tmp, 'data'),
+    trustProxy: true,
     tls: { directoryUrl: `${acmeBase}/dir`, cloudflareApi: cfBase, waitForDns: async () => {}, pollMs: 10 },
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
   adminCookie = (await call('POST', '/api/setup', { username: 'raven', password: 'correct horse' })).cookie.split(';')[0];
+  // Admins need two-step sign-in before Admin opens.
+  const { secret } = (await call('POST', '/api/me/two-step/start')).body;
+  await call('POST', '/api/me/two-step/enable', { code: twoStep.codeAt(secret, twoStep.currentStep()) });
 });
 
 after(() => {
@@ -281,14 +286,11 @@ test('serves HTTPS with the new certificate', { skip: !hasOpenssl && 'needs open
 });
 
 test('sign-in cookies are marked Secure over HTTPS', async () => {
-  const res = await fetch(base + '/api/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Forwarded-Proto': 'https' },
-    body: JSON.stringify({ username: 'raven', password: 'correct horse' }),
-  });
-  assert.match(res.headers.get('set-cookie'), /; Secure/);
-  const plain = await call('POST', '/api/login', { username: 'raven', password: 'correct horse' });
-  assert.doesNotMatch(plain.cookie, /; Secure/);
+  // Signing out sends the same cookie (emptied), with no two-step in the way.
+  const viaProxy = await fetch(base + '/api/logout', { method: 'POST', headers: { 'X-Forwarded-Proto': 'https' } });
+  assert.match(viaProxy.headers.get('set-cookie'), /; Secure/);
+  const plain = await fetch(base + '/api/logout', { method: 'POST' });
+  assert.doesNotMatch(plain.headers.get('set-cookie'), /; Secure/);
 });
 
 test('the status page tells admins about the certificate', { skip: !hasOpenssl && 'needs openssl' }, async () => {

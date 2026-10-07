@@ -13,7 +13,7 @@ const ICONS = {
   home: '<path d="M3 11l9-7 9 7v9h-6v-6H9v6H3z"/>',
 };
 
-const state = { serverName: 'Roost', user: null, apps: [], status: {}, users: [], defaultLimitGb: null, diskGb: null };
+const state = { serverName: 'Roost', publicUrl: '', mailEnabled: false, user: null, apps: [], status: {}, users: [], defaultLimitGb: null, diskGb: null };
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -43,10 +43,10 @@ async function api(method, url, body) {
     credentials: 'same-origin',
   });
   const data = await res.json().catch(() => ({}));
-  if (res.status === 401 && url !== '/api/login') {
+  if (res.status === 401 && !url.startsWith('/api/login') && !linkToken()) {
     showWelcome(false);
   }
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status });
   return data;
 }
 
@@ -54,6 +54,23 @@ function flash(form, text, ok = true) {
   const msg = $('.msg', form);
   msg.textContent = text;
   msg.className = `msg ${ok ? 'ok' : 'error'}`;
+}
+
+// The clipboard API only works over HTTPS, and Roost is often opened on a
+// plain http:// LAN address, so fall back to the older copy command.
+async function copyPlain(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const area = el('textarea', { readonly: true, style: 'position:fixed;opacity:0' });
+    area.value = text;
+    document.body.append(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    area.remove();
+    return ok;
+  }
 }
 
 function resolveUrl(url) {
@@ -151,11 +168,15 @@ function showWelcome(setup) {
   setupMode = setup;
   state.user = null;
   $('#shell').classList.add('hidden');
+  $('#secure').classList.add('hidden');
   $('#welcome').classList.remove('hidden');
+  showCodeStep(null);
   $('#display-name-field').classList.toggle('hidden', !setup);
   $('#welcome-lead').textContent = setup ? 'First run · create the admin account' : 'Sign in to your home server';
   $('#welcome-form [name=password]').autocomplete = setup ? 'new-password' : 'current-password';
   $('#welcome-submit').textContent = setup ? 'Create account' : 'Continue';
+  showForgot(false);
+  setMailEnabled(state.mailEnabled);
 }
 
 $('#welcome-form').addEventListener('submit', async (e) => {
@@ -164,20 +185,392 @@ $('#welcome-form').addEventListener('submit', async (e) => {
   const body = { username: f.username.value, password: f.password.value };
   if (setupMode) body.displayName = f.displayName.value;
   try {
-    const { user } = await api('POST', setupMode ? '/api/setup' : '/api/login', body);
-    f.reset();
+    const res = await api('POST', setupMode ? '/api/setup' : '/api/login', body);
     $('#welcome-msg').textContent = '';
-    await enter(user);
+    if (res.twoStep) {
+      f.password.value = '';
+      showCodeStep(res.ticket);
+      return;
+    }
+    f.reset();
+    await enter(res.user);
   } catch (err) {
     $('#welcome-msg').textContent = err.message;
   }
 });
 
+// ---------- sign in: second step ----------
+
+let codeTicket = null;
+let recoveryMode = false;
+
+function showCodeStep(ticket) {
+  codeTicket = ticket;
+  const f = $('#code-form');
+  $('#welcome-form').classList.toggle('hidden', Boolean(ticket));
+  f.classList.toggle('hidden', !ticket);
+  $('#welcome-lead').textContent = ticket ? 'One more step'
+    : setupMode ? 'First run · create the admin account' : 'Sign in to your home server';
+  setRecoveryMode(false);
+  f.code.value = '';
+  $('#code-msg').textContent = '';
+  if (ticket) f.code.focus();
+}
+
+function setRecoveryMode(on) {
+  recoveryMode = on;
+  const input = $('#code-form').code;
+  input.value = '';
+  input.inputMode = on ? 'text' : 'numeric';
+  input.autocomplete = on ? 'off' : 'one-time-code';
+  input.maxLength = on ? 9 : 7;
+  input.classList.toggle('recovery', on);
+  $('#code-label').textContent = on ? 'Recovery code, like k7pm-x3qa' : '6-digit code from your authenticator app';
+  $('#use-recovery').textContent = on ? 'Use the app code instead' : 'Use a recovery code';
+}
+
+async function submitCode() {
+  const f = $('#code-form');
+  if (!f.code.value.trim() || f.code.disabled) return;
+  f.code.disabled = true;
+  try {
+    const { user } = await api('POST', '/api/login/code', { ticket: codeTicket, code: f.code.value, trust: f.trust.checked });
+    $('#welcome-form').reset();
+    showCodeStep(null);
+    await enter(user);
+  } catch (err) {
+    if (err.status === 401) {
+      // The wait ran out or there were too many tries: start again from the password.
+      showCodeStep(null);
+      $('#welcome-msg').textContent = err.message;
+      $('#welcome-form').password.focus();
+    } else {
+      $('#code-msg').textContent = err.message;
+      f.code.select();
+    }
+  } finally {
+    f.code.disabled = false;
+    if (codeTicket) f.code.focus();
+  }
+}
+
+$('#code-form').addEventListener('submit', (e) => { e.preventDefault(); submitCode(); });
+
+// Six digits in: sign in without needing to press the button.
+$('#code-form').code.addEventListener('input', (e) => {
+  if (!recoveryMode && e.target.value.replace(/\D/g, '').length === 6) submitCode();
+});
+
+$('#use-recovery').addEventListener('click', () => { setRecoveryMode(!recoveryMode); $('#code-form').code.focus(); });
+$('#code-back').addEventListener('click', () => { showCodeStep(null); $('#welcome-form').password.focus(); });
+
+// ---------- two-step setup ----------
+
+// Draws the setup steps into a container: add Roost to an authenticator app,
+// confirm one code, then save the recovery codes. Calls onDone(user) at the end.
+async function twoStepSetup(container, onDone) {
+  container.replaceChildren(el('p', { class: 'mono muted', text: 'Getting a code ready…' }));
+  let setup;
+  try {
+    setup = await api('POST', '/api/me/two-step/start');
+  } catch (err) {
+    container.replaceChildren(el('div', { class: 'msg error', text: err.message }));
+    return;
+  }
+  const qr = el('div', { class: 'qr-box' });
+  qr.innerHTML = setup.qr; // drawn by Roost's own QR maker, no user text in it
+  const key = setup.secret.match(/.{1,4}/g).join(' ');
+  const copyMsg = el('span', { class: 'mono muted' });
+  const code = el('input', {
+    type: 'text', name: 'code', class: 'code-input', inputmode: 'numeric', autocomplete: 'one-time-code',
+    maxlength: 7, required: true, 'aria-label': '6-digit code', spellcheck: 'false',
+  });
+  const msg = el('div', { class: 'msg error', role: 'alert' });
+  const turnOn = async () => {
+    if (code.disabled) return;
+    code.disabled = true;
+    try {
+      const res = await api('POST', '/api/me/two-step/enable', { code: code.value });
+      showRecoveryCodes(container, res.recoveryCodes, () => onDone(res.user));
+    } catch (err) {
+      msg.textContent = err.message;
+      code.disabled = false;
+      code.select();
+    }
+  };
+  code.addEventListener('input', () => { if (code.value.replace(/\D/g, '').length === 6) turnOn(); });
+  const form = el('form', { class: 'setup-confirm', onsubmit: (e) => { e.preventDefault(); turnOn(); } },
+    el('label', { class: 'field' }, el('span', { text: '2 · Enter the 6-digit code it shows' }), code),
+    el('button', { class: 'btn', type: 'submit', text: 'Turn on' }),
+    msg);
+  container.replaceChildren(el('div', { class: 'setup' },
+    el('div', { class: 'field' }, el('span', { text: '1 · Add Roost to your authenticator app' })),
+    el('p', { class: 'setup-hint', text: 'Any authenticator app works: Google or Microsoft Authenticator, 1Password, Bitwarden, or the passwords app on your phone.' }),
+    el('div', { class: 'setup-add' },
+      el('a', { class: 'btn ghost open-app', href: setup.uri, text: 'Open in authenticator app' }),
+      qr,
+      el('div', { class: 'setup-key' },
+        el('span', { class: 'mono muted', text: 'Or type this key' }),
+        el('code', { class: 'key', text: key }),
+        el('div', { class: 'split' },
+          el('button', { class: 'link-btn mono', type: 'button', text: 'Copy key', onclick: async () => { copyMsg.textContent = (await copyPlain(setup.secret)) ? 'Copied' : 'Select and copy it'; } }),
+          copyMsg))),
+    form));
+}
+
+function showRecoveryCodes(container, codes, onDone) {
+  const text = `${state.serverName} recovery codes for ${state.user.username}\nEach code signs you in once if you lose your phone.\n\n${codes.join('\n')}\n`;
+  const note = el('span', { class: 'mono muted' });
+  const download = () => {
+    const a = el('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/plain' })), download: `${state.serverName.toLowerCase()}-recovery-codes.txt` });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+  container.replaceChildren(el('div', { class: 'setup' },
+    el('div', { class: 'field' }, el('span', { text: 'Save your recovery codes' })),
+    el('p', { class: 'setup-hint', text: "If you lose your phone, each code signs you in once. Keep them somewhere safe that isn't your phone, like a password manager or a printout." }),
+    el('ol', { class: 'recovery-codes mono' }, codes.map((c) => el('li', { text: c }))),
+    el('div', { class: 'row', style: 'margin-top:0' },
+      el('button', { class: 'btn ghost small', type: 'button', text: 'Copy', onclick: async () => { note.textContent = (await copyPlain(codes.join('\n'))) ? 'Copied' : ''; } }),
+      el('button', { class: 'btn ghost small', type: 'button', text: 'Download', onclick: download }),
+      note),
+    el('button', { class: 'btn', type: 'button', text: "I've saved them", onclick: onDone })));
+}
+
+function needsSecureStep(u) {
+  return (u.twoStep.required && !u.twoStep.on) || u.twoStep.offer;
+}
+
+function showSecure(user) {
+  $('#welcome').classList.add('hidden');
+  $('#join').classList.add('hidden');
+  $('#shell').classList.add('hidden');
+  $('#secure').classList.remove('hidden');
+  const required = user.twoStep.required;
+  $('#secure-lead').textContent = required
+    ? 'Admins need a code from their phone as well as a password'
+    : 'Add a code from your phone as well as your password. You can do this later in Profile.';
+  $('#secure-later').classList.toggle('hidden', required);
+  twoStepSetup($('#secure-setup'), (u) => enter(u));
+}
+
+$('#secure-later').addEventListener('click', async () => {
+  try {
+    const { user } = await api('POST', '/api/me/two-step/skip');
+    await enter(user);
+  } catch (err) {
+    $('#secure-setup').prepend(el('div', { class: 'msg error', text: err.message }));
+  }
+});
+
+$('#secure-logout').addEventListener('click', async () => {
+  await api('POST', '/api/logout').catch(() => {});
+  showWelcome(false);
+});
+function showForgot(show) {
+  $('#welcome-form').classList.toggle('hidden', show);
+  $('#forgot-form').classList.toggle('hidden', !show);
+  $('#forgot-msg').textContent = '';
+  $('#welcome-lead').textContent = show ? "We'll email you a link to choose a new password"
+    : setupMode ? 'First run · create the admin account' : 'Sign in to your home server';
+  if (show) {
+    const f = $('#forgot-form');
+    f.login.value = $('#welcome-form').username.value;
+    f.login.focus();
+  }
+}
+
+$('#forgot-open').addEventListener('click', () => showForgot(true));
+$('#forgot-back').addEventListener('click', () => showForgot(false));
+
+$('#forgot-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const msg = $('#forgot-msg');
+  try {
+    await api('POST', '/api/forgot', { login: e.target.login.value });
+    msg.className = 'msg ok';
+    msg.textContent = 'If that account has an email address, a reset link is on its way. It works for 1 hour.';
+  } catch (err) {
+    msg.className = 'msg error';
+    msg.textContent = err.message;
+  }
+});
+
+function setMailEnabled(on) {
+  state.mailEnabled = on;
+  document.querySelectorAll('.mail-only').forEach((n) => n.classList.toggle('hidden', !on));
+  $('#forgot-open').classList.toggle('hidden', !on || setupMode);
+}
+
+// ---------- invite and reset links ----------
+
+// Invite links look like https://roostos.network/j/K7PX-2QM9 (reset: /r/).
+const LINK_RE = /^\/[jr]\/([A-Za-z0-9-]{8,9})\/?$/;
+
+function linkToken() {
+  const m = location.pathname.match(LINK_RE);
+  return m ? m[1] : null;
+}
+
+// Links use the public address from Admin → Server when one is set, so a link
+// made at home still opens from anywhere.
+function linkUrl(kind, token) {
+  return `${state.publicUrl || location.origin}/${kind === 'reset' ? 'r' : 'j'}/${token}`;
+}
+
+let joinToken = null;
+let joinKind = null;
+
+async function showJoin(token) {
+  joinToken = token;
+  $('#welcome').classList.add('hidden');
+  $('#shell').classList.add('hidden');
+  $('#join').classList.remove('hidden');
+  $('#join-form').classList.add('hidden');
+  $('#join-signin').classList.add('hidden');
+  $('#join-msg').textContent = '';
+  $('#join .hello').classList.remove('hidden');
+  $('#join-lead').textContent = 'Checking your link…';
+  let info;
+  try {
+    info = await api('GET', `/api/links/${token}`);
+  } catch (err) {
+    $('#join .hello').classList.add('hidden');
+    $('#join-title').textContent = 'This link has stopped working';
+    $('#join-lead').textContent = `${err.message}. Ask whoever sent it for a new one.`;
+    $('#join-signin').classList.remove('hidden');
+    return;
+  }
+  setServerName(info.serverName);
+  joinKind = info.kind;
+  const f = $('#join-form');
+  f.reset();
+  const invite = info.kind === 'invite';
+  document.querySelectorAll('.join-invite').forEach((n) => n.classList.toggle('hidden', !invite));
+  f.username.required = invite;
+  if (invite) {
+    $('#join-title').textContent = `Join ${info.serverName}`;
+    const who = info.invitedBy ? `${info.invitedBy} invited you` : "You're invited";
+    $('#join-lead').textContent = info.apps.length ? `${who} · ${info.apps.join(', ')}` : who;
+    $('#join-submit').textContent = 'Create account';
+    usernameHint('');
+  } else {
+    $('#join-title').textContent = 'Choose a new password';
+    $('#join-lead').textContent = `For @${info.username}`;
+    f.resetUsername.value = info.username;
+    $('#join-submit').textContent = 'Save password';
+  }
+  f.classList.remove('hidden');
+  (invite ? f.displayName : f.password).focus();
+}
+
+function usernameHint(text, bad = false) {
+  const hint = $('#join-username-hint');
+  hint.textContent = text || "Letters, numbers, . _ - · you can't change it later";
+  hint.classList.toggle('bad', bad);
+  hint.classList.toggle('good', !bad && Boolean(text));
+}
+
+// Check the username a moment after the person stops typing, not on every key.
+let usernameTimer;
+$('#join-form').username.addEventListener('input', (e) => {
+  clearTimeout(usernameTimer);
+  const name = e.target.value.trim().toLowerCase();
+  if (!name) return usernameHint('');
+  usernameTimer = setTimeout(async () => {
+    try {
+      const r = await api('GET', `/api/links/${joinToken}?username=${encodeURIComponent(name)}`);
+      if (e.target.value.trim().toLowerCase() === name) usernameHint(r.available ? `@${name} is free` : r.reason, !r.available);
+    } catch { /* the submit will say what's wrong */ }
+  }, 350);
+});
+
+// Suggest a username from the name they type, until they edit it themselves.
+$('#join-form').displayName.addEventListener('input', (e) => {
+  const u = $('#join-form').username;
+  if (u.dataset.touched) return;
+  u.value = e.target.value.toLowerCase().normalize('NFKD').replace(/[^a-z0-9._-]+/g, '').slice(0, 32);
+  u.dispatchEvent(new Event('input'));
+});
+$('#join-form').username.addEventListener('keydown', (e) => { e.target.dataset.touched = '1'; });
+
+document.querySelectorAll('.show-password').forEach((btn) => btn.addEventListener('click', () => {
+  const input = btn.previousElementSibling;
+  const show = input.type === 'password';
+  input.type = show ? 'text' : 'password';
+  btn.textContent = show ? 'Hide' : 'Show';
+}));
+
+$('#join-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const body = { password: f.password.value };
+  if (joinKind === 'invite') Object.assign(body, { username: f.username.value, displayName: f.displayName.value, email: f.email.value });
+  const button = $('#join-submit');
+  button.disabled = true;
+  try {
+    const { user } = await api('POST', `/api/links/${joinToken}`, body);
+    joinToken = null;
+    $('#join').classList.add('hidden');
+    history.replaceState(null, '', '/#/apps');
+    await enter(user);
+  } catch (err) {
+    $('#join-msg').textContent = err.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('#join-signin').addEventListener('click', (e) => {
+  e.preventDefault();
+  history.replaceState(null, '', '/');
+  $('#join').classList.add('hidden');
+  showWelcome(false);
+});
+
+// Copy works on plain http:// home addresses too, where the clipboard API is off.
+async function copyText(input) {
+  try {
+    await navigator.clipboard.writeText(input.value);
+  } catch {
+    input.select();
+    document.execCommand('copy');
+  }
+}
+
+// A link box with Copy, and Share where the browser has a share sheet.
+function linkBox(url, note, shareText) {
+  const input = el('input', { type: 'text', readonly: true, value: url, 'aria-label': 'Link', spellcheck: 'false' });
+  const copy = el('button', { class: 'btn small', type: 'button', text: 'Copy link' });
+  copy.addEventListener('click', async () => {
+    await copyText(input);
+    copy.textContent = 'Copied';
+    setTimeout(() => { copy.textContent = 'Copy link'; }, 1600);
+  });
+  input.addEventListener('focus', () => input.select());
+  const share = navigator.share
+    ? el('button', { class: 'btn ghost small', type: 'button', text: 'Share', onclick: () => navigator.share({ title: state.serverName, text: shareText, url }).catch(() => {}) })
+    : null;
+  return el('div', { class: 'link-box' }, input, el('div', { class: 'row', style: 'margin:0' }, copy, share), el('div', { class: 'mono muted', text: note }));
+}
+
+function untilDate(iso) {
+  return new Date(iso).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
 // ---------- shell ----------
 
 async function enter(user) {
   state.user = user;
+  if (needsSecureStep(user)) {
+    showSecure(user);
+    return;
+  }
+  $('#secure').classList.add('hidden');
   $('#welcome').classList.add('hidden');
+  $('#join').classList.add('hidden');
   $('#shell').classList.remove('hidden');
   document.querySelectorAll('.admin-only').forEach((n) => n.classList.toggle('hidden', user.role !== 'admin'));
   renderUser();
@@ -194,22 +587,28 @@ function renderUser() {
   $('#profile-role').textContent = u.role;
   $('#profile-form').displayName.value = u.displayName;
   $('#profile-form').username.value = u.username;
+  $('#profile-form').email.value = u.email || '';
 }
 
-const VIEWS = ['apps', 'status', 'profile', 'admin'];
+const VIEWS = ['apps', 'nest', 'status', 'profile', 'admin'];
+
+const hasNest = () => state.apps.some((a) => a.id === 'nest' && a.url === '#/nest');
 
 function route() {
   if (!state.user) return;
-  let view = (location.hash.replace('#/', '') || 'apps');
-  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin')) view = 'apps';
+  const [first, ...rest] = location.hash.replace(/^#\/?/, '').split('/');
+  let view = first || 'apps';
+  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'nest' && !hasNest())) view = 'apps';
   for (const v of VIEWS) $(`#view-${v}`).classList.toggle('hidden', v !== view);
   document.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
   if (view === 'admin') loadAdmin();
-  if (view === 'profile') loadStorage();
+  if (view === 'profile') { loadStorage(); loadTwoStep(); }
   if (view === 'status') loadStatus();
+  if (view === 'nest') window.nestOpen(rest);
+  else document.title = state.serverName;
 }
 
-window.addEventListener('hashchange', route);
+window.addEventListener('hashchange', () => { if (state.user) route(); });
 
 $('#logout').addEventListener('click', async () => {
   await api('POST', '/api/logout').catch(() => {});
@@ -221,6 +620,7 @@ $('#logout').addEventListener('click', async () => {
 async function loadApps() {
   const { apps } = await api('GET', '/api/apps');
   state.apps = apps;
+  $('.nav [data-view=nest]').classList.toggle('hidden', !hasNest());
   renderApps();
   api('GET', '/api/apps/status').then(({ status }) => { state.status = status; renderApps(); }).catch(() => {});
 }
@@ -244,8 +644,10 @@ function renderApps() {
         el('span', {}, el('span', { class: `dot ${status}` }), label),
         el('span', { text: app.url ? 'Open →' : isAdmin ? 'Add link' : '' })),
     ];
+    // Apps built into Roost (like Nest) open in place; the rest in a new tab.
+    const builtIn = app.url.startsWith('#/');
     return app.url
-      ? el('a', { class: 'card app-card', href: resolveUrl(app.url), target: '_blank', rel: 'noopener' }, children)
+      ? el('a', builtIn ? { class: 'card app-card', href: app.url } : { class: 'card app-card', href: resolveUrl(app.url), target: '_blank', rel: 'noopener' }, children)
       : el('div', { class: 'card app-card disabled' }, children);
   }));
 }
@@ -427,7 +829,7 @@ function tickClock() {
 $('#profile-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
-    const { user } = await api('PATCH', '/api/me', { displayName: e.target.displayName.value });
+    const { user } = await api('PATCH', '/api/me', { displayName: e.target.displayName.value, email: e.target.email.value });
     state.user = user;
     renderUser();
     flash(e.target, 'Saved');
@@ -443,6 +845,72 @@ $('#password-form').addEventListener('submit', async (e) => {
     flash(f, 'Password changed');
   } catch (err) { flash(f, err.message, false); }
 });
+
+// ---------- two-step in profile ----------
+
+async function loadTwoStep() {
+  const t = await api('GET', '/api/me/two-step');
+  const on = t.on;
+  $('#two-step-dot').className = `dot ${on ? 'online' : t.required ? 'offline' : ''}`;
+  $('#two-step-text').textContent = on
+    ? `On since ${shortDate(t.since)} · ${t.recoveryLeft} recovery code${t.recoveryLeft === 1 ? '' : 's'} left`
+    : 'Off';
+  $('#two-step-off').classList.toggle('hidden', on);
+  $('#two-step-on').classList.toggle('hidden', !on);
+  $('#two-step-setup-here').replaceChildren();
+  // Admins who must keep it on move it to a new phone instead of turning it off.
+  $('#two-step-off-btn').textContent = t.required ? 'Move to a new phone' : 'Turn off';
+  $('#two-step-devices').replaceChildren(...[
+    el('span', { class: 'mono muted', text: `${t.trustedDevices} trusted device${t.trustedDevices === 1 ? '' : 's'}` }),
+    t.trustedDevices ? el('button', { class: 'link-btn mono', type: 'button', text: 'Forget them', onclick: forgetDevices }) : null,
+  ].filter(Boolean));
+}
+
+async function forgetDevices() {
+  try {
+    await api('POST', '/api/me/two-step/forget-devices');
+    await loadTwoStep();
+    flash($('#two-step-on'), 'Every device will be asked for a code next time');
+  } catch (err) { flash($('#two-step-on'), err.message, false); }
+}
+
+$('#two-step-begin').addEventListener('click', () => {
+  $('#two-step-off').classList.add('hidden');
+  twoStepSetup($('#two-step-setup-here'), (user) => { state.user = user; loadTwoStep(); });
+});
+
+$('#two-step-on').addEventListener('click', async (e) => {
+  const act = e.target.dataset && e.target.dataset.act;
+  if (!act) return;
+  const f = $('#two-step-on');
+  if (!f.password.value) {
+    flash(f, 'Type your password first', false);
+    f.password.focus();
+    return;
+  }
+  try {
+    if (act === 'codes') {
+      const res = await api('POST', '/api/me/two-step/recovery-codes', { password: f.password.value });
+      f.reset();
+      flash(f, '');
+      f.classList.add('hidden');
+      showRecoveryCodes($('#two-step-setup-here'), res.recoveryCodes, () => { state.user = res.user; loadTwoStep(); });
+    } else {
+      const moving = state.user.twoStep.required;
+      if (!moving && !confirm('Turn off two-step sign-in? Your password alone will sign you in.')) return;
+      const { user } = await api('POST', '/api/me/two-step/disable', { password: f.password.value });
+      f.reset();
+      flash(f, '');
+      state.user = user;
+      await loadTwoStep();
+      if (moving) {
+        $('#two-step-off').classList.add('hidden');
+        twoStepSetup($('#two-step-setup-here'), (u) => { state.user = u; loadTwoStep(); });
+      }
+    }
+  } catch (err) { flash(f, err.message, false); }
+});
+$('#two-step-on').addEventListener('submit', (e) => e.preventDefault());
 
 // ---------- storage ----------
 
@@ -516,17 +984,24 @@ function renderStorageRequests(requests) {
 // ---------- admin ----------
 
 async function loadAdmin() {
-  const [{ users }, { apps }, { requests, defaultLimitGb }] = await Promise.all([
-    api('GET', '/api/admin/users'), api('GET', '/api/apps'), api('GET', '/api/admin/storage-requests')]);
+  const [{ users }, { apps }, { requests, defaultLimitGb }, { invites, publicUrl }, { settings }] = await Promise.all([
+    api('GET', '/api/admin/users'), api('GET', '/api/apps'), api('GET', '/api/admin/storage-requests'), api('GET', '/api/admin/invites'),
+    api('GET', '/api/admin/settings')]);
+  $('#settings-form').adminsNeedTwoStep.checked = settings.adminsNeedTwoStep;
+  renderMailSettings(settings);
   state.users = users;
   state.apps = apps;
   state.defaultLimitGb = defaultLimitGb;
+  state.publicUrl = publicUrl;
   $('#settings-form').serverName.value = state.serverName;
+  $('#settings-form').publicUrl.value = publicUrl;
   pickers.default.setValue(defaultLimitGb);
   pickers.newUser.setValue(defaultLimitGb);
   renderStorageRequests(requests);
+  loadActivity();
   renderAppsEditor();
   renderUsers();
+  renderInvites(invites);
   $('#new-user-apps').replaceChildren(...appChecks(null));
   loadTls();
 }
@@ -598,6 +1073,22 @@ function renderUsers() {
         msg.className = 'msg ok'; msg.textContent = 'Saved';
       } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
     };
+    const resetTwoStep = async () => {
+      if (!confirm(`Reset two-step sign-in for ${u.displayName}? Their password alone will sign them in until they set it up again.`)) return;
+      try {
+        await api('PATCH', `/api/admin/users/${u.id}`, { resetTwoStep: true });
+        loadAdmin();
+      } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
+    };
+    const resetSpot = el('div', { class: 'reset-spot' });
+    const resetLink = async (email) => {
+      try {
+        const r = await api('POST', `/api/admin/users/${u.id}/reset-link`, { email });
+        const note = r.emailedTo ? `Emailed to ${r.emailedTo} · ` : r.mailError ? `Not emailed: ${r.mailError} · ` : '';
+        resetSpot.replaceChildren(linkBox(linkUrl('reset', r.token), `${note}Works once · until ${untilDate(r.expiresAt)} · makes any older reset link stop working`,
+          `Set a new password for ${state.serverName}`));
+      } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
+    };
     const remove = async () => {
       if (!confirm(`Remove ${u.displayName}? They will no longer be able to sign in.`)) return;
       try {
@@ -608,33 +1099,117 @@ function renderUsers() {
     return el('div', { class: 'user-row' },
       el('div', { class: 'who' },
         el('span', { class: 'avatar', text: (u.displayName || u.username).charAt(0).toUpperCase() }),
-        el('div', {}, el('div', { text: u.displayName }), el('div', { class: 'mono muted', text: `@${u.username}` })),
-        el('span', { class: 'pill', text: u.role })),
+        el('div', {}, el('div', { text: u.displayName }), el('div', { class: 'mono muted', text: [`@${u.username}`, u.email].filter(Boolean).join(' · ') })),
+        el('span', { class: 'pill', text: u.role }),
+        u.twoStep.on ? el('span', { class: 'pill approved', text: 'Two-step' }) : null),
       u.role === 'admin' ? el('span', { class: 'mono muted', text: 'Sees every app' }) : checks,
       el('div', { class: 'row user-storage' },
         el('span', { class: 'mono muted', text: `Storage · ${bytes(u.storage.usedBytes)} used` }),
         limit,
         el('button', { class: 'btn ghost small', type: 'button', text: 'Save', onclick: save })),
-      isMe ? null : el('button', { class: 'btn danger small', type: 'button', text: 'Remove', onclick: remove }),
+      isMe ? null : el('div', { class: 'row', style: 'margin:0' },
+        u.twoStep.on ? el('button', { class: 'btn ghost small', type: 'button', text: 'Reset two-step', onclick: resetTwoStep }) : null,
+        el('button', { class: 'btn ghost small', type: 'button', text: 'Password reset link', onclick: () => resetLink(false) }),
+        u.email && state.mailEnabled ? el('button', { class: 'btn ghost small', type: 'button', text: 'Email reset link', onclick: () => resetLink(true) }) : null,
+        el('button', { class: 'btn danger small', type: 'button', text: 'Remove', onclick: remove })),
+      resetSpot,
       msg);
   }));
 }
 
-$('#new-user-form').addEventListener('submit', async (e) => {
+function renderInvites(invites) {
+  const list = $('#invites');
+  if (!invites.length) return list.replaceChildren();
+  list.replaceChildren(el('div', { class: 'mono muted invites-head', text: 'Waiting to be used' }), ...invites.map((inv) => {
+    const cancel = async () => {
+      try {
+        await api('DELETE', `/api/admin/invites/${inv.id}`);
+        loadAdmin();
+      } catch (err) { flash($('#invite-form'), err.message, false); }
+    };
+    return el('div', { class: 'request-row' },
+      el('div', {},
+        el('div', { text: inv.label || 'Invite' }),
+        el('div', { class: 'mono muted', text: `${inv.role} · made ${shortDate(inv.createdAt)} · until ${untilDate(inv.expiresAt)}` })),
+      el('button', { class: 'btn danger small', type: 'button', text: 'Cancel', onclick: cancel }));
+  }));
+}
+
+$('#invite-form').role.addEventListener('change', (e) => {
+  $('#invite-apps-row').classList.toggle('hidden', e.target.value === 'admin');
+});
+
+$('#invite-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = e.target;
   try {
-    await api('POST', '/api/admin/users', {
-      displayName: f.displayName.value,
-      username: f.username.value,
-      password: f.password.value,
+    const { invite, token, emailedTo, mailError } = await api('POST', '/api/admin/invites', {
+      label: f.label.value,
+      email: state.mailEnabled ? f.email.value : '',
       role: f.role.value,
       apps: checkedApps($('#new-user-apps')),
       limitGb: pickers.newUser.getValue(),
     });
     f.reset();
-    flash(f, 'User added');
-    loadAdmin();
+    $('#invite-apps-row').classList.remove('hidden');
+    flash(f, '');
+    await loadAdmin();
+    $('#invite-result').replaceChildren(linkBox(linkUrl('join', token),
+      `${emailedTo ? `Emailed to ${emailedTo} · ` : mailError ? `Not emailed: ${mailError} · ` : ''}Works once · until ${untilDate(invite.expiresAt)} · the link is only shown now`,
+      `You're invited to ${state.serverName}`));
+  } catch (err) { flash(f, err.message, false); }
+});
+
+function renderMailSettings(settings) {
+  const f = $('#mail-form');
+  const m = settings.mail;
+  f.host.value = m.host;
+  f.port.value = m.host ? m.port : '';
+  f.security.value = m.security;
+  f.user.value = m.user;
+  f.password.value = '';
+  f.password.placeholder = m.hasPassword ? 'Saved · type to change' : '';
+  f.from.value = m.from;
+  $('#mail-needs-url').classList.toggle('hidden', !m.host || Boolean(settings.publicUrl));
+  setMailEnabled(settings.mailEnabled);
+}
+
+// Picking a security type fills in its usual port.
+$('#mail-form').security.addEventListener('change', (e) => {
+  const port = { starttls: 587, tls: 465, none: 25 }[e.target.value];
+  e.target.form.port.value = port;
+});
+
+async function saveMail(f) {
+  const { settings } = await api('PATCH', '/api/admin/settings', {
+    mail: {
+      host: f.host.value,
+      port: Number(f.port.value) || ({ starttls: 587, tls: 465, none: 25 }[f.security.value]),
+      security: f.security.value,
+      user: f.user.value,
+      password: f.password.value,
+      from: f.from.value,
+    },
+  });
+  renderMailSettings(settings);
+  renderUsers();
+}
+
+$('#mail-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await saveMail(e.target);
+    flash(e.target, e.target.host.value ? 'Saved' : 'Email turned off');
+  } catch (err) { flash(e.target, err.message, false); }
+});
+
+$('#mail-test').addEventListener('click', async () => {
+  const f = $('#mail-form');
+  flash(f, 'Sending…');
+  try {
+    await saveMail(f);
+    const { to } = await api('POST', '/api/admin/mail-test', {});
+    flash(f, `Sent to ${to}. Check that inbox (and spam).`);
   } catch (err) { flash(f, err.message, false); }
 });
 
@@ -644,11 +1219,90 @@ $('#settings-form').addEventListener('submit', async (e) => {
     const { settings } = await api('PATCH', '/api/admin/settings', {
       serverName: e.target.serverName.value,
       defaultLimitGb: pickers.default.getValue(),
+      adminsNeedTwoStep: e.target.adminsNeedTwoStep.checked,
+      publicUrl: e.target.publicUrl.value,
     });
     setServerName(settings.serverName);
+    state.publicUrl = settings.publicUrl || '';
+    e.target.publicUrl.value = state.publicUrl;
+    renderMailSettings(settings);
     flash(e.target, 'Saved');
   } catch (err) { flash(e.target, err.message, false); }
 });
+
+// ---------- activity log ----------
+
+const ACTIVITY_LABELS = {
+  'sign-in': 'Signed in',
+  'sign-out': 'Signed out',
+  setup: 'Set up Roost',
+  'sign-in-failed': 'Failed sign-in',
+  'password-changed': 'Changed password',
+  'user-added': 'Added user',
+  'user-changed': 'Changed user',
+  'user-removed': 'Removed user',
+  'user-joined': 'Joined with an invite',
+  'invite-created': 'Made an invite link',
+  'invite-removed': 'Cancelled an invite link',
+  'reset-link-created': 'Made a password reset link',
+  'password-reset': 'Reset password',
+  'storage-requested': 'Asked for storage',
+  'storage-approved': 'Approved storage',
+  'storage-declined': 'Declined storage',
+  'apps-changed': 'Changed apps',
+  'settings-changed': 'Changed server settings',
+};
+
+const activity = { filter: '', last: null };
+
+function ago(iso) {
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  if (s < 7 * 86400) return `${Math.floor(s / 86400)} d ago`;
+  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function activityRow(e) {
+  const exact = new Date(e.at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  const time = el('button', { type: 'button', class: 'activity-time mono muted', title: exact, text: ago(e.at) });
+  time.addEventListener('click', () => { time.textContent = time.textContent === exact ? ago(e.at) : exact; });
+  // "raven → mia" when an admin acted on someone else; just the name otherwise.
+  const who = e.actor && e.target && e.actor !== e.target ? `${e.actor} → ${e.target}` : e.actor || e.target || 'unknown';
+  return el('li', { class: `activity-row${e.kind === 'failed' ? ' failed' : ''}` },
+    el('div', { class: 'activity-main' },
+      el('div', {}, el('span', { class: 'activity-what', text: ACTIVITY_LABELS[e.type] || e.type }), el('span', { class: 'activity-who', text: ` · ${who}` })),
+      el('div', { class: 'activity-detail mono muted', text: [e.detail, e.ip].filter(Boolean).join(' · ') })),
+    time);
+}
+
+async function loadActivity(more = false) {
+  const list = $('#activity');
+  const params = new URLSearchParams();
+  if (activity.filter) params.set('filter', activity.filter);
+  if (more && activity.last) params.set('before', activity.last);
+  try {
+    const { entries, more: hasMore } = await api('GET', `/api/admin/activity?${params}`);
+    const rows = entries.map(activityRow);
+    if (more) list.append(...rows);
+    else list.replaceChildren(...(rows.length ? rows : [el('li', { class: 'empty mono', text: 'Nothing here yet' })]));
+    activity.last = entries.length ? entries[entries.length - 1].seq : activity.last;
+    $('#activity-more-row').classList.toggle('hidden', !hasMore);
+    $('#activity-panel > .msg').textContent = '';
+  } catch (err) { flash($('#activity-panel'), err.message, false); }
+}
+
+$('#activity-filters').addEventListener('click', (e) => {
+  const chip = e.target.closest('.chip');
+  if (!chip) return;
+  activity.filter = chip.dataset.filter;
+  activity.last = null;
+  for (const c of $('#activity-filters').children) c.setAttribute('aria-pressed', String(c === chip));
+  loadActivity();
+});
+
+$('#activity-more').addEventListener('click', () => loadActivity(true));
 
 // ---------- secure connection ----------
 
@@ -735,8 +1389,11 @@ $('#tls-off').addEventListener('click', async () => {
   setInterval(() => {
     if (state.user && !document.hidden && !$('#view-status').classList.contains('hidden')) loadStatus();
   }, STATUS_REFRESH_MS);
+  const token = linkToken();
+  if (token) return showJoin(token);
   const s = await api('GET', '/api/state');
   setServerName(s.serverName);
+  state.mailEnabled = s.mailEnabled;
   if (s.user) await enter(s.user);
   else showWelcome(s.setupRequired);
 })();
