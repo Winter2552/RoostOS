@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a0a0a">
+  <title>Roost</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <!-- Fonts load when the server has internet; the page falls back to system fonts otherwise. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <!-- Setup and sign-in -->
+  <main id="welcome" class="welcome hidden">
+    <section class="card welcome-card">
+      <p class="hello">Hello,</p>
+      <h1>Welcome to <span data-server-name>Roost</span></h1>
+      <svg class="cubes" viewBox="0 0 150 130" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true">
+        <path d="M75 6 L105 23 L105 57 L75 74 L45 57 L45 23 Z" fill="currentColor"/>
+        <path d="M45 23 L75 40 L105 23 M75 40 V74" stroke="#0a0a0a"/>
+        <path d="M45 57 L75 74 L75 108 L45 125 L15 108 L15 74 Z"/>
+        <path d="M15 74 L45 91 L75 74 M45 91 V125"/>
+        <path d="M105 57 L135 74 L135 108 L105 125 L75 108 L75 74 Z"/>
+        <path d="M75 74 L105 91 L135 74 M105 91 V125"/>
+      </svg>
+      <p id="welcome-lead" class="mono muted" style="margin:0 0 22px"></p>
+      <form id="welcome-form" autocomplete="on">
+        <label class="field hidden" id="display-name-field"><span>Your name</span><input type="text" name="displayName" autocomplete="name" maxlength="60"></label>
+        <label class="field"><span>Username</span><input type="text" name="username" autocomplete="username" required autocapitalize="none" spellcheck="false"></label>
+        <label class="field"><span>Password</span><input type="password" name="password" autocomplete="current-password" required minlength="8"></label>
+        <button class="btn" type="submit" id="welcome-submit">Continue</button>
+        <div class="msg error" id="welcome-msg" role="alert"></div>
+      </form>
+    </section>
+  </main>
+
+  <!-- Signed-in dashboard -->
+  <div id="shell" class="frame hidden">
+    <header class="topbar">
+      <a class="brand" href="#/apps"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span data-server-name>Roost</span></a>
+      <nav class="nav mono">
+        <a href="#/apps" data-view="apps">Apps</a>
+        <a href="#/profile" data-view="profile">Profile</a>
+        <a href="#/admin" data-view="admin" class="admin-only">Admin</a>
+      </nav>
+      <div class="who">
+        <span class="avatar" id="avatar"></span>
+        <span id="who-name"></span>
+        <button class="link-btn mono" id="logout">Sign out</button>
+      </div>
+    </header>
+
+    <!-- Apps view -->
+    <section id="view-apps">
+      <div class="hero">
+        <div class="hero-left">
+          <div class="mono muted" id="greeting">Hello</div>
+          <h1>Welcome<br>home,<br><span id="hero-name"></span><sup>®</sup></h1>
+          <div class="tags mono"><span>Home server</span><span>/</span><span id="app-count">0 apps</span></div>
+          <p>Everything on the Roost lives here. Pick an app to open it. Media, galaxies, files and photos, all running at home.</p>
+        </div>
+        <div class="hero-right">
+          <div class="stack-label">Roost is<br>always ---<br>home</div>
+          <div class="gauge-wrap"><span class="br-b"></span>
+            <svg class="gauge" viewBox="0 0 300 300" fill="none" stroke="currentColor" aria-label="Memory in use">
+              <circle cx="150" cy="150" r="118" stroke-opacity="0.5"/>
+              <circle id="gauge-arc" cx="150" cy="150" r="118" stroke-width="3" stroke-dasharray="0 742" transform="rotate(-90 150 150)"/>
+              <line x1="10" y1="150" x2="290" y2="150" stroke-opacity="0.5"/>
+              <path d="M140 92 L160 92 L150 104 Z" fill="currentColor" stroke="none"/>
+              <circle cx="150" cy="62" r="6"/><line x1="130" y1="62" x2="170" y2="62"/><line x1="150" y1="44" x2="150" y2="80"/>
+              <g id="ticks" stroke-opacity="0.8"></g>
+              <rect x="112" y="138" width="76" height="24" fill="#0a0a0a"/>
+              <text id="gauge-label" x="150" y="155" text-anchor="middle" font-size="12" stroke="none">Memory</text>
+            </svg>
+          </div>
+          <div class="stats mono">
+            <div class="stat">Uptime<b id="stat-uptime">—</b></div>
+            <div class="stat">Memory<b id="stat-mem">—</b></div>
+            <div class="stat">Load<b id="stat-load">—</b></div>
+            <div class="stat">Storage<b id="stat-disk">—</b></div>
+          </div>
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-head">
+          <h2>Your apps</h2>
+          <span class="mono muted" id="clock"></span>
+        </div>
+        <div class="apps" id="apps"></div>
+      </div>
+    </section>
+
+    <!-- Profile view -->
+    <section id="view-profile" class="section hidden">
+      <div class="section-head"><h2>Profile</h2><span class="mono muted" id="profile-role"></span></div>
+      <form class="card panel" id="profile-form">
+        <h3>Your details</h3><span class="mono muted">How Roost greets you</span>
+        <div class="form-grid">
+          <label class="field"><span>Display name</span><input type="text" name="displayName" maxlength="60"></label>
+          <label class="field"><span>Username</span><input type="text" name="username" disabled></label>
+        </div>
+        <div class="row"><button class="btn" type="submit">Save</button></div>
+        <div class="msg" role="status"></div>
+      </form>
+      <form class="card panel" id="password-form">
+        <h3>Password</h3><span class="mono muted">At least 8 characters</span>
+        <div class="form-grid">
+          <label class="field"><span>Current password</span><input type="password" name="currentPassword" autocomplete="current-password" required></label>
+          <label class="field"><span>New password</span><input type="password" name="newPassword" autocomplete="new-password" required minlength="8"></label>
+        </div>
+        <div class="row"><button class="btn" type="submit">Change password</button></div>
+        <div class="msg" role="status"></div>
+      </form>
+    </section>
+
+    <!-- Admin view -->
+    <section id="view-admin" class="section hidden">
+      <div class="section-head"><h2>Admin</h2><span class="mono muted">Apps · users · server</span></div>
+
+      <form class="card panel" id="apps-form">
+        <h3>Apps</h3>
+        <span class="mono muted">Use {host} in a link to mean "the address you opened Roost on", e.g. http://{host}:8096</span>
+        <div id="apps-editor"></div>
+        <div class="row">
+          <button class="btn ghost small" type="button" id="add-app">+ Add app</button>
+          <button class="btn" type="submit">Save apps</button>
+        </div>
+        <div class="msg" role="status"></div>
+      </form>
+
+      <div class="card panel">
+        <h3>Users</h3><span class="mono muted">Who can sign in, and which apps they see</span>
+        <div id="users"></div>
+      </div>
+
+      <form class="card panel" id="new-user-form">
+        <h3>Add a user</h3><span class="mono muted">Admins see every app</span>
+        <div class="form-grid">
+          <label class="field"><span>Display name</span><input type="text" name="displayName" maxlength="60"></label>
+          <label class="field"><span>Username</span><input type="text" name="username" required autocapitalize="none" spellcheck="false"></label>
+          <label class="field"><span>Password</span><input type="password" name="password" autocomplete="new-password" required minlength="8"></label>
+          <label class="field"><span>Role</span><select name="role"><option value="user">User</option><option value="admin">Admin</option></select></label>
+        </div>
+        <div class="row"><span class="mono muted">Apps</span><div class="checks" id="new-user-apps"></div></div>
+        <div class="row"><button class="btn" type="submit">Add user</button></div>
+        <div class="msg" role="status"></div>
+      </form>
+
+      <form class="card panel" id="settings-form">
+        <h3>Server</h3><span class="mono muted">The name shown across Roost</span>
+        <div class="form-grid"><label class="field"><span>Server name</span><input type="text" name="serverName" maxlength="40"></label></div>
+        <div class="row"><button class="btn" type="submit">Save</button></div>
+        <div class="msg" role="status"></div>
+      </form>
+    </section>
+
+    <footer>
+      <div class="footer mono">
+        <span id="foot-count">01/04</span>
+        <span class="hide-sm" id="foot-host"></span>
+        <span class="hide-sm" style="text-align:right">Self-hosted · ZimaOS</span>
+        <span class="big"><span data-server-name>Roost</span></span>
+      </div>
+      <div class="checker" aria-hidden="true"></div>
+    </footer>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

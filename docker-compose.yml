@@ -1,0 +1,19 @@
+# Roost homepage. On ZimaOS: App Store → Custom Install → Import, and paste this file.
+# For now it builds from this folder; once an image is published, swap `build: .` for `image:`.
+name: roost
+
+services:
+  roost:
+    build: .
+    container_name: roost
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      DATA_DIR: /data
+      # Set to "true" only when Roost is served over HTTPS (e.g. through Tailscale serve).
+      SECURE_COOKIES: "false"
+    volumes:
+      # On ZimaOS this keeps Roost's accounts and app list with the other app data.
+      - /DATA/AppData/roost:/data
