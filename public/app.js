@@ -403,7 +403,7 @@ function route() {
   if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin')) view = 'apps';
   for (const v of VIEWS) $(`#view-${v}`).classList.toggle('hidden', v !== view);
   document.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
-  if (view === 'admin') loadAdmin();
+  if (view === 'admin') { loadAdmin(); loadJellyfin(); }
   if (view === 'profile') { loadStorage(); loadTwoStep(); loadDevices(); }
   if (view === 'status') loadStatus();
 }
@@ -444,7 +444,7 @@ function renderApps() {
         el('span', { text: app.url ? 'Open →' : isAdmin ? 'Add link' : '' })),
     ];
     return app.url
-      ? el('a', { class: 'card app-card', href: resolveUrl(app.url), target: '_blank', rel: 'noopener' }, children)
+      ? el('a', { class: 'card app-card', href: app.openUrl || resolveUrl(app.url), target: '_blank', rel: 'noopener' }, children)
       : el('div', { class: 'card app-card disabled' }, children);
   }));
 }
@@ -831,6 +831,46 @@ async function loadAdmin() {
   renderUsers();
   $('#new-user-apps').replaceChildren(...appChecks(null));
 }
+
+// ---------- Jellyfin sign-in ----------
+
+// Loaded on its own so a slow or stopped Jellyfin never holds up the Admin page.
+async function loadJellyfin() {
+  try {
+    renderJellyfin(await api('GET', '/api/admin/jellyfin'));
+  } catch (err) { flash($('#jellyfin-form'), err.message, false); }
+}
+
+function renderJellyfin(j) {
+  const f = $('#jellyfin-form');
+  f.url.value = j.url;
+  f.apiKey.value = '';
+  f.apiKey.placeholder = j.keySaved ? 'Saved · paste a new one to replace it' : '';
+  $('#jellyfin-dot').className = `dot ${j.connected ? 'online' : j.url ? 'offline' : ''}`;
+  $('#jellyfin-text').textContent = j.connected
+    ? `Connected to ${j.serverName} · Jellyfin ${j.version} · ${j.accounts} account${j.accounts === 1 ? '' : 's'}`
+    : j.url ? `Can't reach Jellyfin: ${j.error}` : 'Off · Jellyfin keeps its own sign-in';
+  $('#jellyfin-off').classList.toggle('hidden', !j.url);
+  $('#jellyfin-save').textContent = j.url ? 'Save' : 'Connect';
+}
+
+$('#jellyfin-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    renderJellyfin(await api('PUT', '/api/admin/jellyfin', { url: f.url.value, apiKey: f.apiKey.value }));
+    flash(f, 'Connected. People are linked to Jellyfin the next time they sign in to Roost.');
+  } catch (err) { flash(f, err.message, false); }
+});
+
+$('#jellyfin-off').addEventListener('click', async () => {
+  const f = $('#jellyfin-form');
+  if (!confirm('Turn off the Jellyfin link? Jellyfin keeps its accounts; people sign in to it themselves.')) return;
+  try {
+    renderJellyfin(await api('PUT', '/api/admin/jellyfin', { url: '' }));
+    flash(f, 'Turned off');
+  } catch (err) { flash(f, err.message, false); }
+});
 
 function appChecks(selected) {
   return state.apps.map((a) => el('label', {},

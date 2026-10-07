@@ -12,6 +12,7 @@ const { parseDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
 const twoStep = require('./twostep');
 const { qrSvg } = require('./qr');
+const { Jellyfin, PREFIX: JELLYFIN_PREFIX, OPENER_HTML } = require('./jellyfin');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const COOKIE = 'roost_session';
@@ -176,7 +177,12 @@ async function timedProbe(url, timeoutMs) {
 
 function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', maxFailedSignIns = 10 } = {}) {
   const store = new Store(dataDir);
-  const sessions = new Sessions(path.join(dataDir, 'sessions.json'));
+  const jellyfin = new Jellyfin(() => store.db.settings.jellyfin);
+  // Jellyfin sign-ins still being made for a Roost sign-in, by its id.
+  const jellyfinLinks = new Map();
+  const sessions = new Sessions(path.join(dataDir, 'sessions.json'), (s) => {
+    if (s.jf) jellyfin.logout(s.jf.token).catch(() => {});
+  });
   const limiter = new RateLimiter(maxFailedSignIns);
   // Sign-ins waiting for a code, and authenticator secrets waiting to be
   // confirmed. Both are short-lived, so they stay in memory.
@@ -215,13 +221,64 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
 
   // A sign-in that names a device (an app on a phone) gets a long-lived device
   // key in the reply instead of a cookie.
-  function login(req, res, user, { status = 200, cookies = [], device = '' } = {}) {
+  function login(req, res, user, { status = 200, cookies = [], device = '', password = null } = {}) {
     if (device) {
       const key = sessions.create(user.id, { kind: 'app', name: device });
       return send(res, status, { user: publicUser(db(), user), key });
     }
     const token = sessions.create(user.id, { name: deviceName(req.headers['user-agent']) });
+    if (password !== null) linkJellyfin(sessions.get(token), user, password);
     send(res, status, { user: publicUser(db(), user) }, { 'Set-Cookie': [sessionCookie(token, secureCookies), ...cookies] });
+  }
+
+  // ---------- Jellyfin ----------
+
+  function canUseJellyfin(user) {
+    return visibleApps(db(), user).some((a) => a.id === 'jellyfin');
+  }
+
+  function jellyfinFailed(err) {
+    console.error(`Jellyfin: ${err.message}`);
+  }
+
+  // Roost only knows a password at the moment it's typed, so that's when the
+  // Jellyfin account gets the same one.
+  function syncJellyfinPassword(user, password) {
+    if (!jellyfin.enabled() || !canUseJellyfin(user)) return Promise.resolve(null);
+    return jellyfin.ensureAccount(user.username, password).catch((err) => { jellyfinFailed(err); return null; });
+  }
+
+  // Signs this browser in to Jellyfin as well, in the background. The token is
+  // kept with the Roost sign-in and ends with it.
+  function linkJellyfin(session, user, password) {
+    if (!session || !jellyfin.enabled() || !canUseJellyfin(user)) return;
+    const work = syncJellyfinPassword(user, password)
+      .then(() => jellyfin.signIn(user.username, password, { device: session.name || 'Roost', deviceId: `roost-${session.id}` }))
+      .then((jf) => {
+        if (sessions.list(user.id).includes(session)) {
+          session.jf = jf;
+          sessions.save();
+        } else {
+          jellyfin.logout(jf.token).catch(() => {});
+        }
+      })
+      .catch(jellyfinFailed)
+      .finally(() => jellyfinLinks.delete(session.id));
+    jellyfinLinks.set(session.id, work);
+  }
+
+  function jellyfinAccessChanged(user) {
+    if (!jellyfin.enabled()) return;
+    if (canUseJellyfin(user)) {
+      jellyfin.enable(user.username).catch(jellyfinFailed);
+      return;
+    }
+    for (const s of sessions.list(user.id)) {
+      if (s.jf) jellyfin.logout(s.jf.token).catch(() => {});
+      delete s.jf;
+    }
+    sessions.save();
+    jellyfin.disable(user.username).catch(jellyfinFailed);
   }
 
   function deviceView(s, current) {
@@ -263,6 +320,16 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     };
   }
 
+  async function jellyfinView() {
+    const c = db().settings.jellyfin;
+    if (!c || !c.url) return { url: '', keySaved: false, connected: false };
+    try {
+      return { url: c.url, keySaved: Boolean(c.apiKey), connected: true, ...(await jellyfin.check()) };
+    } catch (err) {
+      return { url: c.url, keySaved: Boolean(c.apiKey), connected: false, error: err.status === 401 ? 'the API key was refused' : err.message };
+    }
+  }
+
   function cleanApps(input) {
     if (!Array.isArray(input) || input.length > 48) throw new HttpError(400, 'Apps must be a list');
     const seen = new Set();
@@ -291,7 +358,8 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
   }
 
   function settingsView() {
-    return { ...db().settings, defaultLimitGb: storage.defaultLimitGb(db()), adminsNeedTwoStep: adminsNeedTwoStep(db()) };
+    const { jellyfin: _hidden, ...settings } = db().settings;
+    return { ...settings, defaultLimitGb: storage.defaultLimitGb(db()), adminsNeedTwoStep: adminsNeedTwoStep(db()) };
   }
 
   function adminView(user) {
@@ -337,7 +405,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       };
       db().users.push(user);
       store.save();
-      login(req, res, user, { status: 201 });
+      login(req, res, user, { status: 201, password: body.password });
     },
 
     'POST /api/login': async (req, res) => {
@@ -350,10 +418,12 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         throw new HttpError(401, 'Wrong username or password');
       }
       const device = str(body.device, 60);
-      if (!user.twoStep || isTrusted(req, user)) return login(req, res, user, { device });
+      if (!user.twoStep || isTrusted(req, user)) return login(req, res, user, { device, password: body.password });
       forget(pendingCodes);
       const ticket = crypto.randomBytes(24).toString('hex');
-      pendingCodes.set(ticket, { userId: user.id, device, expires: Date.now() + CODE_WAIT_MS, tries: 0 });
+      // The password is only held in memory until the code arrives, so the
+      // Jellyfin sign-in can happen then too.
+      pendingCodes.set(ticket, { userId: user.id, device, password: body.password, expires: Date.now() + CODE_WAIT_MS, tries: 0 });
       send(res, 200, { twoStep: true, ticket });
     },
 
@@ -391,7 +461,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       pendingCodes.delete(body.ticket);
       const cookies = body.trust === true && !pending.device ? [trustDevice(user)] : [];
       store.save();
-      login(req, res, user, { cookies, device: pending.device });
+      login(req, res, user, { cookies, device: pending.device, password: pending.password });
     },
 
     'POST /api/logout': (req, res) => {
@@ -411,6 +481,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         user.password = hashPassword(body.newPassword);
         // Anyone who knew the old password is signed out; this device stays in.
         sessions.destroyUser(user.id, tokenOf(req));
+        syncJellyfinPassword(user, body.newPassword);
       }
       store.save();
       send(res, 200, { user: publicUser(db(), user) });
@@ -521,7 +592,51 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
 
     'GET /api/apps': (req, res) => {
       const user = requireUser(req);
-      send(res, 200, { apps: visibleApps(db(), user) });
+      // With the Jellyfin link on, the card opens Jellyfin through Roost,
+      // already signed in.
+      const apps = visibleApps(db(), user).map((a) => (a.id === 'jellyfin' && jellyfin.enabled() ? { ...a, openUrl: `${JELLYFIN_PREFIX}/` } : a));
+      send(res, 200, { apps });
+    },
+
+    // The opener page asks for this browser's Jellyfin sign-in.
+    'GET /api/jellyfin/session': async (req, res) => {
+      const user = requireUser(req);
+      if (!canUseJellyfin(user)) throw new HttpError(403, "You don't have access to Jellyfin");
+      const session = sessions.get(tokenOf(req));
+      const pending = session && jellyfinLinks.get(session.id);
+      if (pending) await Promise.race([pending, new Promise((r) => setTimeout(r, 4000))]);
+      const jf = session && session.jf;
+      send(res, 200, jf ? { token: jf.token, userId: jf.userId, serverId: jf.serverId } : {});
+    },
+
+    'GET /api/admin/jellyfin': async (req, res) => {
+      requireAdmin(req);
+      send(res, 200, await jellyfinView());
+    },
+
+    'PUT /api/admin/jellyfin': async (req, res) => {
+      requireAdmin(req);
+      const body = await readJson(req);
+      const url = str(body.url, 300).replace(/\/+$/, '');
+      if (!url) {
+        delete db().settings.jellyfin;
+        store.save();
+        return send(res, 200, await jellyfinView());
+      }
+      if (!/^https?:\/\/[^\s/]+/.test(url)) throw new HttpError(400, 'Address must start with http:// or https://');
+      const old = db().settings.jellyfin || {};
+      const apiKey = str(body.apiKey, 100) || old.apiKey;
+      if (!apiKey) throw new HttpError(400, 'Paste an API key from Jellyfin');
+      db().settings.jellyfin = { url, apiKey };
+      jellyfin.cache = null;
+      const view = await jellyfinView();
+      if (!view.connected) {
+        if (old.url) db().settings.jellyfin = old;
+        else delete db().settings.jellyfin;
+        throw new HttpError(400, `Couldn't reach Jellyfin with that address and key: ${view.error}`);
+      }
+      store.save();
+      send(res, 200, view);
     },
 
     'GET /api/apps/status': async (req, res) => {
@@ -620,6 +735,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       };
       db().users.push(user);
       store.save();
+      syncJellyfinPassword(user, body.password);
       send(res, 201, { user: adminView(user) });
     },
 
@@ -641,6 +757,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         user.password = hashPassword(body.password);
         user.trusted = [];
         sessions.destroyUser(user.id);
+        syncJellyfinPassword(user, body.password);
       }
       // For someone who lost their phone and their recovery codes: they sign
       // in with just their password and set it up again.
@@ -648,6 +765,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         delete user.twoStep;
         user.trusted = [];
       }
+      if (body.apps !== undefined || body.role !== undefined) jellyfinAccessChanged(user);
       store.save();
       send(res, 200, { user: adminView(user) });
     },
@@ -655,10 +773,11 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     'DELETE /api/admin/users/:id': (req, res, id) => {
       const admin = requireAdmin(req);
       if (id === admin.id) throw new HttpError(400, "You can't delete yourself");
-      const before = db().users.length;
+      const gone = db().users.find((u) => u.id === id);
+      if (!gone) throw new HttpError(404, 'No such user');
       db().users = db().users.filter((u) => u.id !== id);
-      if (db().users.length === before) throw new HttpError(404, 'No such user');
       sessions.destroyUser(id);
+      if (jellyfin.enabled()) jellyfin.disable(gone.username).catch(jellyfinFailed);
       db().storageRequests = storage.requestsOf(db()).filter((r) => r.userId !== id);
       store.save();
       send(res, 200, { ok: true });
@@ -671,6 +790,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       const ids = new Set(db().apps.map((a) => a.id));
       for (const u of db().users) if (Array.isArray(u.apps)) u.apps = u.apps.filter((a) => ids.has(a));
       store.save();
+      for (const u of db().users) jellyfinAccessChanged(u);
       send(res, 200, { apps: db().apps });
     },
 
@@ -805,13 +925,40 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     });
   }
 
+  // Jellyfin is only reachable through Roost by people Roost lets in to it.
+  function jellyfinAllowed(req) {
+    const user = currentUser(req);
+    return Boolean(user && jellyfin.enabled() && canUseJellyfin(user));
+  }
+
+  function serveJellyfin(req, res, pathname) {
+    if (!jellyfinAllowed(req)) {
+      if (req.method === 'GET') {
+        res.writeHead(302, { Location: '/', 'Cache-Control': 'no-store' });
+        return res.end();
+      }
+      throw new HttpError(currentUser(req) ? 403 : 401, 'Sign in to Roost first');
+    }
+    if (pathname === JELLYFIN_PREFIX) {
+      res.writeHead(302, { Location: `${JELLYFIN_PREFIX}/` });
+      return res.end();
+    }
+    if (pathname === `${JELLYFIN_PREFIX}/` && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(OPENER_HTML);
+    }
+    jellyfin.proxy(req, res);
+  }
+
   const server = http.createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
     res.setHeader('X-Frame-Options', 'DENY');
     try {
       const { pathname } = new URL(req.url, 'http://roost');
-      if (pathname.startsWith('/api/')) {
+      if (pathname === JELLYFIN_PREFIX || pathname.startsWith(`${JELLYFIN_PREFIX}/`)) {
+        serveJellyfin(req, res, pathname);
+      } else if (pathname.startsWith('/api/')) {
         const found = route(req.method, pathname);
         if (!found) throw new HttpError(404, 'Not found');
         await found[0](req, res, found[1]);
@@ -825,6 +972,12 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       if (status === 500) console.error(err);
       if (!res.headersSent) send(res, status, { error: status === 500 ? 'Something went wrong' : err.message });
     }
+  });
+
+  server.on('upgrade', (req, socket, head) => {
+    const { pathname } = new URL(req.url, 'http://roost');
+    if (pathname.startsWith(`${JELLYFIN_PREFIX}/`) && jellyfinAllowed(req)) return jellyfin.proxyUpgrade(req, socket, head);
+    socket.destroy();
   });
 
   return server;

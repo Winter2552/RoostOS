@@ -62,6 +62,17 @@ Roost is the only account system: one username and password (plus two-step sign-
 - **Device keys for phone apps**: an app signs in with `POST /api/login` and `{ "username", "password", "device": "Raven's iPhone" }` (then `/api/login/code` if two-step is on), and gets a `key` back instead of a cookie. It sends `Authorization: Bearer <key>` on every request. Keys last a year and show up under signed-in devices.
 - **For apps Roost serves** (Nest and Glint, or anything behind a proxy): `GET /api/auth/check?app=<app id>` answers 200 with `{ user: { id, username, displayName, role } }` when the browser or key is signed in and allowed that app, 401 when nobody is signed in, and 403 when they don't have access.
 
+### Jellyfin
+
+Connect Jellyfin under **Admin → Jellyfin sign-in**: its address as Roost reaches it (on ZimaOS, the server's LAN address and port, e.g. `http://192.168.1.20:8096`) and an API key made in Jellyfin under **Dashboard → API Keys**. Then:
+
+- **Same account everywhere**: everyone with Jellyfin access gets a Jellyfin account with their Roost username and password. Roost only knows a password when it's typed, so the account is made or updated when the user is added, signs in, or changes their password. An existing Jellyfin account with the same name is taken over at the person's next Roost sign-in. Jellyfin admin accounts are never changed.
+- **Opens signed in**: the Jellyfin card opens Jellyfin through Roost at `/jellyfin/`, already signed in as that person, in any browser on any device. Each Roost sign-in is its own Jellyfin device, and signing out of Roost signs that browser out of Jellyfin too.
+- **Access follows Roost**: taking Jellyfin away from someone, or deleting them, switches their Jellyfin account off and ends their Jellyfin sign-ins. Giving it back switches it on again.
+- **Only for people Roost lets in**: `/jellyfin/` needs a Roost sign-in with Jellyfin access, so Jellyfin isn't reachable through Roost by anyone else.
+- **Jellyfin's own apps** (TV, phone) sign in with the same username and password once per device.
+- If Jellyfin is down or the link is off, Roost works as before and the card opens Jellyfin's own address.
+
 ## Stack
 
 Plain Node.js (20+) with no npm dependencies, and a vanilla HTML/CSS/JS front end with no build step. Accounts and the app list live in one JSON file (`/data/roost.json`). Passwords are hashed with scrypt; sessions are HttpOnly, SameSite=Strict cookies held in memory, so a restart signs everyone out.

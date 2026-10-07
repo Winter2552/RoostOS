@@ -491,3 +491,5 @@ a.btn { text-decoration: none; text-align: center; }
   .checks label { min-height: 44px; }
   .checks input[type='checkbox'] { width: 20px; height: 20px; }
 }
+
+.hint { margin: 14px 0 0; font-size: 12px; line-height: 1.6; }

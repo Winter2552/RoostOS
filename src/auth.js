@@ -30,8 +30,11 @@ const MAX_PER_USER = 30;
 const tokenHash = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
 
 class Sessions {
-  constructor(file = null) {
+  // onEnd(session) runs for every sign-in that ends (sign-out, expiry, cap),
+  // so anything tied to it, like a Jellyfin sign-in, can end too.
+  constructor(file = null, onEnd = () => {}) {
     this.file = file;
+    this.onEnd = onEnd;
     this.map = new Map();
     this.timer = null;
     if (file && fs.existsSync(file)) {
@@ -50,7 +53,7 @@ class Sessions {
     const now = Date.now();
     const mine = this.list(userId);
     // Keep the list tidy: drop the least recently used beyond the cap.
-    for (const old of mine.slice(MAX_PER_USER - 1)) this.map.delete(old.hash);
+    for (const old of mine.slice(MAX_PER_USER - 1)) this.end(old);
     this.map.set(tokenHash(token), {
       hash: tokenHash(token),
       id: crypto.randomBytes(6).toString('hex'),
@@ -70,7 +73,7 @@ class Sessions {
     if (!s) return null;
     const now = Date.now();
     if (s.expires < now) {
-      this.map.delete(s.hash);
+      this.end(s);
       this.save();
       return null;
     }
@@ -86,14 +89,22 @@ class Sessions {
     return [...this.map.values()].filter((s) => s.userId === userId).sort((a, b) => b.lastSeen - a.lastSeen);
   }
 
+  end(s) {
+    this.map.delete(s.hash);
+    this.onEnd(s);
+  }
+
   destroy(token) {
-    if (token && this.map.delete(tokenHash(token))) this.save();
+    const s = token && this.map.get(tokenHash(token));
+    if (!s) return;
+    this.end(s);
+    this.save();
   }
 
   destroyId(userId, id) {
     const s = this.list(userId).find((x) => x.id === id);
     if (!s) return false;
-    this.map.delete(s.hash);
+    this.end(s);
     this.save();
     return true;
   }
@@ -101,7 +112,7 @@ class Sessions {
   // Signs a user out everywhere, or everywhere except one sign-in.
   destroyUser(userId, keepToken = null) {
     const keep = keepToken && tokenHash(keepToken);
-    for (const [hash, s] of this.map) if (s.userId === userId && hash !== keep) this.map.delete(hash);
+    for (const [hash, s] of this.map) if (s.userId === userId && hash !== keep) this.end(s);
     this.save();
   }
 
