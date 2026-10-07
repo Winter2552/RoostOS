@@ -16,14 +16,26 @@ Roost is the home-server suite: one homepage that signs you in and shows the app
 - **First run** creates the admin account.
 - **Dashboard**: greeting, live server stats (uptime, memory, load, free space on the data drive) and a card for every app you have access to, each showing whether the app is reachable.
 - **Status**: refreshes every 5 seconds. First, each app (and Roost itself) with its container state from Docker: running, stopped, restarting, unhealthy, how long it has been up and how often it restarted, plus whether it answers on its link. Admins also see every other container. Below that, server health: uptime, CPU, memory and free space on each drive. Problems are listed at the top.
-- **Profile**: change your display name and password.
-- **Admin**: edit the app list and links, add or remove users, choose which apps each user sees, rename the server.
+- **Profile**: change your display name and password, see your storage use and limit, and ask an admin for more space.
+- **Admin**: edit the app list and links, add or remove users, choose which apps each user sees and how much storage they get, approve or decline storage requests, rename the server.
 
 ![Signing in to Roost](docs/screenshots/sign-in.png)
 
 ![The admin page: users and which apps each one sees](docs/screenshots/admin.png)
 
 App links can use `{host}`, which becomes whatever address you opened Roost on. `http://{host}:8096` works from the LAN IP, the hostname or a Tailscale name without editing anything.
+
+## Storage limits
+
+Every user has a storage limit in GB, picked with a slider that runs up to the size of the data drive (or typed exactly; admins can also tick "No limit"). New users start with the default set under **Admin → Server** (50 GB unless changed); only admins can change a limit. Other users can ask for more from their Profile, and the request waits under **Admin → Storage requests** until an admin approves it (optionally with a different amount) or declines it.
+
+Roost stores the limits and the usage each storage app reports, but holds no files itself, so the limit is *enforced* by Nest and Glint once they exist. They talk to Roost with the token in `ROOST_APP_TOKEN` (the app API is off when it is unset):
+
+```
+GET /api/storage/users/<username>          → { storage: { limitBytes, usedBytes, remainingBytes, ... } }
+PUT /api/storage/users/<username>/usage    { "app": "nest" | "glint", "bytes": 123 }
+Authorization: Bearer <ROOST_APP_TOKEN>
+```
 
 ## Stack
 

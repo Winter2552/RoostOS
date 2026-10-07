@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { Store } = require('./store');
 const { hashPassword, verifyPassword, Sessions, RateLimiter, SESSION_TTL_MS } = require('./auth');
+const storage = require('./storage');
 const { parseDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
 
@@ -137,7 +138,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost' } = {}) {
+function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '' } = {}) {
   const store = new Store(dataDir);
   const sessions = new Sessions();
   const limiter = new RateLimiter();
@@ -190,6 +191,20 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     });
   }
 
+  function cleanLimit(v) {
+    const limit = storage.parseLimitGb(v);
+    if (limit === undefined) throw new HttpError(400, `Storage limit must be a whole number of GB from 1 to ${storage.MAX_LIMIT_GB}, or blank for no limit`);
+    return limit;
+  }
+
+  function adminView(user) {
+    return { ...publicUser(user), storage: storage.storageOf(db(), user) };
+  }
+
+  function requireApp(req) {
+    if (!storage.appTokenOk(req, appToken)) throw new HttpError(401, 'App token missing or wrong');
+  }
+
   function cleanAppAccess(apps) {
     if (apps === null || apps === undefined) return null;
     if (!Array.isArray(apps)) throw new HttpError(400, 'Apps must be a list');
@@ -219,6 +234,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         displayName: str(body.displayName, 60) || username,
         role: 'admin',
         apps: null,
+        limitGb: null,
         password: hashPassword(body.password),
         createdAt: new Date().toISOString(),
       };
@@ -337,7 +353,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
 
     'GET /api/admin/users': (req, res) => {
       requireAdmin(req);
-      send(res, 200, { users: db().users.map(publicUser) });
+      send(res, 200, { users: db().users.map(adminView) });
     },
 
     'POST /api/admin/users': async (req, res) => {
@@ -353,12 +369,13 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         displayName: str(body.displayName, 60) || username,
         role: body.role === 'admin' ? 'admin' : 'user',
         apps: cleanAppAccess(body.apps),
+        limitGb: body.limitGb === undefined ? storage.defaultLimitGb(db()) : cleanLimit(body.limitGb),
         password: hashPassword(body.password),
         createdAt: new Date().toISOString(),
       };
       db().users.push(user);
       store.save();
-      send(res, 201, { user: publicUser(user) });
+      send(res, 201, { user: adminView(user) });
     },
 
     'PATCH /api/admin/users/:id': async (req, res, id) => {
@@ -368,6 +385,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       const body = await readJson(req);
       if (body.displayName !== undefined) user.displayName = str(body.displayName, 60) || user.username;
       if (body.apps !== undefined) user.apps = cleanAppAccess(body.apps);
+      if (body.limitGb !== undefined) user.limitGb = cleanLimit(body.limitGb);
       if (body.role !== undefined) {
         const role = body.role === 'admin' ? 'admin' : 'user';
         if (user.id === admin.id && role !== 'admin') throw new HttpError(400, "You can't remove your own admin role");
@@ -379,7 +397,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         sessions.destroyUser(user.id);
       }
       store.save();
-      send(res, 200, { user: publicUser(user) });
+      send(res, 200, { user: adminView(user) });
     },
 
     'DELETE /api/admin/users/:id': (req, res, id) => {
@@ -389,6 +407,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       db().users = db().users.filter((u) => u.id !== id);
       if (db().users.length === before) throw new HttpError(404, 'No such user');
       sessions.destroyUser(id);
+      db().storageRequests = storage.requestsOf(db()).filter((r) => r.userId !== id);
       store.save();
       send(res, 200, { ok: true });
     },
@@ -407,17 +426,110 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       requireAdmin(req);
       const body = await readJson(req);
       if (body.serverName !== undefined) db().settings.serverName = str(body.serverName, 40) || 'Roost';
+      if (body.defaultLimitGb !== undefined) db().settings.defaultLimitGb = cleanLimit(body.defaultLimitGb);
       store.save();
-      send(res, 200, { settings: db().settings });
+      send(res, 200, { settings: { ...db().settings, defaultLimitGb: storage.defaultLimitGb(db()) } });
+    },
+
+    // ---------- storage limits ----------
+
+    'GET /api/me/storage': (req, res) => {
+      const user = requireUser(req);
+      const requests = storage.requestsOf(db()).filter((r) => r.userId === user.id).slice(-5).reverse();
+      send(res, 200, { storage: storage.storageOf(db(), user), requests });
+    },
+
+    'POST /api/me/storage-requests': async (req, res) => {
+      const user = requireUser(req);
+      if (user.role === 'admin') throw new HttpError(400, 'Admins set their own limit under Admin → Users');
+      const body = await readJson(req);
+      const requestedGb = storage.parseLimitGb(body.requestedGb);
+      if (!requestedGb) throw new HttpError(400, 'Ask for a whole number of GB');
+      const current = storage.limitGbOf(db(), user);
+      if (current === null || requestedGb <= current) throw new HttpError(400, `Ask for more than your current ${current} GB`);
+      const requests = storage.requestsOf(db());
+      if (requests.some((r) => r.userId === user.id && r.status === 'pending')) {
+        throw new HttpError(409, 'You already have a request waiting for an admin');
+      }
+      const request = {
+        id: store.newId(),
+        userId: user.id,
+        currentGb: current,
+        requestedGb,
+        note: str(body.note, 300),
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+      };
+      requests.push(request);
+      store.save();
+      send(res, 201, { request });
+    },
+
+    'GET /api/admin/storage-requests': (req, res) => {
+      requireAdmin(req);
+      const users = new Map(db().users.map((u) => [u.id, u]));
+      const requests = storage.requestsOf(db())
+        .filter((r) => r.status === 'pending')
+        .map((r) => {
+          const u = users.get(r.userId);
+          return { ...r, user: u && { username: u.username, displayName: u.displayName }, storage: u && storage.storageOf(db(), u) };
+        });
+      send(res, 200, { requests, defaultLimitGb: storage.defaultLimitGb(db()) });
+    },
+
+    'POST /api/admin/storage-requests/:id': async (req, res, id) => {
+      const admin = requireAdmin(req);
+      const request = storage.requestsOf(db()).find((r) => r.id === id);
+      if (!request) throw new HttpError(404, 'No such request');
+      if (request.status !== 'pending') throw new HttpError(409, `That request was already ${request.status}`);
+      const body = await readJson(req);
+      if (body.action === 'approve') {
+        const user = db().users.find((u) => u.id === request.userId);
+        if (!user) throw new HttpError(404, 'No such user');
+        const limitGb = body.limitGb === undefined ? request.requestedGb : cleanLimit(body.limitGb);
+        user.limitGb = limitGb;
+        request.status = 'approved';
+        request.approvedGb = limitGb;
+      } else if (body.action === 'decline') {
+        request.status = 'declined';
+      } else {
+        throw new HttpError(400, 'Action must be approve or decline');
+      }
+      request.decidedAt = new Date().toISOString();
+      request.decidedBy = admin.username;
+      request.reply = str(body.reply, 300);
+      store.save();
+      send(res, 200, { request });
+    },
+
+    // For Nest and Glint: read a user's limit before accepting an upload, and
+    // report how much that user is storing in the app.
+    'GET /api/storage/users/:id': (req, res, username) => {
+      requireApp(req);
+      const user = db().users.find((u) => u.username === username);
+      if (!user) throw new HttpError(404, 'No such user');
+      send(res, 200, { username: user.username, storage: storage.storageOf(db(), user) });
+    },
+
+    'PUT /api/storage/users/:id/usage': async (req, res, username) => {
+      requireApp(req);
+      const user = db().users.find((u) => u.username === username);
+      if (!user) throw new HttpError(404, 'No such user');
+      const body = await readJson(req);
+      if (!storage.STORAGE_APPS.includes(body.app)) throw new HttpError(400, `App must be one of ${storage.STORAGE_APPS.join(', ')}`);
+      if (!Number.isSafeInteger(body.bytes) || body.bytes < 0) throw new HttpError(400, 'Bytes must be a whole number');
+      user.storageUsage = { ...user.storageUsage, [body.app]: body.bytes };
+      store.save();
+      send(res, 200, { username: user.username, storage: storage.storageOf(db(), user) });
     },
   };
 
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^\/api\/admin\/users\/([a-f0-9]+)$/);
-    if (m && routes[`${method} /api/admin/users/:id`]) return [routes[`${method} /api/admin/users/:id`], m[1]];
-    return null;
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/storage-requests|storage\/users))\/([a-z0-9._-]+)(\/usage)?$/);
+    const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
+    return handler ? [handler, m[2]] : null;
   }
 
   function serveStatic(req, res, pathname) {
@@ -464,10 +576,11 @@ if (require.main === module) {
   const port = Number(process.env.PORT) || 8080;
   const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
   const secureCookies = process.env.SECURE_COOKIES === 'true';
+  const appToken = process.env.ROOST_APP_TOKEN || '';
   const disks = parseDisks(process.env.ROOST_DISKS);
   const dockerHost = process.env.DOCKER_HOST || '';
   const roostContainer = process.env.ROOST_CONTAINER || 'roost';
-  createServer({ dataDir, secureCookies, disks, dockerHost, roostContainer }).listen(port, () => {
+  createServer({ dataDir, secureCookies, disks, dockerHost, roostContainer, appToken }).listen(port, () => {
     console.log(`Roost is running on http://localhost:${port} (data in ${dataDir})`);
   });
 }
