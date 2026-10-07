@@ -8,6 +8,7 @@ const { Store } = require('./store');
 const { hashPassword, verifyPassword, Sessions, RateLimiter, SESSION_TTL_MS } = require('./auth');
 const storage = require('./storage');
 const links = require('./links');
+const mail = require('./mail');
 const { parseDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
@@ -75,6 +76,7 @@ function publicUser(u) {
     displayName: u.displayName,
     role: u.role,
     apps: u.apps,
+    email: u.email || '',
     createdAt: u.createdAt,
   };
 }
@@ -114,7 +116,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, activitySaveDelayMs } = {}) {
+function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, activitySaveDelayMs, sendMail = mail.send } = {}) {
   const store = new Store(dataDir);
   const activity = new ActivityLog(dataDir, { saveDelayMs: activitySaveDelayMs });
   // Nest used to be an outside app with no link; it is built in now.
@@ -220,6 +222,12 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     return url.origin;
   }
 
+  // Settings for the admin page. The mail password never leaves the server.
+  function settingsView() {
+    const { mail: _mail, ...rest } = db().settings;
+    return { ...rest, publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady() };
+  }
+
   function adminView(user) {
     return { ...publicUser(user), storage: storage.storageOf(db(), user) };
   }
@@ -234,6 +242,92 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     const ids = new Set(db().apps.map((a) => a.id));
     return apps.filter((id) => ids.has(id));
   }
+
+  // ---------- email ----------
+
+  function mailSettings() {
+    return db().settings.mail || null;
+  }
+
+  // Emails need the public address so their links open from anywhere; the
+  // address in a request can't be trusted for that.
+  function mailReady() {
+    const m = mailSettings();
+    return Boolean(m && m.host && m.from && db().settings.publicUrl);
+  }
+
+  function mailView() {
+    const m = mailSettings();
+    if (!m) return { host: '', port: 587, security: 'starttls', user: '', from: '', hasPassword: false };
+    const { password, ...rest } = m;
+    return { ...rest, hasPassword: Boolean(password) };
+  }
+
+  function cleanMail(input, current) {
+    if (!input || typeof input !== 'object') throw new HttpError(400, 'Email settings must be an object');
+    const host = str(input.host, 200);
+    if (!host) return null; // Blank host turns email off.
+    if (!/^[A-Za-z0-9.-]+$/.test(host)) throw new HttpError(400, 'Mail server must be a host name like smtp.resend.com');
+    const port = Number(input.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new HttpError(400, 'Port must be a number like 587 or 465');
+    const security = mail.SECURITY.includes(input.security) ? input.security : 'starttls';
+    const from = str(input.from, 254);
+    if (!mail.validEmail(from)) throw new HttpError(400, 'Send from must be an email address like server@roostos.network');
+    const password = typeof input.password === 'string' && input.password !== ''
+      ? input.password.slice(0, 500)
+      : (current && current.password) || '';
+    return { host, port, security, user: str(input.user, 254), password, from };
+  }
+
+  function cleanEmail(v) {
+    const email = str(v, 254).toLowerCase();
+    if (email && !mail.validEmail(email)) throw new HttpError(400, "That doesn't look like an email address");
+    if (email && db().users.some((u) => u.email === email)) throw new HttpError(409, 'Another account already uses that email');
+    return email;
+  }
+
+  function linkUrl(kind, token) {
+    return `${db().settings.publicUrl}/${kind === 'reset' ? 'r' : 'j'}/${token}`;
+  }
+
+  async function deliver(to, subject, text) {
+    const m = mailSettings();
+    await sendMail(m, { from: m.from, fromName: db().settings.serverName, to, subject, text });
+  }
+
+  function resetEmail(user, token, validFor) {
+    const name = db().settings.serverName;
+    return [`Reset your ${name} password`, [
+      `Hi ${user.displayName},`,
+      '',
+      `Someone (hopefully you) asked to reset the password for @${user.username} on ${name}.`,
+      '',
+      'Choose a new password here:',
+      linkUrl('reset', token),
+      '',
+      `The link works once, for ${validFor}. If you didn't ask for this, ignore this email: your password hasn't changed.`,
+    ].join('\n')];
+  }
+
+  function inviteEmail(admin, token) {
+    const name = db().settings.serverName;
+    return [`You're invited to ${name}`, [
+      `${admin.displayName} has invited you to ${name}.`,
+      '',
+      'Open this link to choose your username and password:',
+      linkUrl('join', token),
+      '',
+      'The link works once and stops working after 7 days.',
+    ].join('\n')];
+  }
+
+  // Only the newest reset link for a user works.
+  function newResetLink(user, createdBy, ttlMs) {
+    db().links = (db().links || []).filter((l) => !(l.kind === 'reset' && l.userId === user.id));
+    return links.create(db(), { id: store.newId(), kind: 'reset', userId: user.id, createdBy }, ttlMs);
+  }
+
+  const forgotSentAt = new Map();
 
   // Finds a live link or explains why it doesn't work. Only misses count
   // towards the rate limit, so typing a username doesn't lock anyone out.
@@ -261,6 +355,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       send(res, 200, {
         serverName: db().settings.serverName,
         setupRequired: db().users.length === 0,
+        mailEnabled: mailReady(),
         user: user ? publicUser(user) : null,
       });
     },
@@ -312,6 +407,10 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       const user = requireUser(req);
       const body = await readJson(req);
       if (body.displayName !== undefined) user.displayName = str(body.displayName, 60) || user.username;
+      if (body.email !== undefined) {
+        const email = str(body.email, 254).toLowerCase();
+        if (email !== (user.email || '')) user.email = cleanEmail(email);
+      }
       if (body.newPassword !== undefined) {
         if (typeof body.currentPassword !== 'string' || !verifyPassword(body.currentPassword, user.password)) {
           throw new HttpError(400, 'Current password is wrong');
@@ -501,8 +600,20 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         createdBy: admin.id,
       }, links.INVITE_TTL_MS);
       store.save();
-      record(req, 'invite-created', { actor: admin.username, detail: [link.label, role].filter(Boolean).join(', ') });
-      send(res, 201, { invite: links.adminView(link), token });
+      const out = { invite: links.adminView(link), token };
+      const to = str(body.email, 254).toLowerCase();
+      if (to) {
+        if (!mail.validEmail(to)) out.mailError = "That doesn't look like an email address";
+        else if (!mailReady()) out.mailError = 'Email is not set up yet';
+        else {
+          try {
+            await deliver(to, ...inviteEmail(admin, token));
+            out.emailedTo = to;
+          } catch (err) { out.mailError = err.message; }
+        }
+      }
+      record(req, 'invite-created', { actor: admin.username, detail: [link.label, role, out.emailedTo && `emailed to ${out.emailedTo}`].filter(Boolean).join(', ') });
+      send(res, 201, out);
     },
 
     'DELETE /api/admin/invites/:id': (req, res, id) => {
@@ -515,16 +626,62 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       send(res, 200, { ok: true });
     },
 
-    'POST /api/admin/users/:id/reset-link': (req, res, id) => {
+    'POST /api/admin/users/:id/reset-link': async (req, res, id) => {
       const admin = requireAdmin(req);
       const user = db().users.find((u) => u.id === id);
       if (!user) throw new HttpError(404, 'No such user');
-      // Only the newest reset link for a user works.
-      db().links = (db().links || []).filter((l) => !(l.kind === 'reset' && l.userId === id));
-      const { token, link } = links.create(db(), { id: store.newId(), kind: 'reset', userId: id, createdBy: admin.id }, links.RESET_TTL_MS);
+      const body = req.headers['content-type'] ? await readJson(req) : {};
+      const { token, link } = newResetLink(user, admin.id, links.RESET_TTL_MS);
       store.save();
-      record(req, 'reset-link-created', { actor: admin.username, target: user.username });
-      send(res, 201, { expiresAt: link.expiresAt, token });
+      const out = { expiresAt: link.expiresAt, token };
+      if (body.email) {
+        if (!user.email) out.mailError = `${user.displayName} hasn't added an email address`;
+        else if (!mailReady()) out.mailError = 'Email is not set up yet';
+        else {
+          try {
+            await deliver(user.email, ...resetEmail(user, token, '24 hours'));
+            out.emailedTo = user.email;
+          } catch (err) { out.mailError = err.message; }
+        }
+      }
+      record(req, 'reset-link-created', { actor: admin.username, target: user.username, detail: out.emailedTo ? `emailed to ${out.emailedTo}` : '' });
+      send(res, 201, out);
+    },
+
+    // "Forgot password?" on the sign-in page. The answer is always the same,
+    // so it can't be used to find out who has an account.
+    'POST /api/forgot': async (req, res) => {
+      if (!limiter.allow(`forgot:${clientIp(req, trustProxy)}`)) throw new HttpError(429, 'Too many attempts, wait a few minutes');
+      const body = await readJson(req);
+      const login = str(body.login, 254).toLowerCase();
+      send(res, 200, { ok: true });
+      const user = login && db().users.find((u) => u.username === login || (u.email && u.email === login));
+      if (!user || !user.email || !mailReady()) return;
+      // At most one email per user every 5 minutes.
+      if (Date.now() - (forgotSentAt.get(user.id) || 0) < 5 * 60 * 1000) return;
+      forgotSentAt.set(user.id, Date.now());
+      const { token } = newResetLink(user, null, links.FORGOT_TTL_MS);
+      store.save();
+      deliver(user.email, ...resetEmail(user, token, '1 hour')).catch((err) => console.error(`Reset email to @${user.username} failed: ${err.message}`));
+    },
+
+    'GET /api/admin/settings': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, { settings: settingsView() });
+    },
+
+    'POST /api/admin/mail-test': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const to = str(body.to, 254).toLowerCase() || admin.email;
+      if (!mail.validEmail(to)) throw new HttpError(400, 'Add your email on Profile first, or type one here');
+      if (!mailSettings()) throw new HttpError(400, 'Save the email settings first');
+      try {
+        await deliver(to, `Test email from ${db().settings.serverName}`, `This is a test from ${db().settings.serverName}. Email is working.`);
+      } catch (err) {
+        throw new HttpError(502, err.message);
+      }
+      send(res, 200, { ok: true, to });
     },
 
     // The page a link opens asks what it is for, and (for invites) whether a
@@ -576,6 +733,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         createdAt: new Date().toISOString(),
         invitedBy: link.createdBy,
       };
+      if (body.email) user.email = cleanEmail(body.email);
       db().users.push(user);
       links.remove(db(), link);
       store.save();
@@ -622,9 +780,13 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         if (url !== (db().settings.publicUrl || '')) changes.push(`public address ${url || 'cleared'}`);
         db().settings.publicUrl = url;
       }
+      if (body.mail !== undefined) {
+        db().settings.mail = cleanMail(body.mail, mailSettings());
+        changes.push(`email ${db().settings.mail ? `via ${db().settings.mail.host}` : 'turned off'}`);
+      }
       store.save();
       if (changes.length) record(req, 'settings-changed', { actor: admin.username, detail: changes.join(', ') });
-      send(res, 200, { settings: { ...db().settings, defaultLimitGb: storage.defaultLimitGb(db()) } });
+      send(res, 200, { settings: settingsView() });
     },
 
     'GET /api/admin/activity': (req, res) => {

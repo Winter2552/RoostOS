@@ -48,6 +48,24 @@ Nobody needs to be in the room to get an account. Under **Admin → Invite someo
 - Codes are 8 characters with no look-alikes (no 0/O or 1/I/L), so they can be read out and typed in any case, with or without the dash. Wrong guesses are rate limited per address and codes are stored hashed.
 - Set **Admin → Server → Public address** (for example `https://roostos.network`) so links use it even when you make them at home. Left blank, links use whatever address you opened Roost on, so one made on `http://192.168.1.20:8080` only opens at home.
 
+## Email (Forgot password and emailed invites)
+
+Optional. With email set up, the sign-in page gets **Forgot password?**, which emails a reset link that works once for 1 hour. Invites and reset links can also be emailed straight from Admin. Users add their email address on **Profile**, or when they join from an invite.
+
+A home connection can't deliver email reliably: most providers block outgoing mail, and home addresses are on spam blocklists. So Roost hands each email to a relay over SMTP, using its own built-in sender (no packages). Any SMTP relay works. Two with free plans that let you send as your own domain:
+
+- **Resend**: 3,000 emails a month, 100 a day. SMTP host `smtp.resend.com`, port 587 (STARTTLS), username `resend`, password = an API key.
+- **Brevo**: 300 emails a day. SMTP host `smtp-relay.brevo.com`, port 587, with the login and SMTP key from its SMTP settings.
+
+To send as `server@roostos.network`:
+
+1. Sign up with the relay and add `roostos.network` as a sending domain. It gives you a few DNS records (SPF and DKIM). Add them in Cloudflare → DNS. Without them, mail lands in spam.
+2. In Roost, open **Admin → Server**, set **Public address** to `https://roostos.network`, and save. Email links always use this address.
+3. Fill in **Admin → Email** with the relay's details and **Send from** `server@roostos.network`, then press **Send me a test email**. It goes to the email on your Profile.
+4. Optional: so replies to `server@` reach you, turn on Cloudflare **Email Routing** and forward that address to your own inbox.
+
+The relay password is kept in `roost.json` and is never sent back to the browser. Leave **Mail server** blank to turn email off.
+
 ## Storage limits
 
 Every user has a storage limit in GB, picked with a slider that runs up to the size of the data drive (or typed exactly; admins can also tick "No limit"). New users start with the default set under **Admin → Server** (50 GB unless changed); only admins can change a limit. Other users can ask for more from their Profile, and the request waits under **Admin → Storage requests** until an admin approves it (optionally with a different amount) or declines it.

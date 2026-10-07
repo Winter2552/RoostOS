@@ -11,6 +11,7 @@ const crypto = require('crypto');
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const RESET_TTL_MS = 24 * 60 * 60 * 1000;
+const FORGOT_TTL_MS = 60 * 60 * 1000;
 
 const ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
 const CODE_LENGTH = 8;
@@ -76,4 +77,4 @@ function adminView(link) {
   return rest;
 }
 
-module.exports = { INVITE_TTL_MS, RESET_TTL_MS, prune, create, find, remove, adminView };
+module.exports = { INVITE_TTL_MS, RESET_TTL_MS, FORGOT_TTL_MS, prune, create, find, remove, adminView };
