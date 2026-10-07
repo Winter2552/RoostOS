@@ -111,6 +111,40 @@ test('status reports unset apps without probing', async () => {
   assert.ok(['online', 'offline'].includes(body.status.jellyfin));
 });
 
+test('status page needs a signed-in user', async () => {
+  assert.equal((await call('GET', '/api/status')).status, 401);
+});
+
+test('status reports server health and app states', async () => {
+  const { status, body } = await call('GET', '/api/status', null, userCookie);
+  assert.equal(status, 200);
+  assert.ok(body.uptime > 0);
+  assert.ok(body.cpu.cores > 0);
+  assert.ok(body.cpu.percent >= 0 && body.cpu.percent <= 100);
+  assert.ok(body.memory.total > 0 && body.memory.available <= body.memory.total);
+  assert.ok(body.disks.length >= 1);
+  assert.ok(body.disks[0].total > 0);
+  // The guest only sees the apps they were given.
+  assert.deepEqual(body.apps.map((a) => a.id), ['roost', 'jellyfin', 'glint']);
+  assert.equal(body.apps[2].web.state, 'unset');
+  assert.ok(['online', 'offline'].includes(body.apps[1].web.state));
+  // Without Docker it says so and only the web check is used.
+  assert.equal(body.docker.ok, false);
+  assert.deepEqual(body.apps[1].containers, []);
+  assert.deepEqual(body.otherContainers, []);
+});
+
+test('ROOST_DISKS parsing skips bad entries', () => {
+  const { parseDisks, readDisks } = require('../src/status');
+  assert.deepEqual(parseDisks('System=/;Data = /data ;junk;=x'), [
+    { label: 'System', path: '/' },
+    { label: 'Data', path: '/data' },
+  ]);
+  const disks = readDisks([{ label: 'A', path: dataDir }, { label: 'B', path: dataDir }, { label: 'C', path: '/no/such/drive' }]);
+  assert.deepEqual(disks.map((d) => d.label), ['A', 'C']);
+  assert.equal(disks[1].missing, true);
+});
+
 test('users can rename themselves and change password', async () => {
   const renamed = await call('PATCH', '/api/me', { displayName: 'Guest Room' }, userCookie);
   assert.equal(renamed.body.user.displayName, 'Guest Room');
@@ -143,3 +177,50 @@ test('logout ends the session', async () => {
   await call('POST', '/api/logout', null, adminCookie);
   assert.equal((await call('GET', '/api/apps', null, adminCookie)).status, 401);
 });
+
+test('status reads container state from Docker', async () => {
+  const http = require('http');
+  const containers = [
+    { Id: 'aaa111', Names: ['/jellyfin'], Image: 'jellyfin/jellyfin', State: 'running', Labels: {} },
+    { Id: 'bbb222', Names: ['/nova-app'], Image: 'nova', State: 'exited', Labels: { 'com.docker.compose.project': 'nova' } },
+    { Id: 'ccc333', Names: ['/roost'], Image: 'roost', State: 'running', Labels: {} },
+    { Id: 'ddd444', Names: ['/tailscale'], Image: 'tailscale', State: 'running', Labels: {} },
+  ];
+  const inspect = {
+    aaa111: { State: { Status: 'running', Running: true, StartedAt: '2026-10-07T10:00:00Z', Health: { Status: 'healthy' } }, RestartCount: 2 },
+    bbb222: { State: { Status: 'exited', Running: false, ExitCode: 1, FinishedAt: '2026-10-07T11:00:00Z' }, RestartCount: 0 },
+  };
+  const fake = http.createServer((req, res) => {
+    if (req.url.startsWith('/containers/json')) return res.end(JSON.stringify(containers));
+    const m = req.url.match(/^\/containers\/(\w+)\/json$/);
+    if (m && inspect[m[1]]) return res.end(JSON.stringify(inspect[m[1]]));
+    res.statusCode = 404;
+    res.end('{}');
+  });
+  await new Promise((r) => fake.listen(0, '127.0.0.1', r));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'roost-docker-'));
+  const s2 = createServer({ dataDir: dir, probeTimeoutMs: 300, dockerHost: `tcp://127.0.0.1:${fake.address().port}` });
+  await new Promise((r) => s2.listen(0, '127.0.0.1', r));
+  try {
+    const url = `http://127.0.0.1:${s2.address().port}`;
+    const setup = await fetch(url + '/api/setup', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'raven', password: 'correct horse' }),
+    });
+    const cookie = setup.headers.get('set-cookie').split(';')[0];
+    const body = await (await fetch(url + '/api/status', { headers: { Cookie: cookie } })).json();
+    assert.equal(body.docker.ok, true);
+    const byId = Object.fromEntries(body.apps.map((a) => [a.id, a]));
+    assert.deepEqual(byId.roost.containers.map((c) => c.name), ['roost']);
+    assert.equal(byId.jellyfin.containers[0].health, 'healthy');
+    assert.equal(byId.jellyfin.containers[0].restarts, 2);
+    assert.equal(byId.nova.containers[0].state, 'exited');
+    assert.equal(byId.nova.containers[0].exitCode, 1);
+    assert.deepEqual(byId.nest.containers, []);
+    assert.deepEqual(body.otherContainers.map((c) => c.name), ['tailscale']);
+  } finally {
+    s2.close();
+    fake.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+

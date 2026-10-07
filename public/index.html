@@ -40,6 +40,7 @@
       <a class="brand" href="#/apps"><span data-server-name>Roost</span><svg class="brand-cursor" viewBox="58 44 44 48" aria-hidden="true"><path d="M58 92 V44 H76 A26 26 0 0 1 102 70 V92 Z" fill="currentColor"/><circle cx="86" cy="60" r="5" fill="var(--bg)"/></svg></a>
       <nav class="nav mono">
         <a href="#/apps" data-view="apps">Apps</a>
+        <a href="#/status" data-view="status">Status</a>
         <a href="#/profile" data-view="profile">Profile</a>
         <a href="#/admin" data-view="admin" class="admin-only">Admin</a>
       </nav>
@@ -61,6 +62,7 @@
           <div class="stat">Load<b id="stat-load">—</b></div>
           <div class="stat">Storage<b id="stat-disk">—</b></div>
         </div>
+        <a class="more-link mono" href="#/status">Server status →</a>
       </div>
       <div class="section">
         <div class="section-head">
@@ -69,6 +71,30 @@
         </div>
         <div class="apps" id="apps"></div>
       </div>
+    </section>
+
+    <!-- Status view -->
+    <section id="view-status" class="section hidden">
+      <div class="section-head">
+        <h2>Server status</h2>
+        <span class="mono muted" id="status-updated">Checking…</span>
+      </div>
+      <p class="status-summary" id="status-summary"><span class="dot"></span><span>Checking the server</span></p>
+      <p class="mono muted status-note hidden" id="status-note"></p>
+
+      <h3 class="status-group mono muted">Apps &amp; containers</h3>
+      <div class="status-grid" id="status-apps"></div>
+
+      <div id="status-others-wrap" class="hidden">
+        <h3 class="status-group mono muted">Other containers</h3>
+        <div class="card container-list" id="status-others"></div>
+      </div>
+
+      <h3 class="status-group mono muted">Server</h3>
+      <div class="status-grid" id="status-server"></div>
+
+      <h3 class="status-group mono muted">Drives</h3>
+      <div class="status-grid" id="status-disks"></div>
     </section>
 
     <!-- Profile view -->
