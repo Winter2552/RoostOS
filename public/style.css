@@ -227,7 +227,7 @@ label.field { display: flex; flex-direction: column; gap: 6px; }
 
 label.field > span { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
 
-input[type='text'], input[type='password'], input[type='url'], select {
+input[type='text'], input[type='password'], input[type='url'], input[type='number'], select {
   background: var(--bg);
   border: 1.5px solid var(--line);
   border-radius: 12px;
@@ -278,6 +278,29 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 
 .pill { border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-family: var(--mono); font-size: 11px; text-transform: uppercase; }
 
+/* ---------- storage ---------- */
+
+.meter { height: 14px; border: 2px solid var(--ink); border-radius: 999px; overflow: hidden; background: var(--bg); }
+.meter-fill { height: 100%; width: 0; background: var(--ink); transition: width 300ms ease; }
+.meter-fill.full { background: var(--bad); }
+.meter-label { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 10px 0 20px; }
+.meter-label b { font-size: 20px; font-weight: 500; }
+
+.request-row { border-top: 1px solid var(--line); padding: 16px 0; display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+#storage-requests { margin-top: 20px; }
+#storage-requests-admin .request-row:first-child { border-top: 0; padding-top: 0; }
+.request-status { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.request-note { margin-top: 6px; color: var(--muted); font-size: 15px; }
+
+.pill.pending { border-color: var(--ink); }
+.pill.approved { border-color: var(--ok); color: var(--ok); }
+.pill.declined { border-color: var(--bad); color: var(--bad); }
+
+.gb-input { display: flex; align-items: center; gap: 8px; }
+.gb-input input { width: 96px; padding: 8px 12px; }
+
+.user-row .user-storage { margin: 0; }
+
 /* ---------- welcome (setup / sign in) ---------- */
 
 .welcome { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
@@ -301,6 +324,7 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
   .hero { padding: 32px 16px 28px; }
   .stats { grid-template-columns: repeat(2, 1fr); }
   .section, .footer { padding-left: 16px; padding-right: 16px; }
+  .request-status { align-items: flex-start; }
 }
 
 /* Phones: two compact app cards per row. */

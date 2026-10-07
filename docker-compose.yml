@@ -14,6 +14,8 @@ services:
       DATA_DIR: /data
       # Set to "true" only when Roost is served over HTTPS (e.g. through Tailscale serve).
       SECURE_COOKIES: "false"
+      # Shared secret Nest and Glint use to read limits and report usage. Leave blank until they exist.
+      ROOST_APP_TOKEN: ""
     volumes:
       # On ZimaOS this keeps Roost's accounts and app list with the other app data.
       - /DATA/AppData/roost:/data

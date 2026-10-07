@@ -83,6 +83,21 @@
         <div class="row"><button class="btn" type="submit">Save</button></div>
         <div class="msg" role="status"></div>
       </form>
+      <div class="card panel" id="storage-panel">
+        <h3>Storage</h3><span class="mono muted">Space for your files and photos in Nest and Glint</span>
+        <div class="meter" aria-hidden="true"><div class="meter-fill" id="storage-fill"></div></div>
+        <div class="meter-label"><b id="storage-used">—</b><span class="mono muted" id="storage-limit"></span></div>
+        <form id="storage-request-form">
+          <div class="form-grid">
+            <label class="field"><span>How much do you need? (GB)</span><input type="number" name="requestedGb" min="1" step="1" inputmode="numeric" required></label>
+            <label class="field"><span>Note for the admin (optional)</span><input type="text" name="note" maxlength="300"></label>
+          </div>
+          <div class="row"><button class="btn" type="submit">Request more storage</button></div>
+          <div class="msg" role="status"></div>
+        </form>
+        <p class="mono muted hidden" id="storage-admin-note" style="margin:16px 0 0">You're an admin: change your limit under Admin → Users</p>
+        <div id="storage-requests"></div>
+      </div>
       <form class="card panel" id="password-form">
         <h3>Password</h3><span class="mono muted">At least 8 characters</span>
         <div class="form-grid">
@@ -98,6 +113,11 @@
     <section id="view-admin" class="section hidden">
       <div class="section-head"><h2>Admin</h2><span class="mono muted">Apps · users · server</span></div>
 
+      <div class="card panel" id="requests-panel">
+        <h3>Storage requests</h3><span class="mono muted">Users asking for more space</span>
+        <div id="storage-requests-admin"></div>
+      </div>
+
       <form class="card panel" id="apps-form">
         <h3>Apps</h3>
         <span class="mono muted">Use {host} in a link to mean "the address you opened Roost on", e.g. http://{host}:8096</span>
@@ -110,7 +130,7 @@
       </form>
 
       <div class="card panel">
-        <h3>Users</h3><span class="mono muted">Who can sign in, and which apps they see</span>
+        <h3>Users</h3><span class="mono muted">Who can sign in, which apps they see and how much storage they get</span>
         <div id="users"></div>
       </div>
 
@@ -121,6 +141,7 @@
           <label class="field"><span>Username</span><input type="text" name="username" required autocapitalize="none" spellcheck="false"></label>
           <label class="field"><span>Password</span><input type="password" name="password" autocomplete="new-password" required minlength="8"></label>
           <label class="field"><span>Role</span><select name="role"><option value="user">User</option><option value="admin">Admin</option></select></label>
+          <label class="field"><span>Storage limit (GB)</span><input type="number" name="limitGb" min="1" step="1" inputmode="numeric" placeholder="No limit"></label>
         </div>
         <div class="row"><span class="mono muted">Apps</span><div class="checks" id="new-user-apps"></div></div>
         <div class="row"><button class="btn" type="submit">Add user</button></div>
@@ -128,8 +149,11 @@
       </form>
 
       <form class="card panel" id="settings-form">
-        <h3>Server</h3><span class="mono muted">The name shown across Roost</span>
-        <div class="form-grid"><label class="field"><span>Server name</span><input type="text" name="serverName" maxlength="40"></label></div>
+        <h3>Server</h3><span class="mono muted">The name shown across Roost, and the storage new users start with</span>
+        <div class="form-grid">
+          <label class="field"><span>Server name</span><input type="text" name="serverName" maxlength="40"></label>
+          <label class="field"><span>Default storage limit (GB)</span><input type="number" name="defaultLimitGb" min="1" step="1" inputmode="numeric" placeholder="No limit"></label>
+        </div>
         <div class="row"><button class="btn" type="submit">Save</button></div>
         <div class="msg" role="status"></div>
       </form>

@@ -13,7 +13,7 @@ const ICONS = {
   home: '<path d="M3 11l9-7 9 7v9h-6v-6H9v6H3z"/>',
 };
 
-const state = { serverName: 'Roost', user: null, apps: [], status: {}, users: [] };
+const state = { serverName: 'Roost', user: null, apps: [], status: {}, users: [], defaultLimitGb: null };
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -66,6 +66,19 @@ function bytes(n) {
   let i = 0;
   while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
   return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+}
+
+function gb(limit) {
+  return limit === null ? 'No limit' : `${limit} GB`;
+}
+
+// Number inputs for GB: blank means "no limit".
+function limitValue(input) {
+  return input.value.trim() === '' ? null : Number(input.value);
+}
+
+function shortDate(iso) {
+  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 }
 
 function duration(sec) {
@@ -142,6 +155,7 @@ function route() {
   for (const v of ['apps', 'profile', 'admin']) $(`#view-${v}`).classList.toggle('hidden', v !== view);
   document.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
   if (view === 'admin') loadAdmin();
+  if (view === 'profile') loadStorage();
 }
 
 window.addEventListener('hashchange', route);
@@ -230,13 +244,86 @@ $('#password-form').addEventListener('submit', async (e) => {
   } catch (err) { flash(f, err.message, false); }
 });
 
+// ---------- storage ----------
+
+const REQUEST_LABEL = { pending: 'Waiting for an admin', approved: 'Approved', declined: 'Declined' };
+
+async function loadStorage() {
+  const { storage, requests } = await api('GET', '/api/me/storage');
+  const isAdmin = state.user.role === 'admin';
+  const pct = storage.limitBytes ? Math.min(100, (storage.usedBytes / storage.limitBytes) * 100) : 0;
+  $('#storage-fill').style.width = `${pct}%`;
+  $('#storage-fill').classList.toggle('full', pct >= 90);
+  $('#storage-used').textContent = `${bytes(storage.usedBytes)} used`;
+  $('#storage-limit').textContent = storage.limitGb === null ? 'No limit' : `of ${storage.limitGb} GB`;
+  const pending = requests.some((r) => r.status === 'pending');
+  $('#storage-request-form').classList.toggle('hidden', isAdmin || pending);
+  $('#storage-admin-note').classList.toggle('hidden', !isAdmin);
+  if (storage.limitGb !== null) $('#storage-request-form').requestedGb.min = storage.limitGb + 1;
+  $('#storage-requests').replaceChildren(...requests.map((r) => el('div', { class: 'request-row' },
+    el('div', {},
+      el('div', { text: `Asked for ${r.requestedGb} GB` }),
+      el('div', { class: 'mono muted', text: [shortDate(r.createdAt), r.note].filter(Boolean).join(' · ') })),
+    el('div', { class: 'request-status' },
+      el('span', { class: `pill ${r.status}`, text: REQUEST_LABEL[r.status] }),
+      r.status === 'approved' ? el('span', { class: 'mono muted', text: `Now ${r.approvedGb} GB` }) : null,
+      r.reply ? el('span', { class: 'mono muted', text: r.reply }) : null))));
+}
+
+$('#storage-request-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    await api('POST', '/api/me/storage-requests', { requestedGb: Number(f.requestedGb.value), note: f.note.value });
+    f.reset();
+    flash(f, '');
+    loadStorage();
+  } catch (err) { flash(f, err.message, false); }
+});
+
+function renderStorageRequests(requests) {
+  const list = $('#storage-requests-admin');
+  if (!requests.length) {
+    list.replaceChildren(el('div', { class: 'mono muted', text: 'Nothing waiting' }));
+    return;
+  }
+  list.replaceChildren(...requests.map((r) => {
+    const name = r.user ? r.user.displayName : 'Removed user';
+    const amount = el('input', { type: 'number', min: 1, step: 1, inputmode: 'numeric', value: r.requestedGb, 'aria-label': 'New limit in GB' });
+    const msg = el('div', { class: 'msg' });
+    const decide = async (action) => {
+      try {
+        await api('POST', `/api/admin/storage-requests/${r.id}`, action === 'approve' ? { action, limitGb: limitValue(amount) } : { action });
+        loadAdmin();
+      } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
+    };
+    return el('div', { class: 'request-row' },
+      el('div', { class: 'who' },
+        el('span', { class: 'avatar', text: name.charAt(0).toUpperCase() }),
+        el('div', {},
+          el('div', { text: `${name} asks for ${r.requestedGb} GB` }),
+          el('div', { class: 'mono muted', text: `Has ${gb(r.currentGb)} · uses ${r.storage ? bytes(r.storage.usedBytes) : '—'} · ${shortDate(r.createdAt)}` }),
+          r.note ? el('div', { class: 'request-note', text: `“${r.note}”` }) : null)),
+      el('div', { class: 'row', style: 'margin:0' },
+        el('label', { class: 'gb-input' }, amount, el('span', { class: 'mono muted', text: 'GB' })),
+        el('button', { class: 'btn small', type: 'button', text: 'Approve', onclick: () => decide('approve') }),
+        el('button', { class: 'btn danger small', type: 'button', text: 'Decline', onclick: () => decide('decline') })),
+      msg);
+  }));
+}
+
 // ---------- admin ----------
 
 async function loadAdmin() {
-  const [{ users }, { apps }] = await Promise.all([api('GET', '/api/admin/users'), api('GET', '/api/apps')]);
+  const [{ users }, { apps }, { requests, defaultLimitGb }] = await Promise.all([
+    api('GET', '/api/admin/users'), api('GET', '/api/apps'), api('GET', '/api/admin/storage-requests')]);
   state.users = users;
   state.apps = apps;
+  state.defaultLimitGb = defaultLimitGb;
   $('#settings-form').serverName.value = state.serverName;
+  $('#settings-form').defaultLimitGb.value = defaultLimitGb ?? '';
+  $('#new-user-form').limitGb.value = defaultLimitGb ?? '';
+  renderStorageRequests(requests);
   renderAppsEditor();
   renderUsers();
   $('#new-user-apps').replaceChildren(...appChecks(null));
@@ -297,10 +384,13 @@ function renderUsers() {
   $('#users').replaceChildren(...state.users.map((u) => {
     const isMe = u.id === state.user.id;
     const checks = el('div', { class: 'checks' }, appChecks(u.apps));
+    const limit = el('input', { type: 'number', min: 1, step: 1, inputmode: 'numeric', value: u.storage.limitGb ?? '', placeholder: 'No limit', 'aria-label': `Storage limit for ${u.displayName} in GB` });
     const msg = el('div', { class: 'msg' });
     const save = async () => {
+      const body = { limitGb: limitValue(limit) };
+      if (u.role !== 'admin') body.apps = checkedApps(checks);
       try {
-        await api('PATCH', `/api/admin/users/${u.id}`, { apps: checkedApps(checks) });
+        await api('PATCH', `/api/admin/users/${u.id}`, body);
         msg.className = 'msg ok'; msg.textContent = 'Saved';
       } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
     };
@@ -316,9 +406,11 @@ function renderUsers() {
         el('span', { class: 'avatar', text: (u.displayName || u.username).charAt(0).toUpperCase() }),
         el('div', {}, el('div', { text: u.displayName }), el('div', { class: 'mono muted', text: `@${u.username}` })),
         el('span', { class: 'pill', text: u.role })),
-      u.role === 'admin'
-        ? el('span', { class: 'mono muted', text: 'Sees every app' })
-        : el('div', { class: 'row', style: 'margin:0' }, checks, el('button', { class: 'btn ghost small', type: 'button', text: 'Save', onclick: save })),
+      u.role === 'admin' ? el('span', { class: 'mono muted', text: 'Sees every app' }) : checks,
+      el('div', { class: 'row user-storage' },
+        el('span', { class: 'mono muted', text: `Storage · ${bytes(u.storage.usedBytes)} used` }),
+        el('label', { class: 'gb-input' }, limit, el('span', { class: 'mono muted', text: 'GB' })),
+        el('button', { class: 'btn ghost small', type: 'button', text: 'Save', onclick: save })),
       isMe ? null : el('button', { class: 'btn danger small', type: 'button', text: 'Remove', onclick: remove }),
       msg);
   }));
@@ -334,6 +426,7 @@ $('#new-user-form').addEventListener('submit', async (e) => {
       password: f.password.value,
       role: f.role.value,
       apps: checkedApps($('#new-user-apps')),
+      limitGb: limitValue(f.limitGb),
     });
     f.reset();
     flash(f, 'User added');
@@ -344,7 +437,10 @@ $('#new-user-form').addEventListener('submit', async (e) => {
 $('#settings-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
-    const { settings } = await api('PATCH', '/api/admin/settings', { serverName: e.target.serverName.value });
+    const { settings } = await api('PATCH', '/api/admin/settings', {
+      serverName: e.target.serverName.value,
+      defaultLimitGb: limitValue(e.target.defaultLimitGb),
+    });
     setServerName(settings.serverName);
     flash(e.target, 'Saved');
   } catch (err) { flash(e.target, err.message, false); }
