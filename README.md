@@ -16,7 +16,7 @@ Roost is the home-server suite: one homepage that signs you in and shows the app
 - **First run** creates the admin account.
 - **Dashboard**: greeting, live server stats (uptime, memory, load, free space on the data drive) and a card for every app you have access to, each showing whether the app is reachable.
 - **Status**: refreshes every 5 seconds. First, each app (and Roost itself) with its container state from Docker: running, stopped, restarting, unhealthy, how long it has been up and how often it restarted, plus whether it answers on its link. Admins also see every other container. Below that, server health: uptime, CPU, memory and free space on each drive. Problems are listed at the top.
-- **Profile**: change your display name and password, turn two-step sign-in on or off, see your storage use and limit, and ask an admin for more space.
+- **Profile**: change your display name and password, turn two-step sign-in on or off, see where you're signed in and sign other devices out, see your storage use and limit, and ask an admin for more space.
 - **Admin**: edit the app list and links, add or remove users, choose which apps each user sees and how much storage they get, approve or decline storage requests, rename the server.
 
 ![Signing in to Roost](docs/screenshots/sign-in.png)
@@ -52,6 +52,15 @@ docker restart roost
 ```
 
 Recovery codes and trusted devices are stored only as hashes. The authenticator secret has to be stored as-is in `roost.json`, so keep that file as private as the server itself.
+
+## One sign-in
+
+Roost is the only account system: one username and password (plus two-step sign-in) for Roost and the apps it serves.
+
+- **Staying signed in**: sign-ins are saved to `sessions.json` next to `roost.json`, so restarting or updating Roost doesn't sign anyone out. Only hashes of the sign-in tokens are written. A browser stays signed in for 30 days.
+- **Signed-in devices**: Profile lists every browser and app signed in to your account (for example "Safari on iPhone"), with when each was last active. Sign out any one of them, or all except the one you're on. Changing your password signs out every other device.
+- **Device keys for phone apps**: an app signs in with `POST /api/login` and `{ "username", "password", "device": "Raven's iPhone" }` (then `/api/login/code` if two-step is on), and gets a `key` back instead of a cookie. It sends `Authorization: Bearer <key>` on every request. Keys last a year and show up under signed-in devices.
+- **For apps Roost serves** (Nest and Glint, or anything behind a proxy): `GET /api/auth/check?app=<app id>` answers 200 with `{ user: { id, username, displayName, role } }` when the browser or key is signed in and allowed that app, 401 when nobody is signed in, and 403 when they don't have access.
 
 ## Stack
 

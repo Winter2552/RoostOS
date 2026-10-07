@@ -404,7 +404,7 @@ function route() {
   for (const v of VIEWS) $(`#view-${v}`).classList.toggle('hidden', v !== view);
   document.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
   if (view === 'admin') loadAdmin();
-  if (view === 'profile') { loadStorage(); loadTwoStep(); }
+  if (view === 'profile') { loadStorage(); loadTwoStep(); loadDevices(); }
   if (view === 'status') loadStatus();
 }
 
@@ -630,8 +630,53 @@ $('#password-form').addEventListener('submit', async (e) => {
   try {
     await api('PATCH', '/api/me', { currentPassword: f.currentPassword.value, newPassword: f.newPassword.value });
     f.reset();
-    flash(f, 'Password changed');
+    flash(f, 'Password changed. Your other devices were signed out.');
+    loadDevices();
   } catch (err) { flash(f, err.message, false); }
+});
+
+// ---------- signed-in devices ----------
+
+function lastActive(iso) {
+  const sec = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (sec < 600) return 'Active now';
+  if (sec < 3600) return `Active ${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `Active ${Math.floor(sec / 3600)}h ago`;
+  const days = Math.floor(sec / 86400);
+  return `Active ${days} day${days === 1 ? '' : 's'} ago`;
+}
+
+async function loadDevices() {
+  const panel = $('#devices-panel');
+  let devices;
+  try {
+    ({ devices } = await api('GET', '/api/me/devices'));
+  } catch (err) { flash(panel, err.message, false); return; }
+  $('#devices-list').replaceChildren(...devices.map((d) => {
+    const signOut = async () => {
+      try {
+        await api('DELETE', `/api/me/devices/${d.id}`);
+        loadDevices();
+      } catch (err) { flash(panel, err.message, false); }
+    };
+    return el('div', { class: 'device-row' },
+      el('div', {},
+        el('div', {},
+          el('span', { text: d.name || (d.kind === 'app' ? 'Roost app' : 'Browser') }),
+          d.current ? el('span', { class: 'pill approved', text: 'This device' }) : null,
+          d.kind === 'app' ? el('span', { class: 'pill', text: 'App' }) : null),
+        el('div', { class: 'mono muted', title: `Signed in ${shortDate(d.created)}`, text: d.current ? 'Active now' : lastActive(d.lastSeen) })),
+      d.current ? null : el('button', { class: 'link-btn mono', type: 'button', text: 'Sign out', onclick: signOut }));
+  }));
+  $('#devices-others').classList.toggle('hidden', devices.length < 2);
+}
+
+$('#sign-out-others').addEventListener('click', async () => {
+  try {
+    await api('POST', '/api/me/devices/sign-out-others');
+    await loadDevices();
+    flash($('#devices-panel'), 'Signed out everywhere else');
+  } catch (err) { flash($('#devices-panel'), err.message, false); }
 });
 
 // ---------- two-step in profile ----------

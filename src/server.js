@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Store } = require('./store');
-const { hashPassword, verifyPassword, Sessions, RateLimiter, SESSION_TTL_MS } = require('./auth');
+const { hashPassword, verifyPassword, Sessions, RateLimiter, deviceName, SESSION_TTL_MS } = require('./auth');
 const storage = require('./storage');
 const { parseDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
@@ -176,7 +176,7 @@ async function timedProbe(url, timeoutMs) {
 
 function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', maxFailedSignIns = 10 } = {}) {
   const store = new Store(dataDir);
-  const sessions = new Sessions();
+  const sessions = new Sessions(path.join(dataDir, 'sessions.json'));
   const limiter = new RateLimiter(maxFailedSignIns);
   // Sign-ins waiting for a code, and authenticator secrets waiting to be
   // confirmed. Both are short-lived, so they stay in memory.
@@ -188,8 +188,15 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
   const diskList = disks && disks.length ? disks : [{ label: 'System', path: '/' }, { label: 'Data', path: dataDir }];
   const db = () => store.db;
 
+  // Browsers send the session cookie; phone apps send their device key as a
+  // Bearer token.
+  function tokenOf(req) {
+    const auth = String(req.headers.authorization || '');
+    return auth.startsWith('Bearer ') ? auth.slice(7).trim() : parseCookies(req)[COOKIE];
+  }
+
   function currentUser(req) {
-    const s = sessions.get(parseCookies(req)[COOKIE]);
+    const s = sessions.get(tokenOf(req));
     return s ? db().users.find((u) => u.id === s.userId) || null : null;
   }
 
@@ -206,9 +213,19 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
     return user;
   }
 
-  function login(res, user, status = 200, cookies = []) {
-    const token = sessions.create(user.id);
+  // A sign-in that names a device (an app on a phone) gets a long-lived device
+  // key in the reply instead of a cookie.
+  function login(req, res, user, { status = 200, cookies = [], device = '' } = {}) {
+    if (device) {
+      const key = sessions.create(user.id, { kind: 'app', name: device });
+      return send(res, status, { user: publicUser(db(), user), key });
+    }
+    const token = sessions.create(user.id, { name: deviceName(req.headers['user-agent']) });
     send(res, status, { user: publicUser(db(), user) }, { 'Set-Cookie': [sessionCookie(token, secureCookies), ...cookies] });
+  }
+
+  function deviceView(s, current) {
+    return { id: s.id, kind: s.kind, name: s.name, created: new Date(s.created).toISOString(), lastSeen: new Date(s.lastSeen).toISOString(), current };
   }
 
   function forget(map) {
@@ -320,7 +337,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       };
       db().users.push(user);
       store.save();
-      login(res, user, 201);
+      login(req, res, user, { status: 201 });
     },
 
     'POST /api/login': async (req, res) => {
@@ -332,10 +349,11 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         limiter.fail(req.socket.remoteAddress);
         throw new HttpError(401, 'Wrong username or password');
       }
-      if (!user.twoStep || isTrusted(req, user)) return login(res, user);
+      const device = str(body.device, 60);
+      if (!user.twoStep || isTrusted(req, user)) return login(req, res, user, { device });
       forget(pendingCodes);
       const ticket = crypto.randomBytes(24).toString('hex');
-      pendingCodes.set(ticket, { userId: user.id, expires: Date.now() + CODE_WAIT_MS, tries: 0 });
+      pendingCodes.set(ticket, { userId: user.id, device, expires: Date.now() + CODE_WAIT_MS, tries: 0 });
       send(res, 200, { twoStep: true, ticket });
     },
 
@@ -371,13 +389,13 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         throw new HttpError(400, "That code didn't work. Check your app's newest code.");
       }
       pendingCodes.delete(body.ticket);
-      const cookies = body.trust === true ? [trustDevice(user)] : [];
+      const cookies = body.trust === true && !pending.device ? [trustDevice(user)] : [];
       store.save();
-      login(res, user, 200, cookies);
+      login(req, res, user, { cookies, device: pending.device });
     },
 
     'POST /api/logout': (req, res) => {
-      sessions.destroy(parseCookies(req)[COOKIE]);
+      sessions.destroy(tokenOf(req));
       send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie('', secureCookies) });
     },
 
@@ -391,6 +409,8 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
         }
         if (!validPassword(body.newPassword)) throw new HttpError(400, 'Password must be at least 8 characters');
         user.password = hashPassword(body.newPassword);
+        // Anyone who knew the old password is signed out; this device stays in.
+        sessions.destroyUser(user.id, tokenOf(req));
       }
       store.save();
       send(res, 200, { user: publicUser(db(), user) });
@@ -467,6 +487,36 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
       user.twoStepSkipped = true;
       store.save();
       send(res, 200, { user: publicUser(db(), user) });
+    },
+
+    // ---------- signed-in devices ----------
+
+    'GET /api/me/devices': (req, res) => {
+      const user = requireUser(req);
+      const current = sessions.get(tokenOf(req));
+      send(res, 200, { devices: sessions.list(user.id).map((s) => deviceView(s, s === current)) });
+    },
+
+    'DELETE /api/me/devices/:id': (req, res, id) => {
+      const user = requireUser(req);
+      if (!sessions.destroyId(user.id, id)) throw new HttpError(404, 'That device is already signed out');
+      send(res, 200, { ok: true });
+    },
+
+    'POST /api/me/devices/sign-out-others': (req, res) => {
+      const user = requireUser(req);
+      sessions.destroyUser(user.id, tokenOf(req));
+      send(res, 200, { ok: true });
+    },
+
+    // One sign-in for the apps Roost serves: Nest, Glint and anything behind a
+    // proxy ask here who is signed in and whether they may use the app.
+    'GET /api/auth/check': (req, res) => {
+      const user = requireUser(req);
+      const app = new URL(req.url, 'http://roost').searchParams.get('app');
+      if (app && !visibleApps(db(), user).some((a) => a.id === app)) throw new HttpError(403, "You don't have access to this app");
+      if (twoStepNeeded(db(), user)) throw new HttpError(403, 'Set up two-step sign-in first');
+      send(res, 200, { user: { id: user.id, username: user.username, displayName: user.displayName, role: user.role } });
     },
 
     'GET /api/apps': (req, res) => {
@@ -735,7 +785,7 @@ function createServer({ dataDir, secureCookies = false, probeTimeoutMs = 2500, d
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/storage-requests|storage\/users))\/([a-z0-9._-]+)(\/usage)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/storage-requests|storage\/users|me\/devices))\/([a-z0-9._-]+)(\/usage)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }

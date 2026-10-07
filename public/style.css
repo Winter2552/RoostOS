@@ -274,8 +274,11 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 .checks { display: flex; flex-wrap: wrap; gap: 8px 18px; }
 .checks label { display: flex; gap: 6px; align-items: center; font-size: 14px; }
 
-.admin-app, .user-row { border-top: 1px solid var(--line); padding: 18px 0; }
-.admin-app:first-of-type, .user-row:first-of-type { border-top: 0; }
+.admin-app, .user-row, .device-row { border-top: 1px solid var(--line); padding: 18px 0; }
+.admin-app:first-of-type, .user-row:first-of-type, .device-row:first-of-type { border-top: 0; }
+.device-row { display: flex; gap: 16px; align-items: center; justify-content: space-between; }
+.device-row .pill { margin-left: 8px; vertical-align: 1px; }
+.device-row .link-btn { white-space: nowrap; flex-shrink: 0; }
 
 .user-row { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
 
