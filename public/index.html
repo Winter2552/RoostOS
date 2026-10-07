@@ -64,16 +64,18 @@
   <div id="shell" class="frame hidden">
     <header class="topbar">
       <a class="brand" href="#/apps"><span data-server-name>Roost</span><svg class="brand-cursor" viewBox="58 44 44 48" aria-hidden="true"><path d="M58 92 V44 H76 A26 26 0 0 1 102 70 V92 Z" fill="currentColor"/><circle cx="86" cy="60" r="5" fill="var(--bg)"/></svg></a>
-      <nav class="nav mono">
-        <a href="#/apps" data-view="apps">Apps</a>
-        <a href="#/status" data-view="status">Status</a>
-        <a href="#/profile" data-view="profile">Profile</a>
-        <a href="#/admin" data-view="admin" class="admin-only">Admin</a>
-      </nav>
-      <div class="who">
-        <span class="avatar" id="avatar"></span>
-        <span id="who-name"></span>
-        <button class="link-btn mono" id="logout">Sign out</button>
+      <nav class="nav app-bar" id="app-bar" aria-label="Apps"></nav>
+      <div class="who" id="who">
+        <button class="avatar-btn" id="account-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu">
+          <span class="avatar" id="avatar" aria-hidden="true"></span>
+        </button>
+        <div class="account-menu hidden" id="account-menu" role="menu" aria-labelledby="account-btn">
+          <div class="menu-head"><b id="who-name"></b><span class="mono muted" id="who-role"></span></div>
+          <a role="menuitem" href="#/status" data-view="status">Status</a>
+          <a role="menuitem" href="#/profile" data-view="profile">Profile</a>
+          <a role="menuitem" href="#/admin" data-view="admin" class="admin-only">Admin</a>
+          <button role="menuitem" type="button" id="logout">Sign out</button>
+        </div>
       </div>
     </header>
 
