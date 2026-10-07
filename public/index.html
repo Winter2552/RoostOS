@@ -66,6 +66,7 @@
       <a class="brand" href="#/apps"><span data-server-name>Roost</span><svg class="brand-cursor" viewBox="58 44 44 48" aria-hidden="true"><path d="M58 92 V44 H76 A26 26 0 0 1 102 70 V92 Z" fill="currentColor"/><circle cx="86" cy="60" r="5" fill="var(--bg)"/></svg></a>
       <nav class="nav mono">
         <a href="#/apps" data-view="apps">Apps</a>
+        <a href="#/nest" data-view="nest" class="hidden">Files</a>
         <a href="#/status" data-view="status">Status</a>
         <a href="#/profile" data-view="profile">Profile</a>
         <a href="#/admin" data-view="admin" class="admin-only">Admin</a>
@@ -97,6 +98,47 @@
         </div>
         <div class="apps" id="apps"></div>
       </div>
+    </section>
+
+    <!-- Nest: My Drive and Trash (public/nest.js) -->
+    <section id="view-nest" class="nest hidden">
+      <aside class="nest-side">
+        <button class="btn nest-new" type="button" id="nest-new"><span aria-hidden="true">+</span> New</button>
+        <nav class="nest-places mono" aria-label="Nest">
+          <a href="#/nest" data-place="drive">My Drive</a>
+          <a href="#/nest/trash" data-place="trash">Trash</a>
+        </nav>
+        <div class="nest-storage">
+          <div class="meter" aria-hidden="true"><i id="nest-meter"></i></div>
+          <span class="mono muted" id="nest-used"></span>
+        </div>
+      </aside>
+      <div class="nest-main" id="nest-main">
+        <div class="nest-bar">
+        <div class="nest-head">
+          <nav class="nest-crumbs" id="nest-crumbs" aria-label="Folder path"></nav>
+          <div class="nest-tools" id="nest-tools">
+            <label class="nest-sort"><span class="sr">Sort by</span>
+              <select id="nest-sort"><option value="name">Name</option><option value="modified">Last modified</option><option value="size">Size</option></select>
+            </label>
+            <button class="nest-icon-btn" type="button" id="nest-dir" aria-label="Reverse order"></button>
+            <div class="nest-views" role="group" aria-label="View">
+              <button class="nest-icon-btn" type="button" data-view-mode="list" aria-label="List view"></button>
+              <button class="nest-icon-btn" type="button" data-view-mode="grid" aria-label="Grid view"></button>
+            </div>
+          </div>
+          <button class="btn ghost small hidden" type="button" id="nest-empty-trash">Empty trash</button>
+        </div>
+        <!-- Covers the header while items are selected, so nothing below moves. -->
+        <div class="nest-selbar hidden" id="nest-selbar" role="toolbar" aria-label="Selected items"></div>
+        </div>
+        <div class="nest-cols mono muted" id="nest-cols"></div>
+        <div class="nest-list" id="nest-list" tabindex="0" aria-label="Files"></div>
+        <div class="nest-sentinel" id="nest-sentinel"></div>
+        <div class="nest-drop hidden" id="nest-drop"><span>Drop to upload to <b id="nest-drop-where"></b></span></div>
+      </div>
+      <input type="file" id="nest-pick-files" multiple hidden>
+      <input type="file" id="nest-pick-folder" webkitdirectory multiple hidden>
     </section>
 
     <!-- Status view -->
@@ -219,5 +261,6 @@
   </div>
 
   <script src="/app.js"></script>
+  <script src="/nest.js"></script>
 </body>
 </html>
