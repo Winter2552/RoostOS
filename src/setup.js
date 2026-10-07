@@ -117,6 +117,10 @@ const STEPS = [
       'Keep the 443:8443 port line in Roost\'s compose file (it is there by default).',
     ],
     action: { label: 'Set up HTTPS', view: 'admin', focus: 'tls-form', field: 'domain' },
+    // Roost works on plain HTTP without it, so it doesn't hold up the count.
+    optional: true,
+    // Settings and env vars this step is about.
+    covers: ['tls', 'HTTPS_PORT', 'ROOST_ACME_STAGING'],
     // A certificate in use counts, even while a renewal is retrying.
     check: (ctx) => ['active', 'warning'].includes(ctx.tls.state),
   },
