@@ -659,6 +659,7 @@ input[type='range']:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 2px var(
   .nest-icon-btn, .nmore { width: 44px; height: 44px; }
   .nest-places a { min-height: 44px; display: inline-flex; align-items: center; }
   .nup-x { width: 44px; height: 44px; }
+}
 
 /* ---------- invite and reset links ---------- */
 
@@ -685,3 +686,38 @@ input[type='range']:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 2px var(
 .forgot-link { align-self: center; padding: 10px; font-size: 12px; }
 #forgot-form { text-align: left; display: flex; flex-direction: column; gap: 14px; }
 .welcome-card #forgot-form .btn { width: 100%; margin-top: 6px; }
+
+/* ---------- setup checklist ---------- */
+
+.setup-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.setup-head .mono { display: block; margin-top: 4px; }
+.setup-meter { margin: 16px 0 22px; }
+#setup-body { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 28px; align-items: start; }
+.setup-step { border: 1.5px solid var(--line); border-radius: 16px; padding: 20px; }
+.setup-step h4 { margin: 8px 0 6px; font-size: 22px; font-weight: 500; letter-spacing: -0.02em; }
+.setup-why { margin: 0 0 14px; color: var(--muted); line-height: 1.45; }
+.setup-how { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; line-height: 1.45; }
+.setup-nav { margin-left: auto; display: flex; gap: 16px; }
+.setup-nav button:disabled { opacity: 0.3; cursor: default; }
+.setup-list { list-style: none; margin: 0; padding: 0; }
+.setup-group { font-size: 11px; padding: 12px 0 6px; }
+.setup-group:first-child { padding-top: 0; }
+.setup-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 10px; border: 0; border-radius: 10px; background: none; text-align: left; cursor: pointer; min-height: 40px; }
+.setup-row.current { background: rgba(242, 239, 233, 0.08); }
+.setup-title { flex: 1; }
+.setup-tick { width: 22px; height: 22px; flex: none; border: 1.5px solid var(--line); border-radius: 50%; display: grid; place-items: center; font-size: 12px; }
+.setup-tick.done { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.setup-nudge { margin-left: 18px; color: var(--ink); }
+
+@media (hover: hover) {
+  .setup-row:hover { background: rgba(242, 239, 233, 0.05); }
+}
+
+@media (max-width: 760px) {
+  #setup-body { grid-template-columns: 1fr; }
+  .setup-nudge { display: block; margin: 12px 0 0; width: max-content; }
+}
+
+@media (pointer: coarse) {
+  .setup-row { min-height: 44px; }
+}

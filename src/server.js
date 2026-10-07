@@ -9,7 +9,8 @@ const { hashPassword, verifyPassword, Sessions, RateLimiter, SESSION_TTL_MS } = 
 const storage = require('./storage');
 const links = require('./links');
 const mail = require('./mail');
-const { parseDisks, CpuMeter, serverHealth } = require('./status');
+const setup = require('./setup');
+const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
 const { HttpError, send, readJson, str } = require('./http');
@@ -276,7 +277,11 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     const password = typeof input.password === 'string' && input.password !== ''
       ? input.password.slice(0, 500)
       : (current && current.password) || '';
-    return { host, port, security, user: str(input.user, 254), password, from };
+    const next = { host, port, security, user: str(input.user, 254), password, from };
+    // A passed test only counts for the settings it was sent with.
+    const same = current && ['host', 'port', 'security', 'user', 'password', 'from'].every((k) => current[k] === next[k]);
+    if (same && current.verifiedAt) next.verifiedAt = current.verifiedAt;
+    return next;
   }
 
   function cleanEmail(v) {
@@ -665,6 +670,36 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       deliver(user.email, ...resetEmail(user, token, '1 hour')).catch((err) => console.error(`Reset email to @${user.username} failed: ${err.message}`));
     },
 
+    // ---------- setup checklist ----------
+
+    'GET /api/admin/setup': async (req, res) => {
+      const admin = requireAdmin(req);
+      const docker = await listContainers(dockerHost, probeTimeoutMs);
+      send(res, 200, await setup.checklist({
+        db: db(),
+        admin,
+        nestDir: nestDir || path.join(dataDir, 'nest'),
+        drives: readDisks(diskList),
+        dockerOk: !docker.error,
+        secureCookies,
+        trustProxy,
+        ticked: db().settings.setupTicked || [],
+      }));
+    },
+
+    // Steps Roost can't check itself (they live in Cloudflare) are ticked by hand.
+    'POST /api/admin/setup/:id': async (req, res, id) => {
+      requireAdmin(req);
+      if (!setup.MANUAL.includes(id)) throw new HttpError(400, 'Roost checks that step itself');
+      const body = await readJson(req);
+      const ticked = new Set(db().settings.setupTicked || []);
+      if (body.done) ticked.add(id);
+      else ticked.delete(id);
+      db().settings.setupTicked = [...ticked];
+      store.save();
+      send(res, 200, { ok: true });
+    },
+
     'GET /api/admin/settings': (req, res) => {
       requireAdmin(req);
       send(res, 200, { settings: settingsView() });
@@ -681,6 +716,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       } catch (err) {
         throw new HttpError(502, err.message);
       }
+      mailSettings().verifiedAt = new Date().toISOString();
+      store.save();
       send(res, 200, { ok: true, to });
     },
 
@@ -900,7 +937,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/invites|admin\/storage-requests|storage\/users|links))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/invites|admin\/storage-requests|admin\/setup|storage\/users|links))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }
