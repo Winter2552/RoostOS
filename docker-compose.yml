@@ -14,6 +14,9 @@ services:
       DATA_DIR: /data
       # Set to "true" only when Roost is served over HTTPS (e.g. through Tailscale serve).
       SECURE_COOKIES: "false"
+      # Set to "true" only when Roost is reached through a tunnel or reverse proxy, so the
+      # Admin activity log shows each visitor's real address instead of the proxy's.
+      BEHIND_PROXY: "false"
       # Shared secret Nest and Glint use to read limits and report usage. Leave blank until they exist.
       ROOST_APP_TOKEN: ""
       # Drives on the status page, as Label=path inside the container; the paths are
