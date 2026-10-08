@@ -112,6 +112,25 @@ const STEPS = [
     covers: ['SECURE_COOKIES', 'BEHIND_PROXY'],
     check: (ctx) => ctx.secureCookies && ctx.trustProxy,
   },
+  {
+    id: 'https',
+    group: 'Reach it from anywhere',
+    title: 'Get a certificate for HTTPS',
+    why: 'Roost opens securely at home and away, with no browser warnings. The installable app needs it.',
+    how: [
+      'Make sure roostos.network is on your Cloudflare account (the free plan is enough).',
+      'In Cloudflare, go to My Profile → API Tokens → Create Token, pick "Edit zone DNS" and limit it to roostos.network.',
+      'Under Admin → Secure connection, enter roostos.network, paste the token and press Save. Roost gets the certificate and renews it itself.',
+      'Keep the 443:8443 port line in Roost\'s compose file (it is there by default).',
+    ],
+    action: { label: 'Set up HTTPS', view: 'admin', focus: 'tls-form', field: 'domain' },
+    // Roost works on plain HTTP without it, so it doesn't hold up the count.
+    optional: true,
+    // Settings and env vars this step is about.
+    covers: ['tls', 'HTTPS_PORT', 'ROOST_ACME_STAGING'],
+    // A certificate in use counts, even while a renewal is retrying.
+    check: (ctx) => ['active', 'warning'].includes(ctx.tls.state),
+  },
 
   // ---------- email ----------
   {

@@ -810,6 +810,12 @@ a.btn { text-decoration: none; text-align: center; }
 #forgot-form { text-align: left; display: flex; flex-direction: column; gap: 14px; }
 .welcome-card #forgot-form .btn { width: 100%; margin-top: 6px; }
 
+/* Secure connection (Admin) */
+.tls-state { display: flex; align-items: center; margin: 0 0 6px; font-size: 18px; }
+.tls-state .dot { flex: none; width: 10px; height: 10px; margin-right: 12px; }
+.tls-detail { margin: 0 0 20px; min-height: 1.4em; text-transform: none; letter-spacing: 0; font-size: 13px; line-height: 1.5; }
+.tls-help { margin: 16px 0 0; text-transform: none; letter-spacing: 0; font-size: 13px; line-height: 1.5; }
+
 /* ---------- setup checklist ---------- */
 
 .setup-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
