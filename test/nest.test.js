@@ -116,6 +116,15 @@ test('folders, uploads and downloads', async () => {
   assert.equal(part.status, 206);
   assert.equal(await part.text(), 'nest');
 
+  // A device that already has the file gets "not changed" instead of the file.
+  const etag = dl.headers.get('etag');
+  const same = await fetch(`${base}/api/nest/files/${file.id}`, { headers: { Cookie: sam, 'If-None-Match': etag } });
+  assert.equal(same.status, 304);
+  // Resuming from a different version starts over.
+  const stale = await fetch(`${base}/api/nest/files/${file.id}`, { headers: { Cookie: sam, Range: 'bytes=6-', 'If-Range': '"old"' } });
+  assert.equal(stale.status, 200);
+  assert.equal(await stale.text(), 'hello nest');
+
   // Other users can't see it.
   assert.equal((await fetch(`${base}/api/nest/files/${file.id}`, { headers: { Cookie: admin } })).status, 404);
 });

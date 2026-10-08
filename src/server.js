@@ -18,6 +18,8 @@ const { qrSvg } = require('./qr');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
 const { HttpError, send, readJson, str } = require('./http');
 const { Nest } = require('./nest');
+const { Assets } = require('./assets');
+const { TrafficMeter } = require('./traffic');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const COOKIE = 'roost_session';
@@ -29,16 +31,6 @@ const MAX_TRUSTED = 20;
 const CODE_WAIT_MS = 5 * 60 * 1000;
 const CODE_TRIES = 5;
 const ICONS = ['play', 'orbit', 'folder', 'spark', 'grid', 'cloud', 'music', 'home'];
-
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-  '.json': 'application/json',
-};
 
 // ---------- helpers ----------
 
@@ -156,6 +148,8 @@ async function timedProbe(url, timeoutMs) {
 function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10 } = {}) {
   const store = new Store(dataDir);
   const activity = new ActivityLog(dataDir, { saveDelayMs: activitySaveDelayMs });
+  const traffic = new TrafficMeter(dataDir);
+  const assets = new Assets(PUBLIC_DIR);
   // Nest used to be an outside app with no link; it is built in now.
   const nestApp = store.db.apps.find((a) => a.id === 'nest');
   if (nestApp && !nestApp.url) {
@@ -696,6 +690,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         apps,
         // Everything else Docker runs, for admins only.
         otherContainers: user.role === 'admin' ? all.filter((c) => !claimed.has(c.id)) : [],
+        // What left the house, for admins only.
+        traffic: user.role === 'admin' ? traffic.summary() : null,
         checkedAt: new Date().toISOString(),
       });
     },
@@ -893,6 +889,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         dockerOk: !docker.error,
         secureCookies,
         trustProxy,
+        awayBytes: Object.values(traffic.summary().apps).reduce((n, a) => n + a.week, 0),
         ticked: db().settings.setupTicked || [],
       }));
     },
@@ -1162,37 +1159,23 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     return handler ? [handler, m[2]] : null;
   }
 
-  function serveStatic(req, res, pathname) {
-    let rel = decodeURIComponent(pathname);
-    if (rel === '/' || !path.extname(rel)) rel = '/index.html';
-    const file = path.normalize(path.join(PUBLIC_DIR, rel));
-    if (!file.startsWith(PUBLIC_DIR + path.sep)) return send(res, 404, { error: 'Not found' });
-    fs.readFile(file, (err, data) => {
-      if (err) return send(res, 404, { error: 'Not found' });
-      res.writeHead(200, {
-        'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-        'Cache-Control': 'no-cache',
-      });
-      res.end(req.method === 'HEAD' ? undefined : data);
-    });
-  }
-
   const server = http.createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
     res.setHeader('X-Frame-Options', 'DENY');
     try {
-      const { pathname } = new URL(req.url, 'http://roost');
+      const { pathname, searchParams } = new URL(req.url, 'http://roost');
+      traffic.track(req, res, pathname.startsWith('/api/nest/') ? 'nest' : 'roost', clientIp(req, trustProxy));
       if (pathname.startsWith('/api/nest/')) {
         const user = requireUser(req);
         if (!visibleApps(db(), user).some((a) => a.id === 'nest')) throw new HttpError(403, 'You don’t have access to Nest');
-        await nest.handle(req, res, user, pathname, new URL(req.url, 'http://roost').searchParams);
+        await nest.handle(req, res, user, pathname, searchParams);
       } else if (pathname.startsWith('/api/')) {
         const found = route(req.method, pathname);
         if (!found) throw new HttpError(404, 'Not found');
         await found[0](req, res, found[1]);
       } else if (req.method === 'GET' || req.method === 'HEAD') {
-        serveStatic(req, res, pathname);
+        if (!assets.serve(req, res, pathname, searchParams.get('v'))) send(res, 404, { error: 'Not found' });
       } else {
         throw new HttpError(405, 'Method not allowed');
       }
@@ -1207,6 +1190,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     clearInterval(sweepTimer);
     store.flush();
     activity.flush();
+    traffic.flush();
     nest.close();
   });
   server.nest = nest;
@@ -1214,6 +1198,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   server.flushAll = () => {
     store.flush();
     activity.flush();
+    traffic.flush();
   };
   return server;
 }

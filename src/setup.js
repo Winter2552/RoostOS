@@ -112,6 +112,20 @@ const STEPS = [
     covers: ['SECURE_COOKIES', 'BEHIND_PROXY'],
     check: (ctx) => ctx.secureCookies && ctx.trustProxy,
   },
+  {
+    id: 'upload-meter',
+    group: 'Reach it from anywhere',
+    title: 'Watch what leaves the house',
+    why: 'Home upload is slow. The status page shows how much Roost and Nest send to people away from home, so you can see if it is filling up.',
+    how: [
+      'Once Roost is reachable from outside, open it once on a phone with Wi-Fi off.',
+      'On the status page, check Sent away from home under the server cards. It ticks off here when away traffic shows up.',
+      'Phones and browsers keep Roost\'s own files and re-use Nest files they already have, so most visits send very little.',
+    ],
+    action: { label: 'Open status', view: 'status' },
+    optional: true,
+    check: (ctx) => ctx.awayBytes > 0,
+  },
 
   // ---------- email ----------
   {
