@@ -62,6 +62,7 @@ const STEPS = [
     id: 'drive-health',
     group: 'Server',
     title: 'Watch your drives\' health',
+    covers: ['SMART_DIR'],
     why: 'Hear early when a drive runs hot, wears out or starts to fail, before files are lost.',
     how: [
       'Keep the roost-smart service, its devices and the smart volume from the compose file in the README.',
