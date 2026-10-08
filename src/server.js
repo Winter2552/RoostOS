@@ -14,6 +14,7 @@ const mail = require('./mail');
 const setup = require('./setup');
 const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
+const templates = require('./templates');
 const { CertManager, validDomain } = require('./tls');
 const twoStep = require('./twostep');
 const { qrSvg } = require('./qr');
@@ -1051,6 +1052,17 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       const { token } = newResetLink(user, null, links.FORGOT_TTL_MS);
       store.save();
       deliver(user.email, ...resetEmail(user, token, '1 hour')).catch((err) => console.error(`Reset email to @${user.username} failed: ${err.message}`));
+    },
+
+    // Admin → Apps → Add app. Docker is only asked when the picker opens.
+    'GET /api/admin/app-templates': async (req, res) => {
+      requireAdmin(req);
+      const docker = await listContainers(dockerHost, probeTimeoutMs);
+      send(res, 200, {
+        docker: docker.error ? { ok: false, error: docker.error } : { ok: true },
+        running: templates.suggestions(db().apps, docker.containers || [], roostContainer),
+        templates: templates.templates(),
+      });
     },
 
     // ---------- setup checklist ----------

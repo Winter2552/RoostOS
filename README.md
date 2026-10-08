@@ -29,6 +29,8 @@ The steps live in `src/setup.js`, which is the single tally of what setting up R
 
 ![The admin page: users and which apps each one sees](docs/screenshots/admin.png)
 
+**Admin → Apps → + Add app** lists the apps Docker is running that have no card yet, with the port each is really published on, then a few templates (Roost's own apps, Home Assistant, Navidrome, Audiobookshelf, Portainer). Tap one and a filled-in card appears; check it and press **Save apps**. **Blank card** is still there for anything else. Roost only asks Docker when the list opens.
+
 App links can use `{host}`, which becomes whatever address you opened Roost on. `http://{host}:8096` works from the LAN IP, the hostname or a Tailscale name without editing anything.
 
 ## Nest (Files)

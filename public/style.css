@@ -432,6 +432,20 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 .admin-app, .user-row { border-top: 1px solid var(--line); padding: 18px 0; }
 .admin-app:first-of-type, .user-row:first-of-type { border-top: 0; }
 
+/* Add app picker */
+.app-picker { border-top: 1px solid var(--line); padding: 18px 0 8px; display: grid; gap: 12px; justify-items: start; }
+.app-picker h4 { margin: 6px 0 0; font-size: 13px; font-weight: 500; }
+.picker-head { display: flex; justify-content: space-between; align-items: baseline; width: 100%; }
+.picker-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; width: 100%; }
+.picker-item {
+  display: flex; gap: 12px; align-items: center; text-align: left; min-width: 0;
+  border: 1px solid var(--line); border-radius: 12px; background: transparent; color: var(--ink);
+  padding: 10px 12px; cursor: pointer; font: inherit;
+}
+.picker-item:hover, .picker-item:focus-visible { border-color: var(--ink); }
+.picker-text { display: grid; min-width: 0; }
+.picker-text > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .user-row { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
 .user-row.ended { opacity: .55; }
 

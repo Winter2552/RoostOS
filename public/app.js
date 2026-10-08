@@ -1608,8 +1608,68 @@ function renderAppsEditor() {
   $('#apps-editor').replaceChildren(...state.apps.map(appEditorRow));
 }
 
+// Add app opens a short picker: what Docker is running that has no card yet,
+// then the built-in templates, then a blank card. Docker is only asked now.
+function addAppRow(app) {
+  const ids = new Set([...document.querySelectorAll('#apps-editor .admin-app')].map((r) => r.dataset.id));
+  const card = { ...app };
+  if (ids.has(card.id)) delete card.id;
+  const row = appEditorRow(card);
+  $('#apps-editor').append(row);
+  closeAppPicker();
+  row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  $('[name=name]', row).focus({ preventScroll: true });
+}
+
+function closeAppPicker() {
+  $('#app-picker').classList.add('hidden');
+  $('#add-app').setAttribute('aria-expanded', 'false');
+}
+
+function pickerItem(app, detail) {
+  return el('button', { class: 'picker-item', type: 'button', onclick: () => addAppRow(app) },
+    icon(app.icon),
+    el('span', { class: 'picker-text' }, el('span', { text: app.name }), el('span', { class: 'mono muted', text: detail })));
+}
+
+async function openAppPicker() {
+  const picker = $('#app-picker');
+  picker.replaceChildren(el('span', { class: 'mono muted', text: 'Looking for apps on this server…' }));
+  picker.classList.remove('hidden');
+  $('#add-app').setAttribute('aria-expanded', 'true');
+  let data;
+  try {
+    data = await api('GET', '/api/admin/app-templates');
+  } catch (err) {
+    picker.replaceChildren(el('div', { class: 'msg error', text: err.message }));
+    return;
+  }
+  const names = new Set([...document.querySelectorAll('#apps-editor [name=name]')].map((i) => i.value.trim().toLowerCase()));
+  const port = (url) => (url.match(/:(\d+)$/) || [])[1];
+  // Port first: it is what tells two similar entries apart, and long names get cut.
+  const detail = (...parts) => parts.filter(Boolean).join(' · ');
+  const running = data.running.map((a) => pickerItem(a, detail(port(a.url) && `:${port(a.url)}`, a.container)));
+  // A template for an app that is already running would only repeat it.
+  const covered = new Set(data.running.map((a) => a.key));
+  const templates = data.templates
+    .filter((t) => !covered.has(t.key) && !names.has(t.name.toLowerCase()))
+    .map((t) => pickerItem(t, detail(port(t.url) && `:${port(t.url)}`, t.tagline)));
+  picker.replaceChildren(
+    el('div', { class: 'picker-head' },
+      el('h4', { text: 'Running on this server' }),
+      el('button', { class: 'link-btn mono', type: 'button', text: 'Close', onclick: closeAppPicker })),
+    running.length
+      ? el('div', { class: 'picker-list' }, running)
+      : el('span', { class: 'mono muted', text: data.docker.ok ? 'Every running app already has a card.' : 'Roost can\'t see Docker, so only templates are shown.' }),
+    templates.length ? el('h4', { text: 'Templates' }) : null,
+    templates.length ? el('div', { class: 'picker-list' }, templates) : null,
+    el('button', { class: 'btn ghost small', type: 'button', text: 'Blank card', onclick: () => addAppRow({ icon: 'grid' }) }),
+  );
+}
+
 $('#add-app').addEventListener('click', () => {
-  $('#apps-editor').append(appEditorRow({ icon: 'grid' }));
+  if ($('#app-picker').classList.contains('hidden')) openAppPicker();
+  else closeAppPicker();
 });
 
 $('#apps-form').addEventListener('submit', async (e) => {
