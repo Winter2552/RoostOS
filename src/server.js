@@ -13,6 +13,7 @@ const mail = require('./mail');
 const setup = require('./setup');
 const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
+const { DriveHealth } = require('./smart');
 const twoStep = require('./twostep');
 const { qrSvg } = require('./qr');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
@@ -153,7 +154,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10 } = {}) {
+function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10 } = {}) {
   const store = new Store(dataDir);
   const activity = new ActivityLog(dataDir, { saveDelayMs: activitySaveDelayMs });
   // Nest used to be an outside app with no link; it is built in now.
@@ -173,6 +174,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   // the drive Roost keeps its data on (the same drive is only listed once).
   const diskList = disks && disks.length ? disks : [{ label: 'System', path: '/' }, { label: 'Data', path: dataDir }];
   const db = () => store.db;
+  // SMART readings the roost-smart helper leaves behind; null when it isn't set up.
+  const driveHealth = new DriveHealth(smartDir);
 
   const nest = new Nest({
     dir: nestDir || path.join(dataDir, 'nest'),
@@ -693,6 +696,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       send(res, 200, {
         ...health,
         docker: docker.error ? { ok: false, error: docker.error } : { ok: true },
+        driveHealth: driveHealth.read(),
         apps,
         // Everything else Docker runs, for admins only.
         otherContainers: user.role === 'admin' ? all.filter((c) => !claimed.has(c.id)) : [],
@@ -890,6 +894,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         admin,
         nestDir: nestDir || path.join(dataDir, 'nest'),
         drives: readDisks(diskList),
+        driveHealth: driveHealth.read(),
         dockerOk: !docker.error,
         secureCookies,
         trustProxy,
@@ -1228,7 +1233,8 @@ if (require.main === module) {
   const roostContainer = process.env.ROOST_CONTAINER || 'roost';
   const nestDir = process.env.NEST_DIR || path.join(dataDir, 'nest');
   const trustProxy = process.env.BEHIND_PROXY === 'true';
-  const server = createServer({ dataDir, nestDir, secureCookies, disks, dockerHost, roostContainer, appToken, trustProxy });
+  const smartDir = process.env.SMART_DIR || '';
+  const server = createServer({ dataDir, nestDir, secureCookies, disks, dockerHost, roostContainer, smartDir, appToken, trustProxy });
   server.listen(port, () => {
     console.log(`Roost is running on http://localhost:${port} (data in ${dataDir})`);
   });

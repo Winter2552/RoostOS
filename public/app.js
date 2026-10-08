@@ -693,7 +693,8 @@ function statCard(label, value, sub, bar) {
     el('div', { class: 'mono muted stat-sub', text: sub }));
 }
 
-function ago(iso) {
+// "3h 20m" since a time; the activity log's ago() says "3 h ago" instead.
+function elapsed(iso) {
   return duration(Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000));
 }
 
@@ -711,9 +712,9 @@ function containerState(c) {
 
 function containerSince(c) {
   const exit = c.exitCode ? ` (exit ${c.exitCode})` : '';
-  if (c.startedAt) return `up ${ago(c.startedAt)}`;
+  if (c.startedAt) return `up ${elapsed(c.startedAt)}`;
   if (c.state === 'restarting') return `crashing${exit}`;
-  if (c.finishedAt) return `stopped ${ago(c.finishedAt)} ago${exit}`;
+  if (c.finishedAt) return `stopped ${elapsed(c.finishedAt)} ago${exit}`;
   return c.state;
 }
 
@@ -752,6 +753,77 @@ function appStatusCard(a, dockerOk) {
     el('div', { class: 'stat-lines mono muted' }, lines.map((t) => el('div', { text: t }))));
 }
 
+// ---------- drive health ----------
+
+const HEALTH_DOT = { good: 'online', watch: 'starting', bad: 'offline', unknown: 'unset' };
+
+// Drive makers count in thousands, so a "240 GB" drive is shown as 240 GB, not 224.
+function driveSize(n) {
+  if (!n) return '';
+  return n >= 1e12 ? `${+(n / 1e12).toFixed(1)} TB` : `${Math.round(n / 1e9)} GB`;
+}
+
+function hoursOn(h) {
+  const years = h / (24 * 365);
+  if (years >= 1) {
+    const y = +years.toFixed(1);
+    return `${y} year${y === 1 ? '' : 's'}`;
+  }
+  return h >= 48 ? `${Math.round(h / 24)} days` : `${h} hours`;
+}
+
+function healthLines(d) {
+  const x = d.details || {};
+  const n = (v) => Number(v).toLocaleString();
+  return [
+    x.temp !== null && x.temp !== undefined ? `Temperature ${x.temp}°C` : null,
+    x.hours !== null && x.hours !== undefined ? `Powered on ${hoursOn(x.hours)} (${n(x.hours)} h)` : null,
+    x.wear !== null && x.wear !== undefined ? `Life used ${x.wear}%` : null,
+    x.written ? `Written ${bytes(x.written)}` : null,
+    x.reallocated !== null && x.reallocated !== undefined ? `Replaced sectors ${n(x.reallocated)}` : null,
+    x.pending !== null && x.pending !== undefined ? `Unreadable sectors ${n(x.pending)}` : null,
+    x.uncorrectable !== null && x.uncorrectable !== undefined ? `Lost sectors ${n(x.uncorrectable)}` : null,
+    x.cableErrors !== null && x.cableErrors !== undefined ? `Cable errors ${n(x.cableErrors)} (ever)` : null,
+    d.model ? `${d.model}${d.serial ? ` · ${d.serial}` : ''}` : null,
+    d.asleep && d.readAt ? 'Asleep now, so this is its last reading' : null,
+    d.readAt ? `Read ${ago(d.readAt)} · /dev/${d.device}` : `/dev/${d.device}`,
+  ].filter(Boolean);
+}
+
+// One card per drive: a verdict in plain words, the reason that matters, and
+// the numbers behind it when you tap it.
+function healthCard(d, open) {
+  const x = d.details || {};
+  const name = [d.kind, driveSize(d.capacity)].filter(Boolean).join(' · ') || `/dev/${d.device}`;
+  const fine = [x.temp !== null && x.temp !== undefined ? `${x.temp}°C` : null, x.hours ? `${hoursOn(x.hours)} on` : null].filter(Boolean).join(' · ');
+  const why = d.reasons && d.reasons.length ? d.reasons[0] : fine || 'No problems found';
+  const card = el('details', { class: `card stat-card drive-health ${d.verdict}`, 'data-device': d.device, open },
+    el('summary', {},
+      el('div', { class: 'mono muted', text: name }),
+      el('div', { class: 'stat-value', text: d.headline }),
+      el('div', { class: 'mono stat-state' }, el('span', { class: `dot ${HEALTH_DOT[d.verdict]}` }), why)),
+    el('div', { class: 'stat-lines mono muted' },
+      (d.reasons || []).slice(1).map((t) => el('div', { class: 'health-reason', text: t })),
+      healthLines(d).map((t) => el('div', { text: t }))));
+  return card;
+}
+
+function renderHealth(h) {
+  $('#status-health-wrap').classList.toggle('hidden', !h);
+  if (!h) return;
+  // The page refreshes every few seconds; keep any card you opened open.
+  const open = new Set([...document.querySelectorAll('#status-health details[open]')].map((n) => n.dataset.device));
+  $('#status-health').replaceChildren(...h.drives.map((d) => healthCard(d, open.has(d.device))));
+  const note = $('#status-health-note');
+  const text = h.missing || (!h.drives.length && !h.checkedAt)
+    ? 'Waiting for the first health check from the roost-smart helper.'
+    : h.stale
+      ? `Health checks have stopped${h.checkedAt ? `; the last one was ${ago(h.checkedAt)}` : ''}. Is roost-smart running?`
+      : h.checkedAt ? `Checked hourly · last ${ago(h.checkedAt)}` : '';
+  note.textContent = text;
+  note.classList.toggle('hidden', !text);
+}
+
 async function loadStatus() {
   if (statusBusy) return;
   statusBusy = true;
@@ -785,6 +857,8 @@ function renderStatus(s) {
     return statCard(d.label, `${bytes(d.free)} free`, `${bytes(used)} of ${bytes(d.total)} used`, pct(used, d.total));
   }));
 
+  renderHealth(s.driveHealth);
+
   $('#status-apps').replaceChildren(...s.apps.map((a) => appStatusCard(a, s.docker.ok)));
 
   const note = $('#status-note');
@@ -805,7 +879,14 @@ function renderStatus(s) {
     ...s.disks.filter((d) => d.missing).map((d) => `${d.label} drive not found`),
     ...(memPct >= FULL_AT ? ['Memory is nearly full'] : []),
   ];
-  setSummary(problems.length ? 'offline' : 'online', problems.length ? problems.join(' · ') : 'Everything is running');
+  const drives = (s.driveHealth && s.driveHealth.drives) || [];
+  const driveName = (d) => [d.kind || 'Drive', driveSize(d.capacity)].filter(Boolean).join(' ');
+  problems.push(...drives.filter((d) => d.verdict === 'bad').map((d) => `${driveName(d)}: ${d.headline.toLowerCase()}`));
+  // Worth a look, but nothing is down: a yellow dot rather than a red one.
+  const warnings = drives.filter((d) => d.verdict === 'watch').map((d) => `${driveName(d)}: ${d.reasons[0].toLowerCase()}`);
+  if (problems.length) setSummary('offline', [...problems, ...warnings].join(' · '));
+  else if (warnings.length) setSummary('starting', warnings.join(' · '));
+  else setSummary('online', 'Everything is running');
   $('#status-updated').textContent = `Updated ${new Date(s.checkedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
 }
 

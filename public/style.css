@@ -496,6 +496,26 @@ a.btn { text-decoration: none; text-align: center; }
 .container-row:first-child { border-top: 0; }
 .container-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Drive health: tap a card for the numbers behind the verdict. */
+.drive-health { cursor: pointer; align-self: start; }
+.drive-health summary { display: flex; flex-direction: column; gap: 10px; list-style: none; outline-offset: 6px; border-radius: 8px; }
+.drive-health summary::-webkit-details-marker { display: none; }
+.drive-health .stat-state { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drive-health:not([open]) .stat-lines { display: none; }
+.drive-health[open] .stat-lines { margin-top: 10px; }
+.drive-health[open] .stat-state, .drive-health[open] .stat-lines div { white-space: normal; }
+.drive-health .health-reason { color: var(--ink); }
+.drive-health.watch { border-color: #f5d77a; }
+.drive-health.bad { border-color: var(--bad); }
+.drive-health.unknown { border-style: dashed; box-shadow: none; }
+
+@media (max-width: 600px) {
+  .drive-health .stat-value { white-space: normal; }
+  .drive-health .stat-state { white-space: normal; font-size: 12px; }
+  /* An opened card takes the whole row, so its numbers have room. */
+  .drive-health[open] { grid-column: 1 / -1; }
+}
+
 @media (max-width: 600px) {
   .container-list { padding: 4px 16px; }
   .container-row { flex-direction: column; gap: 4px; font-size: 12px; }
