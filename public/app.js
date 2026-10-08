@@ -46,7 +46,7 @@ async function api(method, url, body) {
   if (res.status === 401 && !url.startsWith('/api/login') && !linkToken()) {
     showWelcome(false);
   }
-  if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status });
+  if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status, code: data.code });
   return data;
 }
 

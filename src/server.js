@@ -1383,7 +1383,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     } catch (err) {
       const status = err.status || 500;
       if (status === 500) console.error(err);
-      if (!res.headersSent) send(res, status, { error: status === 500 ? 'Something went wrong' : err.message });
+      if (!res.headersSent) send(res, status, status === 500 ? { error: 'Something went wrong' } : { error: err.message, ...(err.code && { code: err.code }) });
     }
   }
 

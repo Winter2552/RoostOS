@@ -76,7 +76,7 @@ The relay password is kept in `roost.json` and is never sent back to the browser
 
 Every user has a storage limit in GB, picked with a slider that runs up to the size of the data drive (or typed exactly; admins can also tick "No limit"). New users start with the default set under **Admin → Server** (50 GB unless changed); only admins can change a limit. Other users can ask for more from their Profile, and the request waits under **Admin → Storage requests** until an admin approves it (optionally with a different amount) or declines it.
 
-Nest is part of Roost, so it enforces the limit itself and its usage shows up on the Profile straight away. Glint, once it exists, reads the limit and reports its usage with the token in `ROOST_APP_TOKEN` (the app API is off when it is unset):
+Nest is part of Roost, so it enforces the limit itself and its usage shows up on the Profile straight away. From 90% full, Nest shows an **Ask for more** link under its storage bar (admins get **Raise limit**), and an upload that would go over stops with the same link instead of a retry. Glint, once it exists, reads the limit and reports its usage with the token in `ROOST_APP_TOKEN` (the app API is off when it is unset):
 
 ```
 GET /api/storage/users/<username>          → { storage: { limitBytes, usedBytes, remainingBytes, ... } }
