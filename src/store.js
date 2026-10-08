@@ -37,8 +37,9 @@ const DEFAULT_APPS = [
     id: 'glint',
     name: 'Glint',
     tagline: 'Photos',
-    description: 'Photo library and backups.',
-    url: '',
+    description: 'Your photos and videos, on the Roost drive.',
+    // Built into Roost too: the link opens the Photos page.
+    url: '#/glint',
     icon: 'spark',
   },
 ];

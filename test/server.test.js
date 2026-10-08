@@ -219,10 +219,13 @@ test('app links must be http(s)', async () => {
   assert.equal(ok.body.apps[2].url, 'http://{host}:8443');
 });
 
-test('status reports unset apps without probing', async () => {
+test('status reports unset and built-in apps without probing', async () => {
   const { body } = await call('GET', '/api/apps/status', null, userCookie);
-  assert.equal(body.status.glint, 'unset');
+  // Glint is part of Roost, so it is up whenever Roost is.
+  assert.equal(body.status.glint, 'online');
   assert.ok(['online', 'offline'].includes(body.status.jellyfin));
+  const admin = await call('GET', '/api/apps/status', null, adminCookie);
+  assert.equal(admin.body.status.nova, 'unset');
 });
 
 test('status page needs a signed-in user', async () => {
@@ -240,7 +243,7 @@ test('status reports server health and app states', async () => {
   assert.ok(body.disks[0].total > 0);
   // The guest only sees the apps they were given.
   assert.deepEqual(body.apps.map((a) => a.id), ['roost', 'jellyfin', 'glint']);
-  assert.equal(body.apps[2].web.state, 'unset');
+  assert.equal(body.apps[2].web.state, 'online');
   assert.ok(['online', 'offline'].includes(body.apps[1].web.state));
   // Without Docker it says so and only the web check is used.
   assert.equal(body.docker.ok, false);

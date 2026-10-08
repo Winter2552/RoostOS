@@ -18,6 +18,7 @@ const { qrSvg } = require('./qr');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
 const { HttpError, send, readJson, str } = require('./http');
 const { Nest } = require('./nest');
+const { Glint } = require('./glint');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const COOKIE = 'roost_session';
@@ -156,12 +157,16 @@ async function timedProbe(url, timeoutMs) {
 function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10 } = {}) {
   const store = new Store(dataDir);
   const activity = new ActivityLog(dataDir, { saveDelayMs: activitySaveDelayMs });
-  // Nest used to be an outside app with no link; it is built in now.
-  const nestApp = store.db.apps.find((a) => a.id === 'nest');
-  if (nestApp && !nestApp.url) {
-    nestApp.url = '#/nest';
-    store.save();
+  // Nest and Glint used to be outside apps with no link; they are built in now.
+  let linked = false;
+  for (const [id, url] of [['nest', '#/nest'], ['glint', '#/glint']]) {
+    const app = store.db.apps.find((a) => a.id === id);
+    if (app && !app.url) {
+      app.url = url;
+      linked = true;
+    }
   }
+  if (linked) store.save();
   const sessions = new Sessions();
   const limiter = new RateLimiter(maxFailedSignIns);
   // Sign-ins waiting for a code, and authenticator secrets waiting to be
@@ -188,7 +193,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     },
   });
   nest.syncUsage();
-  const sweep = () => nest.sweep().catch((err) => console.error('Nest clean-up failed:', err));
+  const glint = new Glint({ nest });
+  const sweep = () => nest.sweep().then(() => glint.sweep()).catch((err) => console.error('Nest clean-up failed:', err));
   sweep();
   const sweepTimer = setInterval(sweep, 6 * 60 * 60 * 1000);
   sweepTimer.unref();
@@ -1187,6 +1193,10 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         const user = requireUser(req);
         if (!visibleApps(db(), user).some((a) => a.id === 'nest')) throw new HttpError(403, 'You don’t have access to Nest');
         await nest.handle(req, res, user, pathname, new URL(req.url, 'http://roost').searchParams);
+      } else if (pathname.startsWith('/api/glint/')) {
+        const user = requireUser(req);
+        if (!visibleApps(db(), user).some((a) => a.id === 'glint')) throw new HttpError(403, 'You don’t have access to Glint');
+        await glint.handle(req, res, user, pathname, new URL(req.url, 'http://roost').searchParams);
       } else if (pathname.startsWith('/api/')) {
         const found = route(req.method, pathname);
         if (!found) throw new HttpError(404, 'Not found');
@@ -1210,6 +1220,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     nest.close();
   });
   server.nest = nest;
+  server.glint = glint;
   // Save anything still waiting, e.g. when the container is stopped.
   server.flushAll = () => {
     store.flush();
