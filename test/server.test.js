@@ -273,6 +273,9 @@ test('status reports server health and app states', async () => {
   assert.equal(body.docker.ok, false);
   assert.deepEqual(body.apps[1].containers, []);
   assert.deepEqual(body.otherContainers, []);
+  // Uptime history: Roost's own row from the start, and only the guest's apps.
+  assert.ok(body.history.apps.roost.watched.length >= 1);
+  assert.ok(Object.keys(body.history.apps).every((id) => ['roost', 'jellyfin', 'glint'].includes(id)));
 });
 
 test('ROOST_DISKS parsing skips bad entries', () => {
@@ -293,6 +296,20 @@ test('users can rename themselves and change password', async () => {
   assert.equal(wrong.status, 400);
   const ok = await call('PATCH', '/api/me', { currentPassword: 'guest pass 1', newPassword: 'new pass 123' }, userCookie);
   assert.equal(ok.status, 200);
+});
+
+test('each user keeps their own app order and favourites', async () => {
+  const { apps } = (await call('GET', '/api/apps', null, adminCookie)).body;
+  const ids = apps.map((a) => a.id);
+  const order = [...ids].reverse();
+  const saved = await call('PATCH', '/api/me', { appOrder: [...order, 'gone', order[0]], favourites: [ids[1], 'gone'] }, adminCookie);
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.body.user.appOrder, order);
+  assert.deepEqual(saved.body.user.favourites, [ids[1]]);
+  // The shared app list (and other people's layouts) stay as they were.
+  assert.deepEqual((await call('GET', '/api/apps', null, adminCookie)).body.apps.map((a) => a.id), ids);
+  assert.deepEqual((await call('GET', '/api/state', null, userCookie)).body.user.favourites, []);
+  assert.equal((await call('PATCH', '/api/me', { favourites: 'nest' }, adminCookie)).status, 400);
 });
 
 test('new users get the default storage limit; the first admin has none', async () => {
@@ -530,3 +547,27 @@ test('status reads container state from Docker', async () => {
   }
 });
 
+
+test('Roost can be installed as an app', async () => {
+  const res = await fetch(base + '/manifest.webmanifest');
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /application\/manifest\+json/);
+  const m = await res.json();
+  assert.equal(m.display, 'standalone');
+  assert.equal(m.start_url, '/');
+  assert.ok(m.icons.some((i) => i.purpose === 'maskable'));
+  for (const icon of [...m.icons, { src: '/icons/apple-touch-icon.png', sizes: '180x180' }]) {
+    const r = await fetch(base + icon.src);
+    assert.equal(r.status, 200, icon.src);
+    assert.equal(r.headers.get('content-type'), 'image/png');
+    assert.match(r.headers.get('cache-control'), /max-age/);
+    const png = Buffer.from(await r.arrayBuffer());
+    const [w, h] = icon.sizes.split('x').map(Number);
+    assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [w, h], icon.src);
+  }
+  for (const file of ['/sw.js', '/offline.html']) {
+    const r = await fetch(base + file);
+    assert.equal(r.status, 200, file);
+    assert.equal(r.headers.get('cache-control'), 'no-cache');
+  }
+});
