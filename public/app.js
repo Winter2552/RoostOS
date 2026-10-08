@@ -575,6 +575,7 @@ async function enter(user) {
   document.querySelectorAll('.admin-only').forEach((n) => n.classList.toggle('hidden', user.role !== 'admin'));
   renderUser();
   await Promise.all([loadApps(), loadSystem()]);
+  loadBackup();
   route();
   if (user.role === 'admin' && !location.hash.startsWith('#/admin')) loadSetup();
 }
@@ -668,6 +669,47 @@ async function loadSystem() {
   } catch {
     // The panel just keeps its dashes if stats aren't available.
   }
+}
+
+// ---------- backup line ----------
+
+function backupWhen(iso) {
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const days = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(iso).setHours(0, 0, 0, 0)) / 86400000);
+  if (days === 0) return `today ${time}`;
+  if (days === 1) return `yesterday ${time}`;
+  if (days < 7) return `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`;
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
+// One quiet line under the stats: when the last backup finished, or what is
+// wrong. Hidden until backups are set up.
+async function loadBackup() {
+  const line = $('#backup-line');
+  let b;
+  try {
+    b = await api('GET', '/api/backup');
+  } catch {
+    return;
+  }
+  const last = b.lastOk ? `Last backup ${backupWhen(b.lastOk)}` : 'No backup yet';
+  const [dot, text] = {
+    ok: ['online', last],
+    late: ['warn', last],
+    none: ['', 'First backup on its way'],
+    running: ['', b.lastOk ? `Backing up now · ${last.toLowerCase()}` : 'First backup running'],
+    failed: ['offline', `Last backup failed · ${b.lastOk ? backupWhen(b.lastOk) : 'none yet'}`],
+    drive: ['offline', 'Backup drive not found'],
+    stopped: ['offline', 'Backups aren’t running'],
+  }[b.state] || [];
+  line.classList.toggle('hidden', !text);
+  if (!text) return;
+  line.replaceChildren(el('span', { class: `dot ${dot}` }), text);
+  // Admins can tap through to the setup checklist, where the backup steps are.
+  if (state.user.role === 'admin') line.href = '#/admin';
+  else line.removeAttribute('href');
+  line.title = b.message || '';
 }
 
 // ---------- status page ----------

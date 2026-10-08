@@ -42,6 +42,39 @@ services:
       - /DATA:/hostfs/system:ro
       - /DATA:/hostfs/data:ro
 
+  # Nightly backups (Roost Snapshots) to a drive plugged into the server. Same
+  # image as Roost, different start command. It reads Nest and the apps'
+  # settings read-only and writes only to the backup drive.
+  roost-backup:
+    build: .
+    container_name: roost-backup
+    restart: unless-stopped
+    command: ["node", "src/backup-service.js"]
+    # The Roost image checks its web page for health; this service has none.
+    healthcheck:
+      disable: true
+    environment:
+      DATA_DIR: /data
+      BACKUP_DIR: /backup
+      NEST_DIR: /source/nest
+      APPDATA_DIR: /source/appdata
+      BACKUP_TIME: "03:00"
+      # Your time zone, so 03:00 is your 03:00, e.g. Europe/London.
+      TZ: "Etc/UTC"
+    volumes:
+      # Roost's data: backed up too, and where this service reports to Roost.
+      - /DATA/AppData/roost:/data
+      # The same folders as the Nest line above, read-only.
+      - /DATA/roost-nest:/source/nest:ro
+      # Every app's settings (Jellyfin users and watch history and so on).
+      # Caches, transcodes and logs are skipped. Films and shows live
+      # elsewhere and aren't backed up.
+      - /DATA/AppData:/source/appdata:ro
+      # The backup drive. Point the left side at the USB SSD's mount folder
+      # (ZimaOS shows it under Storage). Until then backups wait: Roost
+      # never backs up onto the drive the data is on.
+      - /media/Backup:/backup
+
   # Read-only window onto Docker for the status page: lists and inspects
   # containers, refuses everything else (no starting, stopping or exec).
   docker-proxy:

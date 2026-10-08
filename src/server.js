@@ -11,6 +11,7 @@ const storage = require('./storage');
 const links = require('./links');
 const mail = require('./mail');
 const setup = require('./setup');
+const backup = require('./backup');
 const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
 const twoStep = require('./twostep');
@@ -880,6 +881,26 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       deliver(user.email, ...resetEmail(user, token, '1 hour')).catch((err) => console.error(`Reset email to @${user.username} failed: ${err.message}`));
     },
 
+    // ---------- backups ----------
+
+    // The dashboard line. Everyone sees how backups are doing; only admins
+    // see why one failed and what the drive holds.
+    'GET /api/backup': (req, res) => {
+      const user = requireUser(req);
+      const status = backup.readStatus(dataDir);
+      const out = backup.summarize(status);
+      if (user.role !== 'admin') {
+        send(res, 200, { state: out.state, lastOk: out.lastOk || null });
+        return;
+      }
+      send(res, 200, {
+        ...out,
+        drive: status && status.drive,
+        last: status && status.last,
+        snapshots: status ? status.snapshots : [],
+      });
+    },
+
     // ---------- setup checklist ----------
 
     'GET /api/admin/setup': async (req, res) => {
@@ -894,6 +915,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         secureCookies,
         trustProxy,
         ticked: db().settings.setupTicked || [],
+        backup: backup.readStatus(dataDir),
       }));
     },
 

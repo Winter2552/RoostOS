@@ -201,6 +201,7 @@ a.app-card:focus-visible {
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 8px; vertical-align: 1px; }
 .dot.online { background: var(--ok); }
 .dot.offline { background: var(--bad); }
+.dot.warn { background: #f5d77a; }
 
 .empty { border: 1px dashed var(--line); border-radius: var(--radius); padding: 32px; text-align: center; color: var(--muted); }
 
@@ -773,3 +774,8 @@ a.btn { text-decoration: none; text-align: center; }
 @media (pointer: coarse) {
   .setup-row { min-height: 44px; }
 }
+
+/* ---------- backup line (dashboard) ---------- */
+
+.backup-line { display: block; width: max-content; max-width: 100%; margin-top: 18px; color: var(--muted); text-decoration: none; font-size: 12px; }
+a.backup-line[href]:hover { color: var(--ink); }
