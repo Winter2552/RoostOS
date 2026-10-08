@@ -834,7 +834,95 @@ function appState(a, dockerOk) {
   return { kind: a.web.state, label: WEB_LABEL[a.web.state] };
 }
 
-function appStatusCard(a, dockerOk) {
+// ---------- uptime history ----------
+
+const HISTORY_DAYS = 30;
+const uptimePick = {}; // app id → the day tapped on its strip
+
+function overlap(ranges, from, to) {
+  let ms = 0;
+  for (const [s, e] of ranges) ms += Math.max(0, Math.min(e, to) - Math.max(s, from));
+  return ms;
+}
+
+// One entry per local day, oldest first: how long it was watched and down.
+function uptimeDays(h, now) {
+  const days = [];
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  for (let i = HISTORY_DAYS - 1; i >= 0; i--) {
+    const start = new Date(today);
+    start.setDate(today.getDate() - i);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 1);
+    const from = start.getTime();
+    const to = Math.min(end.getTime(), now);
+    const watched = overlap(h.watched, from, to);
+    const down = Math.min(watched, overlap(h.outages, from, to));
+    const kind = !watched ? 'none' : !down ? 'up' : down * 2 >= watched ? 'down' : 'part';
+    days.push({ from, to, watched, down, kind, outages: h.outages.filter(([s, e]) => e > from && s < to) });
+  }
+  return days;
+}
+
+const clockTime = (ms) => new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+const dayName = (ms) => new Date(ms).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+const mins = (ms) => duration(Math.max(60, ms / 1000));
+
+function dayDetail(d) {
+  if (!d.watched) return `${dayName(d.from)} · no data`;
+  if (!d.down) return `${dayName(d.from)} · no downtime`;
+  const times = d.outages.slice(0, 3).map(([s, e]) => `${clockTime(Math.max(s, d.from))}–${clockTime(Math.min(e, d.to))}`);
+  const more = d.outages.length > 3 ? ` +${d.outages.length - 3}` : '';
+  return `${dayName(d.from)} · down ${mins(d.down)} (${times.join(', ')}${more})`;
+}
+
+function uptimeStrip(id, h, now) {
+  const days = uptimeDays(h, now);
+  const watched = days.reduce((n, d) => n + d.watched, 0);
+  const down = days.reduce((n, d) => n + d.down, 0);
+  if (!watched) return null;
+  // Any downtime shows a decimal and never rounds up to 100.
+  const percent = down ? Math.min(99.9, 100 * (1 - down / watched)).toFixed(1) : '100';
+  const outages = h.outages.length;
+  const summary = outages ? `${outages} outage${outages > 1 ? 's' : ''} · ${mins(down)}` : 'No outages';
+  const detail = el('div', { class: 'uptime-detail mono muted', 'aria-live': 'polite' });
+  const bars = el('div', { class: 'uptime-bars' }, days.map((d) => el('i', { class: d.kind })));
+  const strip = el('div', {
+    class: 'uptime-strip',
+    role: 'slider',
+    tabindex: '0',
+    'aria-label': `Last ${HISTORY_DAYS} days: ${percent}% up, ${summary.toLowerCase()}`,
+    'aria-valuemin': 0,
+    'aria-valuemax': HISTORY_DAYS - 1,
+  }, bars);
+  const pick = (i) => {
+    const n = Math.max(0, Math.min(HISTORY_DAYS - 1, i));
+    uptimePick[id] = n;
+    [...bars.children].forEach((b, j) => b.classList.toggle('picked', j === n));
+    strip.setAttribute('aria-valuenow', n);
+    strip.setAttribute('aria-valuetext', dayDetail(days[n]));
+    detail.textContent = dayDetail(days[n]);
+  };
+  // The whole strip is the tap target: thin bars are hard to hit on a phone.
+  strip.addEventListener('click', (e) => {
+    const r = bars.getBoundingClientRect();
+    pick(Math.floor(((e.clientX - r.left) / r.width) * HISTORY_DAYS));
+  });
+  strip.addEventListener('keydown', (e) => {
+    const step = { ArrowLeft: -1, ArrowRight: 1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    pick((uptimePick[id] ?? HISTORY_DAYS - 1) + step);
+  });
+  if (uptimePick[id] !== undefined) pick(uptimePick[id]);
+  return el('div', { class: 'uptime' },
+    el('div', { class: 'uptime-head mono muted' }, el('span', { text: `${percent}% · ${HISTORY_DAYS} days` }), el('span', { text: summary })),
+    strip,
+    detail);
+}
+
+function appStatusCard(a, dockerOk, history) {
   const st = appState(a, dockerOk);
   const lines = [];
   if (a.containers.length) {
@@ -852,6 +940,7 @@ function appStatusCard(a, dockerOk) {
     el('div', { class: 'app-status-head' }, icon(a.icon), el('div', { class: 'mono muted', text: a.tagline })),
     el('div', { class: 'stat-value', text: a.name }),
     el('div', { class: 'mono stat-state' }, el('span', { class: `dot ${st.kind}` }), st.label),
+    history && history.apps[a.id] ? uptimeStrip(a.id, history.apps[a.id], history.now) : null,
     el('div', { class: 'stat-lines mono muted' }, lines.map((t) => el('div', { text: t }))));
 }
 
@@ -888,7 +977,7 @@ function renderStatus(s) {
     return statCard(d.label, `${bytes(d.free)} free`, `${bytes(used)} of ${bytes(d.total)} used`, pct(used, d.total));
   }));
 
-  $('#status-apps').replaceChildren(...s.apps.map((a) => appStatusCard(a, s.docker.ok)));
+  $('#status-apps').replaceChildren(...s.apps.map((a) => appStatusCard(a, s.docker.ok, s.history)));
 
   const note = $('#status-note');
   note.classList.toggle('hidden', s.docker.ok);

@@ -846,3 +846,23 @@ a.btn { text-decoration: none; text-align: center; }
 }
 #guest-until-field .row { flex-wrap: nowrap; gap: 10px; }
 #guest-until-field .row > * { flex: 1; min-width: 0; }
+
+
+/* Uptime history: one bar per day, newest on the right. */
+.uptime { display: flex; flex-direction: column; gap: 6px; }
+.uptime-head { display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
+.uptime-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uptime-strip { padding: 4px 0; cursor: pointer; border-radius: 4px; touch-action: manipulation; }
+.uptime-strip:focus-visible { outline: 1px solid var(--ink); outline-offset: 3px; }
+.uptime-bars { display: flex; gap: 2px; height: 22px; }
+.uptime-bars i { flex: 1; border-radius: 2px; background: var(--ink); opacity: 0.85; transition: opacity 150ms ease; }
+.uptime-bars i.part { background: var(--bad); opacity: 0.55; }
+.uptime-bars i.down { background: var(--bad); opacity: 1; }
+.uptime-bars i.none { background: var(--line); opacity: 1; }
+.uptime-bars i.picked { outline: 1px solid var(--ink); outline-offset: 1px; opacity: 1; }
+.uptime-detail { font-size: 11px; min-height: 1.4em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uptime-detail:empty::before { content: 'Pick a day for details'; opacity: 0.6; }
+@media (max-width: 600px) {
+  .uptime-bars { gap: 1px; height: 20px; }
+  .uptime-detail { white-space: normal; }
+}

@@ -18,6 +18,7 @@ const { qrSvg } = require('./qr');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
 const { HttpError, send, readJson, str } = require('./http');
 const { Nest } = require('./nest');
+const { UptimeLog, watchDockerEvents } = require('./uptime');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const COOKIE = 'roost_session';
@@ -137,6 +138,13 @@ function visibleApps(db, user) {
     : db.apps.filter((a) => user.apps.includes(a.id));
 }
 
+// Addresses on the home network, which Roost can also reach from inside its
+// container. A public domain (through a tunnel) isn't, so it's never used
+// for background checks.
+function localHost(host) {
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.startsWith('[') || !host.includes('.') || /\.(local|lan|home\.arpa)$/.test(host);
+}
+
 function requestHost(req) {
   const host = String(req.headers.host || 'localhost');
   return host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.split(':')[0];
@@ -166,7 +174,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10 } = {}) {
+function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000 } = {}) {
   const store = new Store(dataDir);
   const activity = new ActivityLog(dataDir, { saveDelayMs: activitySaveDelayMs });
   // Nest used to be an outside app with no link; it is built in now.
@@ -205,6 +213,58 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   sweep();
   const sweepTimer = setInterval(sweep, 6 * 60 * 60 * 1000);
   sweepTimer.unref();
+
+  // Uptime history: containers are re-read when Docker reports a change, and
+  // apps without one get a web check every few minutes (see src/uptime.js).
+  const uptime = new UptimeLog(dataDir);
+  let lastDocker = { error: 'not checked' };
+  async function checkUptime({ web, containers = true }) {
+    // With Docker events coming through, the last container read is still current.
+    if (containers || lastDocker.error) {
+      lastDocker = dockerHost ? await listContainers(dockerHost, probeTimeoutMs) : { error: 'not configured' };
+    }
+    const docker = lastDocker;
+    const tracked = [];
+    await Promise.all(db().apps.map(async (a) => {
+      const list = docker.error ? [] : containersFor(a, docker.containers);
+      if (list.length) {
+        tracked.push(a.id);
+        uptime.observe(a.id, list.every((c) => c.state === 'running' && c.health !== 'unhealthy'));
+        return;
+      }
+      // Built-in apps are part of Roost; Roost's own row covers them.
+      if (!a.url || builtIn(a.url)) return;
+      tracked.push(a.id);
+      if (!web || (a.url.includes('{host}') && !uptime.host)) return;
+      const r = await timedProbe(a.url.replace(/\{host\}/g, uptime.host), probeTimeoutMs);
+      uptime.observe(a.id, r.state === 'online');
+    }));
+    uptime.forget(tracked);
+  }
+  let uptimeBusy = false;
+  let uptimeSoon = null;
+  const runUptime = (opts) => {
+    if (uptimeBusy) return;
+    uptimeBusy = true;
+    checkUptime(opts)
+      .catch((err) => console.error('Uptime check failed:', err))
+      .finally(() => { uptimeBusy = false; });
+  };
+  // A burst of Docker events (a restart is several) makes one check.
+  const events = watchDockerEvents(dockerHost, () => {
+    if (uptimeSoon) return;
+    uptimeSoon = setTimeout(() => { uptimeSoon = null; runUptime({ web: false }); }, 2000);
+    uptimeSoon.unref();
+  });
+  // Containers are only re-read on the timer when Docker events aren't coming through.
+  const uptimeTimer = setInterval(() => {
+    uptime.heartbeat();
+    runUptime({ web: true, containers: !events.live() });
+  }, uptimeCheckMs);
+  uptimeTimer.unref();
+  const uptimeSaveTimer = setInterval(() => uptime.save(), 60 * 60 * 1000);
+  uptimeSaveTimer.unref();
+  runUptime({ web: true });
 
   function currentUser(req) {
     const s = sessions.get(parseCookies(req)[COOKIE]);
@@ -670,6 +730,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     'GET /api/apps/status': async (req, res) => {
       const user = requireUser(req);
       const host = requestHost(req);
+      if (localHost(host)) uptime.setHost(host);
       const entries = await Promise.all(
         visibleApps(db(), user).map(async (a) => [a.id, (await appProbe(a, host, probeTimeoutMs)).state]),
       );
@@ -698,6 +759,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     'GET /api/status': async (req, res) => {
       const user = requireMember(req);
       const host = requestHost(req);
+      if (localHost(host)) uptime.setHost(host);
       const [health, docker, web] = await Promise.all([
         serverHealth({ cpu, disks: diskList }),
         listContainers(dockerHost, probeTimeoutMs),
@@ -731,6 +793,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         apps,
         // Everything else Docker runs, for admins only.
         otherContainers: user.role === 'admin' ? all.filter((c) => !claimed.has(c.id)) : [],
+        history: uptime.history(visibleApps(db(), user).map((a) => a.id)),
         checkedAt: new Date().toISOString(),
       });
     },
@@ -1256,6 +1319,11 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
 
   server.on('close', () => {
     clearInterval(sweepTimer);
+    clearInterval(uptimeTimer);
+    clearInterval(uptimeSaveTimer);
+    clearTimeout(uptimeSoon);
+    events.stop();
+    uptime.save();
     store.flush();
     activity.flush();
     nest.close();
@@ -1263,6 +1331,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   server.nest = nest;
   // Save anything still waiting, e.g. when the container is stopped.
   server.flushAll = () => {
+    uptime.save();
     store.flush();
     activity.flush();
   };
