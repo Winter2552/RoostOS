@@ -293,7 +293,7 @@ label.field, div.field { display: flex; flex-direction: column; gap: 6px; }
 
 .field > span { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
 
-input[type='text'], input[type='password'], input[type='url'], input[type='email'], input[type='number'], select {
+input[type='text'], input[type='password'], input[type='url'], input[type='email'], input[type='number'], input[type='date'], select {
   background: var(--bg);
   border: 1.5px solid var(--line);
   border-radius: 12px;
@@ -341,6 +341,7 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 .admin-app:first-of-type, .user-row:first-of-type { border-top: 0; }
 
 .user-row { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.user-row.ended { opacity: .55; }
 
 .pill { border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-family: var(--mono); font-size: 11px; text-transform: uppercase; }
 
@@ -809,6 +810,12 @@ a.btn { text-decoration: none; text-align: center; }
 #forgot-form { text-align: left; display: flex; flex-direction: column; gap: 14px; }
 .welcome-card #forgot-form .btn { width: 100%; margin-top: 6px; }
 
+/* Secure connection (Admin) */
+.tls-state { display: flex; align-items: center; margin: 0 0 6px; font-size: 18px; }
+.tls-state .dot { flex: none; width: 10px; height: 10px; margin-right: 12px; }
+.tls-detail { margin: 0 0 20px; min-height: 1.4em; text-transform: none; letter-spacing: 0; font-size: 13px; line-height: 1.5; }
+.tls-help { margin: 16px 0 0; text-transform: none; letter-spacing: 0; font-size: 13px; line-height: 1.5; }
+
 /* ---------- setup checklist ---------- */
 
 .setup-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
@@ -842,4 +849,26 @@ a.btn { text-decoration: none; text-align: center; }
 
 @media (pointer: coarse) {
   .setup-row { min-height: 44px; }
+}
+#guest-until-field .row { flex-wrap: nowrap; gap: 10px; }
+#guest-until-field .row > * { flex: 1; min-width: 0; }
+
+
+/* Uptime history: one bar per day, newest on the right. */
+.uptime { display: flex; flex-direction: column; gap: 6px; }
+.uptime-head { display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
+.uptime-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uptime-strip { padding: 4px 0; cursor: pointer; border-radius: 4px; touch-action: manipulation; }
+.uptime-strip:focus-visible { outline: 1px solid var(--ink); outline-offset: 3px; }
+.uptime-bars { display: flex; gap: 2px; height: 22px; }
+.uptime-bars i { flex: 1; border-radius: 2px; background: var(--ink); opacity: 0.85; transition: opacity 150ms ease; }
+.uptime-bars i.part { background: var(--bad); opacity: 0.55; }
+.uptime-bars i.down { background: var(--bad); opacity: 1; }
+.uptime-bars i.none { background: var(--line); opacity: 1; }
+.uptime-bars i.picked { outline: 1px solid var(--ink); outline-offset: 1px; opacity: 1; }
+.uptime-detail { font-size: 11px; min-height: 1.4em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uptime-detail:empty::before { content: 'Pick a day for details'; opacity: 0.6; }
+@media (max-width: 600px) {
+  .uptime-bars { gap: 1px; height: 20px; }
+  .uptime-detail { white-space: normal; }
 }

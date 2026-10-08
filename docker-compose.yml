@@ -9,10 +9,13 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
+      # HTTPS, once a certificate is set up under Admin → Secure connection.
+      - "443:8443"
     environment:
       PORT: "8080"
+      HTTPS_PORT: "8443"
       DATA_DIR: /data
-      # Set to "true" only when Roost is served over HTTPS (e.g. through Tailscale serve).
+      # Sign-in cookies are marked Secure automatically on HTTPS; "true" forces it on plain HTTP too.
       SECURE_COOKIES: "false"
       # Set to "true" only when Roost is reached through a tunnel or reverse proxy, so the
       # Admin activity log shows each visitor's real address instead of the proxy's.
@@ -50,6 +53,9 @@ services:
     restart: unless-stopped
     environment:
       CONTAINERS: "1"
+      # Read-only list of start/stop/crash events, so Roost's uptime history
+      # re-reads containers only when something changed.
+      EVENTS: "1"
       POST: "0"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
