@@ -106,16 +106,29 @@ function publicUser(db, u) {
     displayName: u.displayName,
     role: u.role,
     apps: u.apps,
+    ...(u.role === 'guest' ? { guestUntil: u.guestUntil } : {}),
     email: u.email || '',
     createdAt: u.createdAt,
     twoStep: {
       on: Boolean(u.twoStep),
       required,
       // Offer it once after sign-in to people who don't have to use it.
-      offer: !u.twoStep && !required && !u.twoStepSkipped,
+      // Guests are only passing through, so they aren't asked.
+      offer: !u.twoStep && !required && !u.twoStepSkipped && u.role !== 'guest',
       recoveryLeft: u.twoStep ? u.twoStep.recovery.length : 0,
     },
   };
+}
+
+// Guests sign in until their pass ends, then Roost turns them away.
+const GUEST_MAX_MS = 366 * 24 * 60 * 60 * 1000;
+
+function cleanRole(v) {
+  return v === 'admin' || v === 'guest' ? v : 'user';
+}
+
+function guestEnded(user) {
+  return user.role === 'guest' && !(Date.parse(user.guestUntil) > Date.now());
 }
 
 function visibleApps(db, user) {
@@ -195,7 +208,20 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
 
   function currentUser(req) {
     const s = sessions.get(parseCookies(req)[COOKIE]);
-    return s ? db().users.find((u) => u.id === s.userId) || null : null;
+    const user = s ? db().users.find((u) => u.id === s.userId) || null : null;
+    if (user && guestEnded(user)) {
+      sessions.destroyUser(user.id);
+      return null;
+    }
+    return user;
+  }
+
+  // Signed-in people who aren't guests: guests see their apps and nothing
+  // about the server.
+  function requireMember(req) {
+    const user = requireUser(req);
+    if (user.role === 'guest') throw new HttpError(403, 'Not available on a guest pass');
+    return user;
   }
 
   function requireUser(req) {
@@ -218,6 +244,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   const gbText = (limit) => (limit === null ? 'no limit' : `${limit} GB`);
 
   function login(res, user, status = 200, cookies = []) {
+    if (guestEnded(user)) throw new HttpError(403, 'Your guest pass has ended. Ask whoever invited you for more time.');
     const token = sessions.create(user.id);
     send(res, status, { user: publicUser(db(), user) }, { 'Set-Cookie': [sessionCookie(token, secureCookies), ...cookies] });
   }
@@ -276,6 +303,13 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       seen.add(app.id);
       return app;
     });
+  }
+
+  // When a guest pass ends: a date or time after now, up to a year ahead.
+  function cleanGuestUntil(v) {
+    const t = Date.parse(v);
+    if (!(t > Date.now() && t <= Date.now() + GUEST_MAX_MS)) throw new HttpError(400, 'Pick when the guest pass ends, up to a year from now');
+    return new Date(t).toISOString();
   }
 
   function cleanLimit(v) {
@@ -476,6 +510,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         record(req, 'sign-in-failed', { target: username || null, detail: user ? 'wrong password' : 'no such user' });
         throw new HttpError(401, 'Wrong username or password');
       }
+      if (guestEnded(user)) record(req, 'sign-in-failed', { target: user.username, detail: 'guest pass ended' });
       if (!user.twoStep || isTrusted(req, user)) {
         record(req, 'sign-in', { actor: user.username, detail: user.twoStep ? 'trusted device' : '' });
         return login(res, user);
@@ -642,7 +677,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     },
 
     'GET /api/system': (req, res) => {
-      requireUser(req);
+      requireMember(req);
       let disk = null;
       try {
         const s = fs.statfsSync(dataDir);
@@ -661,7 +696,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     },
 
     'GET /api/status': async (req, res) => {
-      const user = requireUser(req);
+      const user = requireMember(req);
       const host = requestHost(req);
       const [health, docker, web] = await Promise.all([
         serverHealth({ cpu, disks: diskList }),
@@ -716,12 +751,13 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         id: store.newId(),
         username,
         displayName: str(body.displayName, 60) || username,
-        role: body.role === 'admin' ? 'admin' : 'user',
+        role: cleanRole(body.role),
         apps: cleanAppAccess(body.apps),
         limitGb: body.limitGb === undefined ? storage.defaultLimitGb(db()) : cleanLimit(body.limitGb),
         password: hashPassword(body.password),
         createdAt: new Date().toISOString(),
       };
+      if (user.role === 'guest') user.guestUntil = cleanGuestUntil(body.guestUntil);
       db().users.push(user);
       store.save();
       record(req, 'user-added', { actor: admin.username, target: user.username, detail: `${user.role}, ${gbText(user.limitGb)}` });
@@ -751,10 +787,20 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         user.limitGb = limit;
       }
       if (body.role !== undefined) {
-        const role = body.role === 'admin' ? 'admin' : 'user';
+        const role = cleanRole(body.role);
         if (user.id === admin.id && role !== 'admin') throw new HttpError(400, "You can't remove your own admin role");
+        if (role === 'guest' && user.role !== 'guest' && body.guestUntil === undefined) throw new HttpError(400, 'Pick when the guest pass ends');
         if (role !== user.role) changes.push(`role ${user.role} → ${role}`);
         user.role = role;
+        if (role !== 'guest') delete user.guestUntil;
+      }
+      if (user.role === 'guest' && body.endGuestPass === true) {
+        user.guestUntil = new Date().toISOString();
+        sessions.destroyUser(user.id);
+        changes.push('guest pass ended');
+      } else if (user.role === 'guest' && body.guestUntil !== undefined) {
+        user.guestUntil = cleanGuestUntil(body.guestUntil);
+        changes.push(`guest pass until ${user.guestUntil.slice(0, 10)}`);
       }
       if (body.password !== undefined) {
         if (!validPassword(body.password)) throw new HttpError(400, 'Password must be at least 8 characters');
@@ -801,7 +847,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     'POST /api/admin/invites': async (req, res) => {
       const admin = requireAdmin(req);
       const body = await readJson(req);
-      const role = body.role === 'admin' ? 'admin' : 'user';
+      const role = cleanRole(body.role);
       const { token, link } = links.create(db(), {
         id: store.newId(),
         kind: 'invite',
@@ -809,6 +855,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         role,
         apps: role === 'admin' ? null : cleanAppAccess(body.apps),
         limitGb: body.limitGb === undefined ? storage.defaultLimitGb(db()) : cleanLimit(body.limitGb),
+        ...(role === 'guest' ? { guestUntil: cleanGuestUntil(body.guestUntil) } : {}),
         createdBy: admin.id,
       }, links.INVITE_TTL_MS);
       store.save();
@@ -950,6 +997,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         role: link.role,
         apps: apps.map((a) => a.name),
         expiresAt: link.expiresAt,
+        guestUntil: link.guestUntil,
       });
     },
 
@@ -966,6 +1014,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         record(req, 'password-reset', { actor: user.username, target: user.username, detail: 'reset link' });
         return login(res, user);
       }
+      if (link.role === 'guest' && !(Date.parse(link.guestUntil) > Date.now())) throw new HttpError(410, 'This guest pass has already ended');
       const username = str(body.username, 32).toLowerCase();
       const check = usernameCheck(username);
       if (!check.available) throw new HttpError(check.taken ? 409 : 400, check.reason);
@@ -980,6 +1029,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         createdAt: new Date().toISOString(),
         invitedBy: link.createdBy,
       };
+      if (link.role === 'guest') user.guestUntil = link.guestUntil;
       if (body.email) user.email = cleanEmail(body.email);
       db().users.push(user);
       links.remove(db(), link);
@@ -1065,6 +1115,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     'POST /api/me/storage-requests': async (req, res) => {
       const user = requireUser(req);
       if (user.role === 'admin') throw new HttpError(400, 'Admins set their own limit under Admin → Users');
+      if (user.role === 'guest') throw new HttpError(403, 'Not available on a guest pass');
       const body = await readJson(req);
       const requestedGb = storage.parseLimitGb(body.requestedGb);
       if (!requestedGb) throw new HttpError(400, 'Ask for a whole number of GB');
