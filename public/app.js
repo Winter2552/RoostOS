@@ -1481,6 +1481,12 @@ $('#activity-more').addEventListener('click', () => loadActivity(true));
 
 // ---------- boot ----------
 
+// Lets Roost install as an app and show an offline screen. Browsers only allow
+// it on HTTPS (or localhost), so on a plain home address this does nothing.
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
 (async function boot() {
   tickClock();
   setInterval(tickClock, 30 * 1000);

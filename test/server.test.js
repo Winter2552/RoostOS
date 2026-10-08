@@ -503,3 +503,27 @@ test('status reads container state from Docker', async () => {
   }
 });
 
+
+test('Roost can be installed as an app', async () => {
+  const res = await fetch(base + '/manifest.webmanifest');
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /application\/manifest\+json/);
+  const m = await res.json();
+  assert.equal(m.display, 'standalone');
+  assert.equal(m.start_url, '/');
+  assert.ok(m.icons.some((i) => i.purpose === 'maskable'));
+  for (const icon of [...m.icons, { src: '/icons/apple-touch-icon.png', sizes: '180x180' }]) {
+    const r = await fetch(base + icon.src);
+    assert.equal(r.status, 200, icon.src);
+    assert.equal(r.headers.get('content-type'), 'image/png');
+    assert.match(r.headers.get('cache-control'), /max-age/);
+    const png = Buffer.from(await r.arrayBuffer());
+    const [w, h] = icon.sizes.split('x').map(Number);
+    assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [w, h], icon.src);
+  }
+  for (const file of ['/sw.js', '/offline.html']) {
+    const r = await fetch(base + file);
+    assert.equal(r.status, 200, file);
+    assert.equal(r.headers.get('cache-control'), 'no-cache');
+  }
+});
