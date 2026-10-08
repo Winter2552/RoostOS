@@ -246,6 +246,9 @@ test('status reports server health and app states', async () => {
   assert.equal(body.docker.ok, false);
   assert.deepEqual(body.apps[1].containers, []);
   assert.deepEqual(body.otherContainers, []);
+  // Uptime history: Roost's own row from the start, and only the guest's apps.
+  assert.ok(body.history.apps.roost.watched.length >= 1);
+  assert.ok(Object.keys(body.history.apps).every((id) => ['roost', 'jellyfin', 'glint'].includes(id)));
 });
 
 test('ROOST_DISKS parsing skips bad entries', () => {
