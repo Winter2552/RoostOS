@@ -456,6 +456,46 @@ a.btn { text-decoration: none; text-align: center; }
   .card { box-shadow: 4px 4px 0 var(--shadow); }
 }
 
+/* ---------- continue watching ---------- */
+
+.watching { padding-top: 0; }
+
+/* One row that scrolls sideways; room at the bottom for the cards' shadow. */
+.watch-row {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 240px;
+  gap: 24px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding: 0 6px 10px 0;
+  scrollbar-width: thin;
+}
+
+.watch-card { display: flex; flex-direction: column; overflow: hidden; text-decoration: none; scroll-snap-align: start; transition: transform 120ms ease, box-shadow 120ms ease; }
+a.watch-card:focus-visible { transform: translate(4px, 4px); box-shadow: 3px 3px 0 var(--shadow); outline: none; }
+
+.watch-pic { position: relative; aspect-ratio: 16 / 9; background: var(--bg); border-bottom: 2px solid var(--ink); display: grid; place-items: center; }
+.watch-pic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.watch-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(10, 10, 10, 0.6); }
+.watch-bar i { display: block; height: 100%; background: var(--ink); }
+
+.watch-text { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.watch-title { font-size: 17px; font-weight: 500; letter-spacing: -0.01em; }
+.watch-title, .watch-sub, .watch-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.watch-sub { font-size: 14px; }
+.watch-meta { font-size: 11px; margin-top: 3px; }
+
+@media (hover: hover) {
+  a.watch-card:hover { transform: translate(4px, 4px); box-shadow: 3px 3px 0 var(--shadow); }
+}
+
+@media (max-width: 600px) {
+  .watch-row { grid-auto-columns: 72%; gap: 16px; }
+  .watch-card { border-radius: 16px; }
+  .watch-title { font-size: 16px; }
+}
+
 /* ---------- status page ---------- */
 
 .more-link { display: inline-block; margin-top: 26px; color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--line); padding-bottom: 2px; }

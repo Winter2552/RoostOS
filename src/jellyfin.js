@@ -12,6 +12,10 @@ const https = require('https');
 const PREFIX = '/jellyfin';
 const TIMEOUT_MS = 5000;
 const USERS_CACHE_MS = 60 * 1000;
+const RESUME_CACHE_MS = 30 * 1000;
+const RESUME_LIMIT = 12;
+const POSTER_WIDTH = 480;
+const TICKS_PER_MINUTE = 600000000;
 const CLIENT = 'Roost';
 const VERSION = '1.0';
 
@@ -22,11 +26,49 @@ function authHeader({ token, device = 'Roost', deviceId = 'roost' } = {}) {
   return `MediaBrowser ${parts.join(', ')}`;
 }
 
+const safeId = (v) => (typeof v === 'string' && /^[A-Za-z0-9-]+$/.test(v) ? v : null);
+
+// A wide picture for the row, in the order Jellyfin's own Continue watching
+// prefers them. Images are fetched through /jellyfin, with the tag so the
+// browser can keep them.
+function picture(it) {
+  const tags = it.ImageTags || {};
+  const pick = [
+    [it.Id, 'Thumb', tags.Thumb],
+    it.Type === 'Episode' ? [it.Id, 'Primary', tags.Primary] : null,
+    [it.ParentThumbItemId, 'Thumb', it.ParentThumbImageTag],
+    [it.Id, 'Backdrop/0', (it.BackdropImageTags || [])[0]],
+    [it.ParentBackdropItemId, 'Backdrop/0', (it.ParentBackdropImageTags || [])[0]],
+    [it.Id, 'Primary', tags.Primary],
+  ].find((c) => c && safeId(c[0]) && safeId(c[2]));
+  return pick ? `${PREFIX}/Items/${pick[0]}/Images/${pick[1]}?fillWidth=${POSTER_WIDTH}&quality=80&tag=${pick[2]}` : null;
+}
+
+function resumeItem(it) {
+  const id = safeId(it.Id);
+  if (!id) return null;
+  const data = it.UserData || {};
+  const episode = it.Type === 'Episode';
+  const left = it.RunTimeTicks && data.PlaybackPositionTicks ? Math.max(1, Math.round((it.RunTimeTicks - data.PlaybackPositionTicks) / TICKS_PER_MINUTE)) : null;
+  const where = episode && it.ParentIndexNumber != null && it.IndexNumber != null ? `S${it.ParentIndexNumber} E${it.IndexNumber}` : null;
+  return {
+    id,
+    serverId: safeId(it.ServerId),
+    title: String((episode && it.SeriesName) || it.Name || ''),
+    subtitle: episode ? String(it.Name || '') : '',
+    where,
+    minutesLeft: left,
+    percent: Math.max(0, Math.min(100, Math.round(data.PlayedPercentage || 0))),
+    image: picture(it),
+  };
+}
+
 class Jellyfin {
   // config() returns { url, apiKey } from Roost's settings, or null.
   constructor(config) {
     this.config = config;
     this.cache = null;
+    this.resumeCache = new Map();
     this.queue = Promise.resolve();
   }
 
@@ -123,6 +165,28 @@ class Jellyfin {
 
   async logout(token) {
     await this.call('POST', '/Sessions/Logout', { token });
+  }
+
+  // What this person was part way through, newest first, for the dashboard's
+  // Continue watching row. Kept for a short while so reloading the dashboard
+  // doesn't ask Jellyfin again each time.
+  async resume(username) {
+    const hit = this.resumeCache.get(username);
+    if (hit && hit.until > Date.now()) return hit.items;
+    const jfUser = await this.find(username);
+    if (!jfUser || jfUser.Policy.IsDisabled) return [];
+    const q = `userId=${jfUser.Id}&limit=${RESUME_LIMIT}&mediaTypes=Video&enableUserData=true&imageTypeLimit=1&enableImageTypes=Primary,Thumb,Backdrop`;
+    let res;
+    try {
+      res = await this.call('GET', `/UserItems/Resume?${q}`);
+    } catch (err) {
+      // Jellyfin before 10.9 only has the older address.
+      if (err.status !== 404) throw err;
+      res = await this.call('GET', `/Users/${jfUser.Id}/Items/Resume?${q}`);
+    }
+    const items = ((res && res.Items) || []).map(resumeItem).filter(Boolean);
+    this.resumeCache.set(username, { items, until: Date.now() + RESUME_CACHE_MS });
+    return items;
   }
 
   // Someone was given Jellyfin access again. A new account can only be made
@@ -222,7 +286,9 @@ body{display:flex;align-items:center;justify-content:center}</style></head>
       localStorage.setItem(KEY, JSON.stringify({ ...saved, Servers: servers }));
     }
   } catch {}
-  location.replace('${PREFIX}/web/');
+  // The Continue watching row links straight to an item's page.
+  const to = /^#\\/details\\?id=[A-Za-z0-9-]+(&serverId=[A-Za-z0-9-]+)?$/.test(location.hash) ? location.hash : '';
+  location.replace('${PREFIX}/web/' + to);
 })();
 </script></body></html>`;
 
