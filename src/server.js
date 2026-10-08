@@ -12,7 +12,8 @@ const links = require('./links');
 const mail = require('./mail');
 const setup = require('./setup');
 const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
-const { listContainers, containersFor } = require('./docker');
+const { listContainers, containersFor, canReadImages } = require('./docker');
+const { UpdateChecker } = require('./updates');
 const twoStep = require('./twostep');
 const { qrSvg } = require('./qr');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
@@ -153,7 +154,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10 } = {}) {
+function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, registryFetch } = {}) {
   const store = new Store(dataDir);
   const activity = new ActivityLog(dataDir, { saveDelayMs: activitySaveDelayMs });
   // Nest used to be an outside app with no link; it is built in now.
@@ -173,6 +174,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   // the drive Roost keeps its data on (the same drive is only listed once).
   const diskList = disks && disks.length ? disks : [{ label: 'System', path: '/' }, { label: 'Data', path: dataDir }];
   const db = () => store.db;
+  const updates = new UpdateChecker({ dataDir, dockerHost, fetch: registryFetch });
 
   const nest = new Nest({
     dir: nestDir || path.join(dataDir, 'nest'),
@@ -668,7 +670,9 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         listContainers(dockerHost, probeTimeoutMs),
         Promise.all(visibleApps(db(), user).map((a) => appProbe(a, host, probeTimeoutMs))),
       ]);
-      const all = docker.containers || [];
+      // Update badges are for admins, the only ones who can act on them.
+      const updateOf = user.role === 'admin' ? updates.view(docker.containers || []) : {};
+      const all = (docker.containers || []).map((c) => (updateOf[c.id] ? { ...c, update: updateOf[c.id] } : c));
       const claimed = new Set();
       const claim = (list) => { list.forEach((c) => claimed.add(c.id)); return list; };
       const apps = [
@@ -698,6 +702,14 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         otherContainers: user.role === 'admin' ? all.filter((c) => !claimed.has(c.id)) : [],
         checkedAt: new Date().toISOString(),
       });
+    },
+
+    'POST /api/admin/updates/check': async (req, res) => {
+      requireAdmin(req);
+      const docker = await listContainers(dockerHost, probeTimeoutMs);
+      if (docker.error) throw new HttpError(503, "Roost can't see Docker");
+      if (!(await updates.checkNow(docker.containers))) throw new HttpError(429, 'Checked a moment ago');
+      send(res, 200, { ok: true });
     },
 
     'GET /api/admin/users': (req, res) => {
@@ -891,6 +903,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         nestDir: nestDir || path.join(dataDir, 'nest'),
         drives: readDisks(diskList),
         dockerOk: !docker.error,
+        imagesOk: !docker.error && await canReadImages(dockerHost, probeTimeoutMs),
         secureCookies,
         trustProxy,
         ticked: db().settings.setupTicked || [],

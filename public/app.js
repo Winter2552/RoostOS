@@ -766,6 +766,9 @@ async function loadSystem() {
 const STATUS_REFRESH_MS = 5 * 1000;
 const FULL_AT = 90;
 let statusBusy = false;
+// Status cards whose "Update" detail is open; kept across the page's refreshes.
+const openUpdates = new Set();
+let lastStatus = null;
 
 function pct(used, total) {
   return total ? Math.round((used / total) * 100) : 0;
@@ -822,8 +825,44 @@ function appState(a, dockerOk) {
   return { kind: a.web.state, label: WEB_LABEL[a.web.state] };
 }
 
+// "update" (newer on the registry) beats "restart" (newer already pulled).
+function appUpdate(a) {
+  const ups = a.containers.map((c) => c.update).filter(Boolean);
+  return ups.find((u) => u.state === 'update') || ups[0] || null;
+}
+
+const UPDATE_TEXT = {
+  update: 'A newer version is out. Update it from ZimaOS.',
+  restart: 'A newer version is downloaded. Restart the app in ZimaOS to use it.',
+};
+
+async function checkUpdatesNow(btn) {
+  btn.disabled = true;
+  btn.textContent = 'Checking…';
+  try {
+    await api('POST', '/api/admin/updates/check');
+    await loadStatus();
+  } catch (err) {
+    btn.textContent = err.message;
+  }
+}
+
+function checkedAgo(iso) {
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  return s < 60 ? 'just now' : `${duration(s)} ago`;
+}
+
+function updateDetail(a, up) {
+  return el('div', { class: 'update-detail mono' },
+    el('div', { text: UPDATE_TEXT[up.state] }),
+    el('div', { class: 'muted' }, `Checked ${checkedAgo(up.checkedAt)} · `,
+      el('button', { class: 'link-btn mono', type: 'button', text: 'Check now', onclick: (e) => checkUpdatesNow(e.target) })));
+}
+
 function appStatusCard(a, dockerOk) {
   const st = appState(a, dockerOk);
+  const up = appUpdate(a);
+  const open = up && openUpdates.has(a.id);
   const lines = [];
   if (a.containers.length) {
     const c = worstContainer(a.containers);
@@ -839,7 +878,12 @@ function appStatusCard(a, dockerOk) {
   return el('div', { class: `card stat-card app-status ${st.kind}` },
     el('div', { class: 'app-status-head' }, icon(a.icon), el('div', { class: 'mono muted', text: a.tagline })),
     el('div', { class: 'stat-value', text: a.name }),
-    el('div', { class: 'mono stat-state' }, el('span', { class: `dot ${st.kind}` }), st.label),
+    el('div', { class: 'mono stat-state' }, el('span', { class: `dot ${st.kind}` }), st.label,
+      up ? el('button', {
+        class: 'pill update-pill', type: 'button', 'aria-expanded': String(Boolean(open)), text: 'Update',
+        onclick: () => { if (!openUpdates.delete(a.id)) openUpdates.add(a.id); if (lastStatus) renderStatus(lastStatus); },
+      }) : null),
+    open ? updateDetail(a, up) : null,
     el('div', { class: 'stat-lines mono muted' }, lines.map((t) => el('div', { text: t }))));
 }
 
@@ -861,6 +905,7 @@ function setSummary(kind, text) {
 }
 
 function renderStatus(s) {
+  lastStatus = s;
   const memUsed = s.memory.total - s.memory.available;
   const memPct = pct(memUsed, s.memory.total);
   $('#status-server').replaceChildren(
@@ -887,7 +932,7 @@ function renderStatus(s) {
     const st = containerState(c);
     return el('div', { class: 'container-row' },
       el('span', { class: 'mono' }, el('span', { class: `dot ${st.kind}` }), c.name),
-      el('span', { class: 'mono muted', text: `${st.label} · ${containerSince(c)}` }));
+      el('span', { class: 'mono muted', text: `${st.label} · ${containerSince(c)}${c.update ? ` · ${c.update.state === 'update' ? 'update out' : 'restart to update'}` : ''}` }));
   }));
 
   const problems = [

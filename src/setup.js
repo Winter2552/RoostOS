@@ -72,6 +72,19 @@ const STEPS = [
     check: (ctx) => ctx.dockerOk,
   },
   {
+    id: 'updates',
+    group: 'Server',
+    title: 'See when apps have updates',
+    why: 'App cards on the status page show "Update" when a newer version is out. Only admins see it.',
+    how: [
+      'In Roost\'s compose file, under docker-proxy, add IMAGES: "1" next to CONTAINERS: "1". It stays read-only.',
+      'Redeploy Roost. Roost asks each app\'s registry about twice a day, only while the status page is open; update apps from ZimaOS.',
+    ],
+    action: { label: 'Open status', view: 'status' },
+    optional: true,
+    check: (ctx) => ctx.imagesOk,
+  },
+  {
     id: 'app-links',
     group: 'Server',
     title: 'Link every app',

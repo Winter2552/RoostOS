@@ -2,7 +2,7 @@
 
 // Read-only container info from the Docker Engine API, for the status page.
 // DOCKER_HOST can be a TCP address (the docker-proxy service in
-// docker-compose.yml, which only allows reading containers), a unix socket,
+// docker-compose.yml, which only allows reading containers and images), a unix socket,
 // or the Docker Desktop pipe on Windows.
 
 const http = require('http');
@@ -58,6 +58,9 @@ async function listContainers(dockerHost, timeoutMs = 2500) {
         id: c.Id.slice(0, 12),
         name: String((c.Names && c.Names[0]) || c.Id).replace(/^\//, ''),
         image: c.Image,
+        // For update checks: the tag it was started from and the image it runs.
+        imageRef: (info.Config && info.Config.Image) || c.Image,
+        imageId: info.Image || c.ImageID || '',
         project: (c.Labels && c.Labels['com.docker.compose.project']) || '',
         state: st.Status || c.State, // running, exited, restarting, paused, created, dead
         health: (st.Health && st.Health.Status) || null, // healthy, unhealthy, starting
@@ -70,6 +73,32 @@ async function listContainers(dockerHost, timeoutMs = 2500) {
     return { containers };
   } catch (err) {
     return { error: err.message };
+  }
+}
+
+// The image a tag points at now, and the registry digests it was pulled as.
+// → { id, repoDigests } or null (no such image, or images can't be read).
+async function inspectImage(dockerHost, ref, timeoutMs = 2500) {
+  const t = target(dockerHost);
+  // Tags are plain names; anything else could reach another API path.
+  if (!t || !/^[\w][\w./:-]*$/.test(String(ref)) || ref.includes('..')) return null;
+  try {
+    const img = await getJson(t, `/images/${ref}/json`, timeoutMs);
+    return { id: img.Id, repoDigests: img.RepoDigests || [] };
+  } catch {
+    return null;
+  }
+}
+
+// Whether the docker-proxy lets Roost read images (IMAGES=1), for the setup checklist.
+async function canReadImages(dockerHost, timeoutMs = 2500) {
+  const t = target(dockerHost);
+  if (!t) return false;
+  try {
+    await getJson(t, '/images/json', timeoutMs);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -90,4 +119,4 @@ function containersFor(app, containers) {
   });
 }
 
-module.exports = { listContainers, containersFor, target };
+module.exports = { listContainers, containersFor, inspectImage, canReadImages, target };

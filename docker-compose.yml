@@ -43,13 +43,15 @@ services:
       - /DATA:/hostfs/data:ro
 
   # Read-only window onto Docker for the status page: lists and inspects
-  # containers, refuses everything else (no starting, stopping or exec).
+  # containers and images (images for "update available"), refuses everything
+  # else (no starting, stopping, pulling or exec).
   docker-proxy:
     image: tecnativa/docker-socket-proxy:latest
     container_name: roost-docker-proxy
     restart: unless-stopped
     environment:
       CONTAINERS: "1"
+      IMAGES: "1"
       POST: "0"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
