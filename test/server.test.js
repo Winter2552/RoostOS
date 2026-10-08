@@ -170,6 +170,33 @@ test('admin can add a user limited to some apps', async () => {
   assert.deepEqual(body.apps.map((a) => a.id), ['jellyfin', 'glint']);
 });
 
+test('admins post a notice everyone sees until it ends or is cleared', async () => {
+  assert.equal((await call('PUT', '/api/admin/notice', { text: 'Hi' }, userCookie)).status, 403);
+  assert.equal((await call('GET', '/api/system', null, userCookie)).body.notice, null);
+  const past = await call('PUT', '/api/admin/notice', { text: 'Old', until: new Date(Date.now() - 1000).toISOString() }, adminCookie);
+  assert.equal(past.status, 400);
+
+  const until = new Date(Date.now() + 3600 * 1000).toISOString();
+  const posted = await call('PUT', '/api/admin/notice', { text: '  Maintenance tonight at 10pm  ', until }, adminCookie);
+  assert.equal(posted.status, 200);
+  assert.equal(posted.body.notice.text, 'Maintenance tonight at 10pm');
+  assert.equal(posted.body.notice.until, until);
+  const seen = (await call('GET', '/api/system', null, userCookie)).body.notice;
+  assert.equal(seen.text, 'Maintenance tonight at 10pm');
+
+  const cleared = await call('PUT', '/api/admin/notice', { text: '' }, adminCookie);
+  assert.equal(cleared.body.notice, null);
+  assert.equal((await call('GET', '/api/system', null, userCookie)).body.notice, null);
+});
+
+test('an expired notice is no longer shown', async () => {
+  await call('PUT', '/api/admin/notice', { text: 'Soon gone', until: new Date(Date.now() + 300).toISOString() }, adminCookie);
+  assert.equal((await call('GET', '/api/system', null, userCookie)).body.notice.text, 'Soon gone');
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal((await call('GET', '/api/system', null, userCookie)).body.notice, null);
+  await call('PUT', '/api/admin/notice', { text: '' }, adminCookie);
+});
+
 test('other users are offered two-step once, and admins can reset it', async () => {
   const state = await call('GET', '/api/state', null, userCookie);
   assert.deepEqual(

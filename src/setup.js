@@ -188,6 +188,7 @@ const NO_STEP = {
   serverName: 'works as "Roost" until renamed under Admin → Server',
   defaultLimitGb: 'starts at 50 GB, changed under Admin → Server',
   setupTicked: 'this checklist\'s own record',
+  notice: 'optional, posted under Admin → Notice',
 };
 
 const MANUAL = STEPS.filter((s) => s.manual).map((s) => s.id);

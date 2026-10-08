@@ -117,6 +117,11 @@
 
     <!-- Apps view -->
     <section id="view-apps">
+      <div class="notice hidden" id="notice" role="status">
+        <span class="notice-label mono">Notice</span>
+        <p class="notice-text" id="notice-text"></p>
+        <button class="notice-close" type="button" id="notice-close" aria-label="Hide this notice">×</button>
+      </div>
       <div class="hero">
         <div class="mono muted" id="greeting">Hello</div>
         <h1>Welcome home, <span id="hero-name"></span></h1>
@@ -281,6 +286,29 @@
         <h3>Storage requests</h3><span class="mono muted">Users asking for more space</span>
         <div id="storage-requests-admin"></div>
       </div>
+
+      <form class="card panel" id="notice-form">
+        <h3>Notice</h3><span class="mono muted">A short message at the top of everyone's dashboard, e.g. for maintenance</span>
+        <div class="form-grid">
+          <label class="field"><span>Message <b class="notice-count" id="notice-count">0 / 200</b></span><input type="text" name="text" maxlength="200" placeholder="Server maintenance tonight at 10pm"></label>
+          <label class="field"><span>Show until</span><select name="until">
+            <option value="today">End of today</option>
+            <option value="morning">Tomorrow morning (8:00)</option>
+            <option value="day">24 hours</option>
+            <option value="week">1 week</option>
+            <option value="">Until I clear it</option>
+          </select></label>
+        </div>
+        <div class="notice notice-preview hidden" id="notice-preview" aria-hidden="true">
+          <span class="notice-label mono">Notice</span><p class="notice-text"></p>
+        </div>
+        <p class="mono muted notice-now" id="notice-now">No notice showing</p>
+        <div class="row">
+          <button class="btn" type="submit">Post notice</button>
+          <button class="btn ghost small hidden" type="button" id="notice-clear">Clear</button>
+        </div>
+        <div class="msg" role="status"></div>
+      </form>
 
       <form class="card panel" id="apps-form">
         <h3>Apps</h3>
