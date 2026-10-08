@@ -13,7 +13,7 @@ const ICONS = {
   home: '<path d="M3 11l9-7 9 7v9h-6v-6H9v6H3z"/>',
 };
 
-const state = { serverName: 'Roost', publicUrl: '', mailEnabled: false, user: null, apps: [], status: {}, users: [], defaultLimitGb: null, diskGb: null };
+const state = { serverName: 'Roost', publicUrl: '', mailEnabled: false, user: null, apps: [], status: {}, arranging: null, users: [], defaultLimitGb: null, diskGb: null };
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -167,6 +167,7 @@ let setupMode = false;
 function showWelcome(setup) {
   setupMode = setup;
   state.user = null;
+  state.arranging = null;
   $('#shell').classList.add('hidden');
   $('#secure').classList.add('hidden');
   $('#welcome').classList.remove('hidden');
@@ -711,8 +712,23 @@ async function loadApps() {
   api('GET', '/api/apps/status').then(({ status }) => { state.status = status; renderApps(); }).catch(() => {});
 }
 
+// Each person's own layout: starred apps first, then the rest, both in their
+// chosen order. Apps they haven't placed yet keep the admin's order at the end.
+function layoutApps(order, favs) {
+  const pos = new Map(order.map((id, i) => [id, i]));
+  const rank = (app, i) => (pos.has(app.id) ? pos.get(app.id) : order.length + i);
+  return state.apps
+    .map((app, i) => ({ app, fav: favs.has(app.id), rank: rank(app, i) }))
+    .sort((a, b) => b.fav - a.fav || a.rank - b.rank);
+}
+
+function myLayout() {
+  if (state.arranging) return layoutApps(state.arranging.order, state.arranging.favs);
+  return layoutApps(state.user.appOrder || [], new Set(state.user.favourites || []));
+}
+
 function renderAppBar() {
-  $('#app-bar').replaceChildren(...state.apps.filter((app) => app.url).map((app) =>
+  $('#app-bar').replaceChildren(...myLayout().map(({ app }) => app).filter((app) => app.url).map((app) =>
     el('a', app.url.startsWith('#/') ? { href: app.url, 'data-view': app.url.slice(2), class: location.hash.startsWith(app.url) ? 'active' : '' } : { href: resolveUrl(app.url), target: '_blank', rel: 'noopener' },
       icon(app.icon, 'bar-icon'), el('span', { text: app.name }))));
 }
@@ -720,17 +736,41 @@ function renderAppBar() {
 function renderApps() {
   const list = $('#apps');
   const total = state.apps.length;
+  renderArrangeActions();
   if (!total) {
     list.replaceChildren(el('div', { class: 'empty mono', text: 'No apps yet. Ask an admin to give you access.' }));
     return;
   }
-  list.replaceChildren(...state.apps.map((app) => {
+  const layout = myLayout();
+  list.classList.toggle('arranging', Boolean(state.arranging));
+  list.replaceChildren(...layout.map(({ app, fav }, i) => {
     const status = app.url ? state.status[app.id] || 'checking' : 'unset';
     const label = { online: 'Online', offline: 'Offline', checking: 'Checking', unset: 'Not set up' }[status];
     const isAdmin = state.user.role === 'admin';
+    const head = el('div', {}, el('div', { class: 'mono muted' },
+      fav && !state.arranging ? el('span', { class: 'fav-mark', title: 'Favourite', text: '★ ' }) : null, app.tagline),
+    el('h3', { text: app.name }));
+    if (state.arranging) {
+      // Arrows only move a card within its group: starred apps always stay first.
+      const canMove = (j) => j >= 0 && j < total && layout[j].fav === fav;
+      const move = (dir) => el('button', {
+        type: 'button', class: 'arrange-btn', 'data-act': dir < 0 ? 'back' : 'fwd', 'data-id': app.id,
+        'aria-label': `Move ${app.name} ${dir < 0 ? 'earlier' : 'later'}`,
+        disabled: !canMove(i + dir), onclick: () => moveApp(layout, i, dir),
+        text: dir < 0 ? '←' : '→',
+      });
+      return el('div', { class: 'card app-card arrange' },
+        el('button', {
+          type: 'button', class: `star-btn${fav ? ' on' : ''}`, 'data-act': 'star', 'data-id': app.id,
+          'aria-pressed': String(fav), 'aria-label': `Favourite ${app.name}`,
+          onclick: () => toggleFavourite(layout, app.id), text: fav ? '★' : '☆',
+        }),
+        icon(app.icon), head, el('p', { text: app.description }),
+        el('div', { class: 'arrange-row' }, move(-1), move(1)));
+    }
     const children = [
       icon(app.icon),
-      el('div', {}, el('div', { class: 'mono muted', text: app.tagline }), el('h3', { text: app.name })),
+      head,
       el('p', { text: app.description }),
       el('div', { class: 'app-foot mono' },
         el('span', {}, el('span', { class: `dot ${status}` }), label),
@@ -742,6 +782,75 @@ function renderApps() {
       ? el('a', builtIn ? { class: 'card app-card', href: app.url } : { class: 'card app-card', href: resolveUrl(app.url), target: '_blank', rel: 'noopener' }, children)
       : el('div', { class: 'card app-card disabled' }, children);
   }));
+}
+
+// ---------- arranging apps ----------
+
+function renderArrangeActions(error = '') {
+  const box = $('#arrange-actions');
+  if (!state.arranging) {
+    box.replaceChildren(state.apps.length > 1
+      ? el('button', { type: 'button', class: 'btn ghost small', onclick: startArranging, text: 'Arrange' })
+      : '');
+    return;
+  }
+  box.replaceChildren(
+    error ? el('span', { class: 'mono arrange-error', role: 'alert', text: error }) : '',
+    el('button', { type: 'button', class: 'btn ghost small', onclick: stopArranging, text: 'Cancel' }),
+    el('button', { type: 'button', class: 'btn small', onclick: saveArrangement, text: 'Done' }));
+}
+
+function startArranging() {
+  const order = myLayout().map(({ app }) => app.id);
+  state.arranging = { order, favs: new Set(state.user.favourites || []) };
+  renderApps();
+  $('#apps .arrange-btn, #apps .star-btn')?.focus();
+}
+
+function stopArranging() {
+  state.arranging = null;
+  renderApps();
+}
+
+// Re-draw, then put focus back on the button that was pressed so keyboard
+// users can keep tapping it (or on the card's star if it can't move further).
+function rerenderArranging(id, act) {
+  renderApps();
+  const btn = $(`#apps [data-id="${id}"][data-act="${act}"]`);
+  (btn && !btn.disabled ? btn : $(`#apps [data-id="${id}"][data-act="star"]`))?.focus();
+}
+
+function moveApp(layout, i, dir) {
+  const ids = layout.map(({ app }) => app.id);
+  [ids[i], ids[i + dir]] = [ids[i + dir], ids[i]];
+  state.arranging.order = ids;
+  rerenderArranging(ids[i + dir], dir < 0 ? 'back' : 'fwd');
+}
+
+function toggleFavourite(layout, id) {
+  const { favs } = state.arranging;
+  if (favs.has(id)) favs.delete(id); else favs.add(id);
+  state.arranging.order = layout.map(({ app }) => app.id);
+  rerenderArranging(id, 'star');
+}
+
+async function saveArrangement() {
+  const order = myLayout().map(({ app }) => app.id);
+  const favourites = order.filter((id) => state.arranging.favs.has(id));
+  const saved = layoutApps(state.user.appOrder || [], new Set(state.user.favourites || [])).map(({ app }) => app.id);
+  const savedFavs = saved.filter((id) => (state.user.favourites || []).includes(id));
+  // Only talk to the server when something actually changed.
+  if (order.join() !== saved.join() || favourites.join() !== savedFavs.join()) {
+    try {
+      ({ user: state.user } = await api('PATCH', '/api/me', { appOrder: order, favourites }));
+    } catch (err) {
+      renderArrangeActions(err.message || "Couldn't save. Try again.");
+      return;
+    }
+  }
+  state.arranging = null;
+  renderAppBar();
+  renderApps();
 }
 
 // ---------- system panel ----------

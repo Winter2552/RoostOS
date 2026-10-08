@@ -234,6 +234,30 @@ a.app-card:focus-visible {
 
 .app-card.disabled { cursor: default; border-style: dashed; box-shadow: none; opacity: 0.6; }
 
+/* Arrange mode: cards stop being links and show a star and move buttons. */
+.arrange-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.arrange-actions:empty { display: none; }
+.arrange-error { color: var(--bad); font-size: 13px; }
+.fav-mark { color: var(--ink); }
+.app-card.arrange { position: relative; border-style: dashed; box-shadow: none; }
+.star-btn, .arrange-btn {
+  background: var(--bg);
+  border: 2px solid var(--ink);
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  min-height: 44px;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.star-btn { position: absolute; top: 14px; right: 14px; width: 44px; }
+.star-btn.on { background: var(--ink); color: var(--bg); }
+.arrange-row { display: flex; gap: 10px; margin-top: auto; }
+.arrange-btn { flex: 1; min-width: 0; }
+.arrange-btn:disabled { opacity: 0.25; cursor: default; }
+.star-btn:focus-visible, .arrange-btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
 
 .icon-tile {
   width: 48px;
