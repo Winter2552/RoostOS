@@ -999,12 +999,28 @@ $('#two-step-on').addEventListener('submit', (e) => e.preventDefault());
 
 const REQUEST_LABEL = { pending: 'Waiting for an admin', approved: 'Approved', declined: 'Declined' };
 
+// Usage split for the Profile bar: Nest is Files, Glint is Photos, anything
+// else a storage app reports is Other. Empty parts are left out.
+const USAGE_LABELS = { nest: 'Files', glint: 'Photos' };
+
+function usageParts(usage = {}) {
+  const parts = Object.entries(USAGE_LABELS).map(([app, label]) => ({ label, bytes: usage[app] || 0 }));
+  const other = Object.entries(usage).filter(([app]) => !(app in USAGE_LABELS)).reduce((sum, [, n]) => sum + n, 0);
+  parts.push({ label: 'Other', bytes: other });
+  return parts.filter((p) => p.bytes > 0);
+}
+
 async function loadStorage() {
   const { storage, requests } = await api('GET', '/api/me/storage');
   const isAdmin = state.user.role === 'admin';
   const pct = storage.limitBytes ? Math.min(100, (storage.usedBytes / storage.limitBytes) * 100) : 0;
-  $('#storage-fill').style.width = `${pct}%`;
+  const parts = usageParts(storage.usage);
+  // With no limit the bar has nothing to fill up to, so it shows only the split.
+  $('#storage-fill').style.width = `${storage.limitBytes ? pct : (storage.usedBytes ? 100 : 0)}%`;
   $('#storage-fill').classList.toggle('full', pct >= 90);
+  $('#storage-fill').replaceChildren(...parts.map((p, i) => el('span', { class: `part-${i}`, style: `width:${(p.bytes / storage.usedBytes) * 100}%` })));
+  $('#storage-key').replaceChildren(...parts.map((p, i) => el('span', {}, el('i', { class: `part-${i}` }), p.label, el('b', { text: bytes(p.bytes) }))));
+  $('#storage-key').classList.toggle('hidden', !parts.length);
   $('#storage-used').textContent = `${bytes(storage.usedBytes)} used`;
   $('#storage-limit').textContent = storage.limitGb === null ? 'No limit' : `of ${storage.limitGb} GB`;
   const pending = requests.some((r) => r.status === 'pending');

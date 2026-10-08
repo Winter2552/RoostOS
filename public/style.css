@@ -347,8 +347,17 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 /* ---------- storage ---------- */
 
 .meter { height: 14px; border: 2px solid var(--ink); border-radius: 999px; overflow: hidden; background: var(--bg); }
-.meter-fill { height: 100%; width: 0; background: var(--ink); transition: width 300ms ease; }
-.meter-fill.full { background: var(--bad); }
+.meter-fill { display: flex; gap: 2px; height: 100%; width: 0; transition: width 300ms ease; }
+/* One part per kind of usage: Files, Photos, Other. Shades of one colour so it stays black and white. */
+.meter-fill span, .usage-key i { background: var(--ink); }
+.meter-fill span { height: 100%; min-width: 3px; }
+.meter-fill .part-1, .usage-key .part-1 { opacity: 0.55; }
+.meter-fill .part-2, .usage-key .part-2 { opacity: 0.3; }
+.meter-fill.full span { background: var(--bad); }
+.usage-key { display: flex; font-family: var(--mono); text-transform: uppercase; flex-wrap: wrap; gap: 6px 18px; margin: -8px 0 20px; font-size: 12px; }
+.usage-key > span { display: inline-flex; align-items: center; gap: 8px; }
+.usage-key i { width: 10px; height: 10px; border-radius: 3px; }
+.usage-key b { font-weight: 400; color: var(--muted); }
 .meter-label { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 10px 0 20px; }
 .meter-label b { font-size: 20px; font-weight: 500; }
 
