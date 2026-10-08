@@ -31,6 +31,12 @@ The steps live in `src/setup.js`, which is the single tally of what setting up R
 
 App links can use `{host}`, which becomes whatever address you opened Roost on. `http://{host}:8096` works from the LAN IP, the hostname or a Tailscale name without editing anything.
 
+## Search
+
+The box at the top of the dashboard searches every app you can open at once and groups the results by app. Today it searches Nest file and folder names (every word typed has to match; press `/` to jump to the box). Nothing is copied into a separate index, so results are always current and nothing runs when nobody is searching. An app that is slow is cut off after 1.5 seconds so it can't hold up the rest.
+
+New apps plug in as a source in `src/search.js`: `{ app, search(user, q, limit) }` returning `{ items: [{ id, name, kind, mime, detail, href }], more }`. Glint will add one when it exists. Jellyfin has its own accounts, so searching it needs each Roost user linked to their Jellyfin user first, and is left for later.
+
 ## Nest (Files)
 
 Nest is Roost's own file storage, built to work like Google Drive. Open it from **Files** in the menu or the Nest card.

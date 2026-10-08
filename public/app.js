@@ -35,12 +35,13 @@ function icon(name, cls = 'icon-tile') {
   return span;
 }
 
-async function api(method, url, body) {
+async function api(method, url, body, signal) {
   const res = await fetch(url, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
     credentials: 'same-origin',
+    signal,
   });
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 && !url.startsWith('/api/login') && !linkToken()) {
@@ -704,8 +705,9 @@ $('#logout').addEventListener('click', async () => {
 // ---------- apps ----------
 
 async function loadApps() {
-  const { apps } = await api('GET', '/api/apps');
+  const { apps, searchable } = await api('GET', '/api/apps');
   state.apps = apps;
+  window.searchSetup(searchable || []);
   renderAppBar();
   renderApps();
   api('GET', '/api/apps/status').then(({ status }) => { state.status = status; renderApps(); }).catch(() => {});

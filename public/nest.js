@@ -108,6 +108,8 @@
     const same = mode === N.mode && folderId === N.folderId;
     N.mode = mode;
     N.folderId = folderId;
+    // #/nest/f/<folder>/<file> (from search) opens the folder with that file picked out.
+    N.focus = mode === 'drive' && parts[0] === 'f' && parts[2] ? parts[2] : null;
     if (!same) {
       N.sel.clear();
       N.items = [];
@@ -141,7 +143,7 @@
           d = await fetchPage(items.length);
           if (t !== N.token) return;
           items = items.concat(d.items);
-        } while (d.more && items.length < keep);
+        } while (d.more && (items.length < keep || (N.focus && !items.some((i) => i.id === N.focus))));
         Object.assign(N, { folder: d.folder, path: d.path, items, more: d.more, total: d.total, storage: d.storage });
       }
     } catch (err) {
@@ -154,7 +156,15 @@
       toast(err.message);
     }
     for (const id of [...N.sel]) if (!byId(id)) N.sel.delete(id);
+    const focus = N.focus && byId(N.focus) ? N.focus : null;
+    N.focus = null;
+    if (focus) N.sel = new Set([focus]);
     render();
+    if (focus) {
+      selectOnly(focus);
+      const row = list.querySelector(`[data-id="${CSS.escape(focus)}"]`);
+      if (row) row.scrollIntoView({ block: 'center' });
+    }
   }
 
   async function loadMore() {

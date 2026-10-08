@@ -18,6 +18,7 @@ const { qrSvg } = require('./qr');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
 const { HttpError, send, readJson, str } = require('./http');
 const { Nest } = require('./nest');
+const { createSearch, nestSource } = require('./search');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const COOKIE = 'roost_session';
@@ -188,6 +189,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     },
   });
   nest.syncUsage();
+  const search = createSearch({ sources: [nestSource(nest)], visibleApps: (user) => visibleApps(db(), user) });
   const sweep = () => nest.sweep().catch((err) => console.error('Nest clean-up failed:', err));
   sweep();
   const sweepTimer = setInterval(sweep, 6 * 60 * 60 * 1000);
@@ -629,7 +631,13 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
 
     'GET /api/apps': (req, res) => {
       const user = requireUser(req);
-      send(res, 200, { apps: visibleApps(db(), user) });
+      send(res, 200, { apps: visibleApps(db(), user), searchable: search.apps(user) });
+    },
+
+    // One search box: asks every app this user can search, results grouped by app.
+    'GET /api/search': async (req, res) => {
+      const user = requireUser(req);
+      send(res, 200, await search.run(user, new URL(req.url, 'http://roost').searchParams.get('q')));
     },
 
     'GET /api/apps/status': async (req, res) => {
