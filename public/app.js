@@ -29,8 +29,8 @@ function el(tag, props = {}, ...children) {
   return node;
 }
 
-function icon(name) {
-  const span = el('span', { class: 'icon-tile', 'aria-hidden': 'true' });
+function icon(name, cls = 'icon-tile') {
+  const span = el('span', { class: cls, 'aria-hidden': 'true' });
   span.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round">${ICONS[name] || ICONS.grid}</svg>`;
   return span;
 }
@@ -193,6 +193,8 @@ $('#welcome-form').addEventListener('submit', async (e) => {
       return;
     }
     f.reset();
+    // A brand-new Roost opens on the setup checklist (after two-step sign-in).
+    if (setupMode) location.hash = '#/admin';
     await enter(res.user);
   } catch (err) {
     $('#welcome-msg').textContent = err.message;
@@ -584,6 +586,8 @@ function renderUser() {
   const name = u.displayName || u.username;
   $('#avatar').textContent = name.charAt(0).toUpperCase();
   $('#who-name').textContent = name;
+  $('#who-role').textContent = u.role;
+  $('#account-btn').setAttribute('aria-label', `Account menu for ${name}`);
   $('#hero-name').textContent = name;
   $('#profile-role').textContent = u.role;
   $('#profile-form').displayName.value = u.displayName;
@@ -596,12 +600,19 @@ const VIEWS = ['apps', 'nest', 'status', 'profile', 'admin'];
 const hasNest = () => state.apps.some((a) => a.id === 'nest' && a.url === '#/nest');
 
 function route() {
-  if (!state.user) return;
+  // Nothing opens behind the two-step screen; enter() routes once it is done.
+  if (!state.user || needsSecureStep(state.user)) return;
   const [first, ...rest] = location.hash.replace(/^#\/?/, '').split('/');
   let view = first || 'apps';
   if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'nest' && !hasNest())) view = 'apps';
   for (const v of VIEWS) $(`#view-${v}`).classList.toggle('hidden', v !== view);
-  document.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
+  document.querySelectorAll('#account-menu a').forEach((a) => {
+    if (a.dataset.view === view) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  });
+  document.querySelectorAll('#app-bar a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
+  $('#account-btn').classList.toggle('active', ['status', 'profile', 'admin'].includes(view));
+  closeMenu(false);
   if (view === 'admin') loadAdmin();
   if (view === 'profile') { loadStorage(); loadTwoStep(); }
   if (view === 'status') loadStatus();
@@ -610,6 +621,80 @@ function route() {
 }
 
 window.addEventListener('hashchange', () => { if (state.user) route(); });
+
+// ---------- account menu ----------
+// Opens on click or tap everywhere, and also on hover where there is a mouse.
+// Listeners on the document exist only while the menu is open.
+
+const menu = { open: false, byHover: false, timer: null };
+
+function menuItems() {
+  return [...$('#account-menu').querySelectorAll('[role="menuitem"]')].filter((n) => !n.classList.contains('hidden'));
+}
+
+function openMenu({ hover = false, focus = null } = {}) {
+  clearTimeout(menu.timer);
+  menu.byHover = hover;
+  if (!menu.open) {
+    menu.open = true;
+    $('#account-menu').classList.remove('hidden');
+    $('#account-btn').setAttribute('aria-expanded', 'true');
+    document.addEventListener('pointerdown', onOutside);
+  }
+  if (focus === 'first') menuItems()[0].focus();
+  if (focus === 'last') menuItems().at(-1).focus();
+}
+
+function closeMenu(returnFocus = false) {
+  clearTimeout(menu.timer);
+  if (!menu.open) return;
+  menu.open = false;
+  $('#account-menu').classList.add('hidden');
+  $('#account-btn').setAttribute('aria-expanded', 'false');
+  document.removeEventListener('pointerdown', onOutside);
+  if (returnFocus) $('#account-btn').focus();
+}
+
+function onOutside(e) {
+  if (!$('#who').contains(e.target)) closeMenu();
+}
+
+$('#account-btn').addEventListener('click', () => {
+  // A mouse that opened the menu by hovering and then clicks keeps it open.
+  if (menu.open && menu.byHover) menu.byHover = false;
+  else if (menu.open) closeMenu();
+  else openMenu();
+});
+
+$('#account-btn').addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openMenu({ focus: 'first' }); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); openMenu({ focus: 'last' }); }
+  else if (e.key === 'Escape') closeMenu();
+});
+
+$('#account-menu').addEventListener('keydown', (e) => {
+  const items = menuItems();
+  const i = items.indexOf(document.activeElement);
+  if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length].focus(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+  else if (e.key === 'Home') { e.preventDefault(); items[0].focus(); }
+  else if (e.key === 'End') { e.preventDefault(); items.at(-1).focus(); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeMenu(true); }
+  else if (e.key === 'Tab') closeMenu();
+});
+
+// Hover only for a real mouse; touch screens never open it by accident while scrolling.
+$('#who').addEventListener('pointerenter', (e) => {
+  if (e.pointerType !== 'mouse') return;
+  clearTimeout(menu.timer);
+  if (!menu.open) menu.timer = setTimeout(() => openMenu({ hover: true }), 150);
+});
+
+$('#who').addEventListener('pointerleave', (e) => {
+  if (e.pointerType !== 'mouse') return;
+  clearTimeout(menu.timer);
+  if (menu.open && menu.byHover) menu.timer = setTimeout(() => closeMenu(), 250);
+});
 
 $('#logout').addEventListener('click', async () => {
   await api('POST', '/api/logout').catch(() => {});
@@ -621,9 +706,15 @@ $('#logout').addEventListener('click', async () => {
 async function loadApps() {
   const { apps } = await api('GET', '/api/apps');
   state.apps = apps;
-  $('.nav [data-view=nest]').classList.toggle('hidden', !hasNest());
+  renderAppBar();
   renderApps();
   api('GET', '/api/apps/status').then(({ status }) => { state.status = status; renderApps(); }).catch(() => {});
+}
+
+function renderAppBar() {
+  $('#app-bar').replaceChildren(...state.apps.filter((app) => app.url).map((app) =>
+    el('a', app.url.startsWith('#/') ? { href: app.url, 'data-view': app.url.slice(2), class: location.hash.startsWith(app.url) ? 'active' : '' } : { href: resolveUrl(app.url), target: '_blank', rel: 'noopener' },
+      icon(app.icon, 'bar-icon'), el('span', { text: app.name }))));
 }
 
 function renderApps() {
