@@ -3,9 +3,11 @@
 // Small HTTP helpers shared by the Roost API and Nest.
 
 class HttpError extends Error {
-  constructor(status, message) {
+  // `code` is an optional machine-readable reason, sent alongside the message.
+  constructor(status, message, code) {
     super(message);
     this.status = status;
+    if (code) this.code = code;
   }
 }
 
