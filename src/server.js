@@ -41,6 +41,7 @@ const MIME = {
   '.png': 'image/png',
   '.ico': 'image/x-icon',
   '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json',
 };
 
 // ---------- helpers ----------
@@ -1346,6 +1347,28 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     return handler ? [handler, m[2]] : null;
   }
 
+  // What a phone or PC needs to install Roost as an app, named after the server.
+  function serveManifest(req, res) {
+    const name = db().settings.serverName || 'Roost';
+    const body = JSON.stringify({
+      id: '/',
+      name,
+      short_name: name.length > 12 ? 'Roost' : name,
+      start_url: '/',
+      scope: '/',
+      display: 'standalone',
+      background_color: '#0a0a0a',
+      theme_color: '#0a0a0a',
+      icons: [
+        { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
+        { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
+        { src: '/icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+      ],
+    });
+    res.writeHead(200, { 'Content-Type': MIME['.webmanifest'], 'Cache-Control': 'no-cache' });
+    res.end(req.method === 'HEAD' ? undefined : body);
+  }
+
   function serveStatic(req, res, pathname) {
     let rel = decodeURIComponent(pathname);
     if (rel === '/' || !path.extname(rel)) rel = '/index.html';
@@ -1355,7 +1378,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       if (err) return send(res, 404, { error: 'Not found' });
       res.writeHead(200, {
         'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-        'Cache-Control': 'no-cache',
+        // App icons rarely change; everything else is checked on every load.
+        'Cache-Control': rel.startsWith('/icons/') ? 'public, max-age=604800' : 'no-cache',
       });
       res.end(req.method === 'HEAD' ? undefined : data);
     });
@@ -1375,6 +1399,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         const found = route(req.method, pathname);
         if (!found) throw new HttpError(404, 'Not found');
         await found[0](req, res, found[1]);
+      } else if (pathname === '/manifest.webmanifest' && (req.method === 'GET' || req.method === 'HEAD')) {
+        serveManifest(req, res);
       } else if (req.method === 'GET' || req.method === 'HEAD') {
         serveStatic(req, res, pathname);
       } else {

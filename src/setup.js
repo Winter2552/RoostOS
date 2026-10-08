@@ -197,6 +197,21 @@ const STEPS = [
     check: (ctx) => ctx.db.users.length > 1 || (ctx.db.links || []).some((l) => l.kind === 'invite'),
   },
   {
+    id: 'install-app',
+    group: 'People',
+    title: 'Put Roost on phones and PCs',
+    why: 'Roost opens like an app, with the bird icon, from the home screen, Start menu or taskbar.',
+    how: [
+      'iPhone: open Roost in Safari, tap Share, then Add to Home Screen.',
+      'Android: open Roost in Chrome, tap ⋮, then Install app. On a plain http home address it is Add to home screen and opens in Chrome.',
+      'Windows: open Roost in Edge or Chrome and press the install icon at the right of the address bar. It shows once Roost has its https web address.',
+    ],
+    optional: true,
+    // Happens on each device, so Roost can't see it; tick it off yourself.
+    manual: true,
+    check: (ctx) => ctx.ticked.includes('install-app'),
+  },
+  {
     id: 'guest-pass',
     group: 'People',
     title: 'Give a visitor a guest pass',
