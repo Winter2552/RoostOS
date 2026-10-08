@@ -12,7 +12,7 @@ const links = require('./links');
 const mail = require('./mail');
 const setup = require('./setup');
 const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
-const { listContainers, containersFor } = require('./docker');
+const { listContainers, containersFor, restartContainer } = require('./docker');
 const twoStep = require('./twostep');
 const { qrSvg } = require('./qr');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
@@ -169,6 +169,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   const pendingCodes = new Map();
   const pendingSetups = new Map();
   const cpu = new CpuMeter();
+  // When each app was last restarted from the status page, to stop double taps.
+  const restartedAt = new Map();
   // Drives shown on the status page. Without a list, show the system drive and
   // the drive Roost keeps its data on (the same drive is only listed once).
   const diskList = disks && disks.length ? disks : [{ label: 'System', path: '/' }, { label: 'Data', path: dataDir }];
@@ -669,6 +671,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         Promise.all(visibleApps(db(), user).map((a) => appProbe(a, host, probeTimeoutMs))),
       ]);
       const all = docker.containers || [];
+      const canRestart = new Set(user.role === 'admin' ? docker.restartable || [] : []);
       const claimed = new Set();
       const claim = (list) => { list.forEach((c) => claimed.add(c.id)); return list; };
       const apps = [
@@ -681,14 +684,19 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
           uptime: process.uptime(),
           containers: claim(containersFor({ id: 'roost', container: roostContainer }, all)),
         },
-        ...visibleApps(db(), user).map((a, i) => ({
-          id: a.id,
-          name: a.name,
-          tagline: a.tagline,
-          icon: a.icon,
-          web: web[i],
-          containers: claim(containersFor(a, all)),
-        })),
+        ...visibleApps(db(), user).map((a, i) => {
+          const containers = claim(containersFor(a, all));
+          return {
+            id: a.id,
+            name: a.name,
+            tagline: a.tagline,
+            icon: a.icon,
+            web: web[i],
+            containers,
+            // Admins get a Restart button when the Docker helper lists this app's containers.
+            restartable: containers.some((c) => canRestart.has(c.name) && c.name !== roostContainer),
+          };
+        }),
       ];
       send(res, 200, {
         ...health,
@@ -698,6 +706,32 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         otherContainers: user.role === 'admin' ? all.filter((c) => !claimed.has(c.id)) : [],
         checkedAt: new Date().toISOString(),
       });
+    },
+
+    // Restarts the app's containers that Roost's Docker helper allows. Roost
+    // itself is never restarted from here: the page would lose its answer.
+    'POST /api/admin/apps/:id/restart': async (req, res, id) => {
+      const admin = requireAdmin(req);
+      const app = db().apps.find((a) => a.id === id);
+      if (!app) throw new HttpError(404, 'No such app');
+      const docker = await listContainers(dockerHost, probeTimeoutMs);
+      if (docker.error) throw new HttpError(503, 'Docker is not connected');
+      const allowed = new Set(docker.restartable);
+      const names = containersFor(app, docker.containers)
+        .map((c) => c.name)
+        .filter((n) => allowed.has(n) && n !== roostContainer);
+      if (!names.length) throw new HttpError(403, `${app.name} can't be restarted from Roost`);
+      if (Date.now() - (restartedAt.get(app.id) || 0) < 30 * 1000) throw new HttpError(429, `${app.name} was just restarted. Give it a moment.`);
+      restartedAt.set(app.id, Date.now());
+      try {
+        await Promise.all(names.map((n) => restartContainer(dockerHost, n)));
+      } catch (err) {
+        restartedAt.delete(app.id);
+        record(req, 'app-restart-failed', { actor: admin.username, detail: `${app.name}: ${err.message}` });
+        throw new HttpError(502, `${app.name} didn't restart (${err.message})`);
+      }
+      record(req, 'app-restarted', { actor: admin.username, detail: `${app.name} (${names.join(', ')})` });
+      send(res, 200, { ok: true });
     },
 
     'GET /api/admin/users': (req, res) => {
@@ -891,6 +925,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         nestDir: nestDir || path.join(dataDir, 'nest'),
         drives: readDisks(diskList),
         dockerOk: !docker.error,
+        restartable: docker.restartable || [],
         secureCookies,
         trustProxy,
         ticked: db().settings.setupTicked || [],
@@ -1157,7 +1192,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/invites|admin\/storage-requests|admin\/setup|storage\/users|links))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/setup|storage\/users|links))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }

@@ -24,11 +24,11 @@ services:
       ROOST_DISKS: "System=/hostfs/system;Data=/hostfs/data"
       # Where Nest keeps everyone's files (the mount below).
       NEST_DIR: /nest
-      # Container status comes from the docker-proxy service below, which only lets
-      # Roost read the container list. Remove both to fall back to web checks.
-      DOCKER_HOST: tcp://docker-proxy:2375
+      # Container status and restarts go through roost-docker below, Roost's own
+      # helper. Remove both to fall back to web checks (and no Restart buttons).
+      DOCKER_HOST: tcp://roost-docker:2375
     depends_on:
-      - docker-proxy
+      - roost-docker
     volumes:
       # On ZimaOS this keeps Roost's accounts and app list with the other app data.
       - /DATA/AppData/roost:/data
@@ -42,14 +42,22 @@ services:
       - /DATA:/hostfs/system:ro
       - /DATA:/hostfs/data:ro
 
-  # Read-only window onto Docker for the status page: lists and inspects
-  # containers, refuses everything else (no starting, stopping or exec).
-  docker-proxy:
-    image: tecnativa/docker-socket-proxy:latest
-    container_name: roost-docker-proxy
+  # Roost's own narrow window onto Docker (src/docker-helper.js), built from the
+  # same code. It lets Roost read the container list and restart only the
+  # containers named below; it refuses starting, stopping, removing, exec and
+  # everything else. No ports: only Roost can reach it.
+  roost-docker:
+    build: .
+    container_name: roost-docker
     restart: unless-stopped
+    command: ["node", "src/docker-helper.js"]
     environment:
-      CONTAINERS: "1"
-      POST: "0"
+      # Containers admins may restart from the status page, comma separated.
+      # Use the names ZimaOS shows for each app. Roost itself is never offered.
+      ROOST_RESTARTABLE: "jellyfin"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:2375/_ping >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 3s
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock

@@ -766,6 +766,9 @@ async function loadSystem() {
 const STATUS_REFRESH_MS = 5 * 1000;
 const FULL_AT = 90;
 let statusBusy = false;
+let lastStatus = null;
+// Restart button state per app id: confirm, busy, done or error (with msg).
+const restarts = new Map();
 
 function pct(used, total) {
   return total ? Math.round((used / total) * 100) : 0;
@@ -840,7 +843,52 @@ function appStatusCard(a, dockerOk) {
     el('div', { class: 'app-status-head' }, icon(a.icon), el('div', { class: 'mono muted', text: a.tagline })),
     el('div', { class: 'stat-value', text: a.name }),
     el('div', { class: 'mono stat-state' }, el('span', { class: `dot ${st.kind}` }), st.label),
-    el('div', { class: 'stat-lines mono muted' }, lines.map((t) => el('div', { text: t }))));
+    el('div', { class: 'stat-lines mono muted' }, lines.map((t) => el('div', { text: t }))),
+    a.restartable || restarts.has(a.id) ? restartRow(a) : null);
+}
+
+// Restart lives in the app's own card: one tap asks, the second restarts.
+function restartRow(a) {
+  const r = restarts.get(a.id) || {};
+  const set = (next) => {
+    if (next) restarts.set(a.id, next); else restarts.delete(a.id);
+    if (lastStatus) renderStatus(lastStatus);
+  };
+  const row = el('div', { class: 'restart-row mono', 'aria-live': 'polite' });
+  if (r.step === 'confirm') {
+    const yes = el('button', { type: 'button', class: 'btn small danger', text: 'Restart', onclick: () => restartApp(a, set) });
+    row.append(
+      el('div', { class: 'restart-ask', text: `Restart ${a.name}? Anyone using it is cut off for a moment.` }),
+      el('div', { class: 'restart-actions' }, yes,
+        el('button', { type: 'button', class: 'btn small ghost', text: 'Cancel', onclick: () => set(null) })));
+    queueMicrotask(() => yes.focus());
+  } else if (r.step === 'busy') {
+    row.append(el('span', { class: 'spinner', 'aria-hidden': 'true' }), el('span', { class: 'muted', text: `Restarting ${a.name}…` }));
+  } else if (r.step === 'done') {
+    row.append(el('span', { class: 'dot online' }), el('span', { text: 'Restarted' }));
+  } else {
+    if (r.step === 'error') row.append(el('div', { class: 'restart-error', text: r.msg }));
+    row.append(el('button', {
+      type: 'button',
+      class: 'link-btn mono',
+      text: r.step === 'error' ? 'Try again' : 'Restart',
+      'aria-label': `Restart ${a.name}`,
+      onclick: () => set({ step: 'confirm' }),
+    }));
+  }
+  return row;
+}
+
+async function restartApp(a, set) {
+  set({ step: 'busy' });
+  try {
+    await api('POST', `/api/admin/apps/${encodeURIComponent(a.id)}/restart`);
+    set({ step: 'done' });
+    setTimeout(() => { if ((restarts.get(a.id) || {}).step === 'done') set(null); }, 4000);
+  } catch (err) {
+    set({ step: 'error', msg: err.message });
+  }
+  loadStatus();
 }
 
 async function loadStatus() {
@@ -861,6 +909,7 @@ function setSummary(kind, text) {
 }
 
 function renderStatus(s) {
+  lastStatus = s;
   const memUsed = s.memory.total - s.memory.available;
   const memPct = pct(memUsed, s.memory.total);
   $('#status-server').replaceChildren(
@@ -1425,6 +1474,8 @@ const ACTIVITY_LABELS = {
   'storage-approved': 'Approved storage',
   'storage-declined': 'Declined storage',
   'apps-changed': 'Changed apps',
+  'app-restarted': 'Restarted an app',
+  'app-restart-failed': 'Restart failed',
   'settings-changed': 'Changed server settings',
 };
 
@@ -1487,7 +1538,9 @@ $('#activity-more').addEventListener('click', () => loadActivity(true));
   setInterval(() => { if (state.user && !$('#view-apps').classList.contains('hidden')) loadSystem(); }, 15 * 1000);
   // The status page refreshes itself while it is open and the tab is visible.
   setInterval(() => {
-    if (state.user && !document.hidden && !$('#view-status').classList.contains('hidden')) loadStatus();
+    // Holds still while a restart question is open, so the buttons don't move under a finger.
+    const asking = [...restarts.values()].some((r) => r.step === 'confirm');
+    if (state.user && !document.hidden && !asking && !$('#view-status').classList.contains('hidden')) loadStatus();
   }, STATUS_REFRESH_MS);
   const token = linkToken();
   if (token) return showJoin(token);
