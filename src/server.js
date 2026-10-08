@@ -580,6 +580,11 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   }
 
   const routes = {
+    // A tiny answer the app uses to check the server is back after losing it.
+    'GET /api/ping': (req, res) => {
+      res.writeHead(204, { 'Cache-Control': 'no-store' });
+      res.end();
+    },
     'GET /api/state': (req, res) => {
       const user = currentUser(req);
       send(res, 200, {

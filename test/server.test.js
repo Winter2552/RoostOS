@@ -51,6 +51,12 @@ test('first run asks for setup and serves the page', async () => {
   assert.match(await page.text(), /Roost/);
 });
 
+test('ping answers without a session and is never cached', async () => {
+  const res = await fetch(base + '/api/ping');
+  assert.equal(res.status, 204);
+  assert.equal(res.headers.get('cache-control'), 'no-store');
+});
+
 test('apps need a signed-in user', async () => {
   assert.equal((await call('GET', '/api/apps')).status, 401);
 });

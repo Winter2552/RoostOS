@@ -19,6 +19,14 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <!-- Shown when the server stops answering (public/app.js, "connection") -->
+  <div id="conn-banner" class="conn-banner hidden" role="status" aria-live="polite">
+    <div class="conn-text">
+      <strong id="conn-title"></strong>
+      <span id="conn-why" class="muted"></span>
+    </div>
+    <button class="btn small ghost" type="button" id="conn-retry">Try again</button>
+  </div>
   <!-- Setup and sign-in -->
   <main id="welcome" class="welcome hidden">
     <section class="card welcome-card">
