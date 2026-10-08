@@ -455,7 +455,8 @@ async function showJoin(token) {
   if (invite) {
     $('#join-title').textContent = `Join ${info.serverName}`;
     const who = info.invitedBy ? `${info.invitedBy} invited you` : "You're invited";
-    $('#join-lead').textContent = info.apps.length ? `${who} · ${info.apps.join(', ')}` : who;
+    const lead = info.apps.length ? `${who} · ${info.apps.join(', ')}` : who;
+    $('#join-lead').textContent = info.guestUntil ? `${lead} · guest pass until ${untilDate(info.guestUntil)}` : lead;
     $('#join-submit').textContent = 'Create account';
     usernameHint('');
   } else {
@@ -558,6 +559,14 @@ function linkBox(url, note, shareText) {
   return el('div', { class: 'link-box' }, input, el('div', { class: 'row', style: 'margin:0' }, copy, share), el('div', { class: 'mono muted', text: note }));
 }
 
+// When a guest pass ends: after some days, or at the end of the day picked.
+function guestUntil(f) {
+  if (f.guestFor.value !== 'date') return new Date(Date.now() + Number(f.guestFor.value) * 86400000).toISOString();
+  return f.guestDate.value ? new Date(`${f.guestDate.value}T23:59:59`).toISOString() : '';
+}
+
+const isGuest = (u) => u.role === 'guest';
+
 function untilDate(iso) {
   return new Date(iso).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
@@ -575,8 +584,10 @@ async function enter(user) {
   $('#join').classList.add('hidden');
   $('#shell').classList.remove('hidden');
   document.querySelectorAll('.admin-only').forEach((n) => n.classList.toggle('hidden', user.role !== 'admin'));
+  // Guests get a calm view: their apps and their profile, nothing about the server.
+  document.querySelectorAll('.member-only').forEach((n) => n.classList.toggle('hidden', isGuest(user)));
   renderUser();
-  await Promise.all([loadApps(), loadSystem()]);
+  await Promise.all([loadApps(), isGuest(user) ? null : loadSystem()]);
   route();
   if (user.role === 'admin' && !location.hash.startsWith('#/admin')) loadSetup();
 }
@@ -586,10 +597,11 @@ function renderUser() {
   const name = u.displayName || u.username;
   $('#avatar').textContent = name.charAt(0).toUpperCase();
   $('#who-name').textContent = name;
-  $('#who-role').textContent = u.role;
+  const role = isGuest(u) ? `guest until ${shortDate(u.guestUntil)}` : u.role;
+  $('#who-role').textContent = role;
   $('#account-btn').setAttribute('aria-label', `Account menu for ${name}`);
   $('#hero-name').textContent = name;
-  $('#profile-role').textContent = u.role;
+  $('#profile-role').textContent = role;
   $('#profile-form').displayName.value = u.displayName;
   $('#profile-form').username.value = u.username;
   $('#profile-form').email.value = u.email || '';
@@ -604,7 +616,7 @@ function route() {
   if (!state.user || needsSecureStep(state.user)) return;
   const [first, ...rest] = location.hash.replace(/^#\/?/, '').split('/');
   let view = first || 'apps';
-  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'nest' && !hasNest())) view = 'apps';
+  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'status' && isGuest(state.user)) || (view === 'nest' && !hasNest())) view = 'apps';
   for (const v of VIEWS) $(`#view-${v}`).classList.toggle('hidden', v !== view);
   document.querySelectorAll('#account-menu a').forEach((a) => {
     if (a.dataset.view === view) a.setAttribute('aria-current', 'page');
@@ -614,7 +626,7 @@ function route() {
   $('#account-btn').classList.toggle('active', ['status', 'profile', 'admin'].includes(view));
   closeMenu(false);
   if (view === 'admin') loadAdmin();
-  if (view === 'profile') { loadStorage(); loadTwoStep(); }
+  if (view === 'profile') { if (!isGuest(state.user)) loadStorage(); loadTwoStep(); }
   if (view === 'status') loadStatus();
   if (view === 'nest') window.nestOpen(rest);
   else document.title = state.serverName;
@@ -1352,6 +1364,16 @@ function renderUsers() {
           `Set a new password for ${state.serverName}`));
       } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
     };
+    const ended = isGuest(u) && !(Date.parse(u.guestUntil) > Date.now());
+    const guestPass = async (body) => {
+      try {
+        await api('PATCH', `/api/admin/users/${u.id}`, body);
+        loadAdmin();
+      } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
+    };
+    // A week more, counted from now for a pass that has already ended.
+    const extend = () => guestPass({ guestUntil: new Date(Math.max(Date.now(), Date.parse(u.guestUntil)) + 7 * 86400000).toISOString() });
+    const endPass = () => confirm(`End ${u.displayName}'s guest pass now? They are signed out straight away.`) && guestPass({ endGuestPass: true });
     const remove = async () => {
       if (!confirm(`Remove ${u.displayName}? They will no longer be able to sign in.`)) return;
       try {
@@ -1359,12 +1381,16 @@ function renderUsers() {
         loadAdmin();
       } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
     };
-    return el('div', { class: 'user-row' },
+    return el('div', { class: `user-row${ended ? ' ended' : ''}` },
       el('div', { class: 'who' },
         el('span', { class: 'avatar', text: (u.displayName || u.username).charAt(0).toUpperCase() }),
         el('div', {}, el('div', { text: u.displayName }), el('div', { class: 'mono muted', text: [`@${u.username}`, u.email].filter(Boolean).join(' · ') })),
         el('span', { class: 'pill', text: u.role }),
         u.twoStep.on ? el('span', { class: 'pill approved', text: 'Two-step' }) : null),
+      isGuest(u) ? el('div', { class: 'row', style: 'margin:0' },
+        el('span', { class: 'mono muted', text: ended ? `Guest pass ended ${shortDate(u.guestUntil)}` : `Guest pass until ${untilDate(u.guestUntil)}` }),
+        el('button', { class: 'btn ghost small', type: 'button', text: 'Add a week', onclick: extend }),
+        ended ? null : el('button', { class: 'btn ghost small', type: 'button', text: 'End now', onclick: endPass })) : null,
       u.role === 'admin' ? el('span', { class: 'mono muted', text: 'Sees every app' }) : checks,
       el('div', { class: 'row user-storage' },
         el('span', { class: 'mono muted', text: `Storage · ${bytes(u.storage.usedBytes)} used` }),
@@ -1393,13 +1419,25 @@ function renderInvites(invites) {
     return el('div', { class: 'request-row' },
       el('div', {},
         el('div', { text: inv.label || 'Invite' }),
-        el('div', { class: 'mono muted', text: `${inv.role} · made ${shortDate(inv.createdAt)} · until ${untilDate(inv.expiresAt)}` })),
+        el('div', { class: 'mono muted', text: `${inv.role}${inv.guestUntil ? ` until ${shortDate(inv.guestUntil)}` : ''} · made ${shortDate(inv.createdAt)} · link works until ${untilDate(inv.expiresAt)}` })),
       el('button', { class: 'btn danger small', type: 'button', text: 'Cancel', onclick: cancel }));
   }));
 }
 
 $('#invite-form').role.addEventListener('change', (e) => {
-  $('#invite-apps-row').classList.toggle('hidden', e.target.value === 'admin');
+  const role = e.target.value;
+  $('#invite-apps-row').classList.toggle('hidden', role === 'admin');
+  $('#guest-until-field').classList.toggle('hidden', role !== 'guest');
+  // Guests start with just Jellyfin; tick more if they need them.
+  $('#new-user-apps').replaceChildren(...appChecks(role === 'guest' ? state.apps.filter((a) => a.id === 'jellyfin').map((a) => a.id) : null));
+  pickers.newUser.setValue(role === 'guest' ? 1 : state.defaultLimitGb);
+});
+
+$('#invite-form').guestFor.addEventListener('change', (e) => {
+  const f = e.target.form;
+  f.guestDate.classList.toggle('hidden', e.target.value !== 'date');
+  f.guestDate.required = e.target.value === 'date';
+  f.guestDate.min = new Date().toLocaleDateString('en-CA');
 });
 
 $('#invite-form').addEventListener('submit', async (e) => {
@@ -1411,10 +1449,14 @@ $('#invite-form').addEventListener('submit', async (e) => {
       email: state.mailEnabled ? f.email.value : '',
       role: f.role.value,
       apps: checkedApps($('#new-user-apps')),
+      guestUntil: f.role.value === 'guest' ? guestUntil(f) : undefined,
       limitGb: pickers.newUser.getValue(),
     });
     f.reset();
     $('#invite-apps-row').classList.remove('hidden');
+    $('#guest-until-field').classList.add('hidden');
+    f.guestDate.classList.add('hidden');
+    f.guestDate.required = false;
     flash(f, '');
     await loadAdmin();
     $('#invite-result').replaceChildren(linkBox(linkUrl('join', token),
@@ -1573,7 +1615,7 @@ $('#activity-more').addEventListener('click', () => loadActivity(true));
 (async function boot() {
   tickClock();
   setInterval(tickClock, 30 * 1000);
-  setInterval(() => { if (state.user && !$('#view-apps').classList.contains('hidden')) loadSystem(); }, 15 * 1000);
+  setInterval(() => { if (state.user && !isGuest(state.user) && !$('#view-apps').classList.contains('hidden')) loadSystem(); }, 15 * 1000);
   // The status page refreshes itself while it is open and the tab is visible.
   setInterval(() => {
     if (state.user && !document.hidden && !$('#view-status').classList.contains('hidden')) loadStatus();

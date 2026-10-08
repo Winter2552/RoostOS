@@ -293,7 +293,7 @@ label.field, div.field { display: flex; flex-direction: column; gap: 6px; }
 
 .field > span { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
 
-input[type='text'], input[type='password'], input[type='url'], input[type='email'], input[type='number'], select {
+input[type='text'], input[type='password'], input[type='url'], input[type='email'], input[type='number'], input[type='date'], select {
   background: var(--bg);
   border: 1.5px solid var(--line);
   border-radius: 12px;
@@ -341,6 +341,7 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 .admin-app:first-of-type, .user-row:first-of-type { border-top: 0; }
 
 .user-row { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.user-row.ended { opacity: .55; }
 
 .pill { border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-family: var(--mono); font-size: 11px; text-transform: uppercase; }
 
@@ -843,6 +844,9 @@ a.btn { text-decoration: none; text-align: center; }
 @media (pointer: coarse) {
   .setup-row { min-height: 44px; }
 }
+#guest-until-field .row { flex-wrap: nowrap; gap: 10px; }
+#guest-until-field .row > * { flex: 1; min-width: 0; }
+
 
 /* Uptime history: one bar per day, newest on the right. */
 .uptime { display: flex; flex-direction: column; gap: 6px; }

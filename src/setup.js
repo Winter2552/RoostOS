@@ -177,6 +177,21 @@ const STEPS = [
     action: { label: 'Make an invite', view: 'admin', focus: 'invite-form' },
     check: (ctx) => ctx.db.users.length > 1 || (ctx.db.links || []).some((l) => l.kind === 'invite'),
   },
+  {
+    id: 'guest-pass',
+    group: 'People',
+    title: 'Give a visitor a guest pass',
+    why: 'Someone staying a while can use Jellyfin (or any app you pick) and is turned away on the day you choose.',
+    how: [
+      'Under Admin → Invite someone, set Role to Guest and pick when the pass ends.',
+      'Share the link. They pick a username and password and see only their apps.',
+      'If they use Jellyfin, give them a Jellyfin account too, and switch it off in Jellyfin when the pass ends.',
+      'Under Admin → Users, "Add a week" extends a pass and "End now" signs them out straight away.',
+    ],
+    action: { label: 'Make a guest pass', view: 'admin', focus: 'invite-form' },
+    optional: true,
+    check: (ctx) => ctx.db.users.some((u) => u.role === 'guest') || (ctx.db.links || []).some((l) => l.role === 'guest'),
+  },
 ];
 
 // Settings with no step, and why. Anything else a change adds needs a step above.
