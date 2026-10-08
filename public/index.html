@@ -100,17 +100,18 @@
   <div id="shell" class="frame hidden">
     <header class="topbar">
       <a class="brand" href="#/apps"><span data-server-name>Roost</span><svg class="brand-cursor" viewBox="58 44 44 48" aria-hidden="true"><path d="M58 92 V44 H76 A26 26 0 0 1 102 70 V92 Z" fill="currentColor"/><circle cx="86" cy="60" r="5" fill="var(--bg)"/></svg></a>
-      <nav class="nav mono">
-        <a href="#/apps" data-view="apps">Apps</a>
-        <a href="#/nest" data-view="nest" class="hidden">Files</a>
-        <a href="#/status" data-view="status">Status</a>
-        <a href="#/profile" data-view="profile">Profile</a>
-        <a href="#/admin" data-view="admin" class="admin-only">Admin</a>
-      </nav>
-      <div class="who">
-        <span class="avatar" id="avatar"></span>
-        <span id="who-name"></span>
-        <button class="link-btn mono" id="logout">Sign out</button>
+      <nav class="nav app-bar" id="app-bar" aria-label="Apps"></nav>
+      <div class="who" id="who">
+        <button class="avatar-btn" id="account-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu">
+          <span class="avatar" id="avatar" aria-hidden="true"></span>
+        </button>
+        <div class="account-menu hidden" id="account-menu" role="menu" aria-labelledby="account-btn">
+          <div class="menu-head"><b id="who-name"></b><span class="mono muted" id="who-role"></span></div>
+          <a role="menuitem" href="#/status" data-view="status" class="member-only">Status</a>
+          <a role="menuitem" href="#/profile" data-view="profile">Profile</a>
+          <a role="menuitem" href="#/admin" data-view="admin" class="admin-only">Admin</a>
+          <button role="menuitem" type="button" id="logout">Sign out</button>
+        </div>
       </div>
     </header>
 
@@ -119,13 +120,13 @@
       <div class="hero">
         <div class="mono muted" id="greeting">Hello</div>
         <h1>Welcome home, <span id="hero-name"></span></h1>
-        <div class="stats mono">
+        <div class="stats mono member-only">
           <div class="stat">Uptime<b id="stat-uptime">—</b></div>
           <div class="stat">Memory<b id="stat-mem">—</b></div>
           <div class="stat">Load<b id="stat-load">—</b></div>
           <div class="stat">Storage<b id="stat-disk">—</b></div>
         </div>
-        <a class="more-link mono" href="#/status">Server status →</a>
+        <a class="more-link mono member-only" href="#/status">Server status →</a>
         <a class="more-link mono setup-nudge hidden" id="setup-nudge" href="#/admin"></a>
       </div>
       <div class="section">
@@ -215,7 +216,7 @@
         <div class="row"><button class="btn" type="submit">Save</button></div>
         <div class="msg" role="status"></div>
       </form>
-      <div class="card panel" id="storage-panel">
+      <div class="card panel member-only" id="storage-panel">
         <h3>Storage</h3><span class="mono muted">Space for your files and photos in Nest and Glint</span>
         <div class="meter" aria-hidden="true"><div class="meter-fill" id="storage-fill"></div></div>
         <div class="meter-label"><b id="storage-used">—</b><span class="mono muted" id="storage-limit"></span></div>
@@ -298,11 +299,14 @@
       </div>
 
       <form class="card panel" id="invite-form">
-        <h3>Invite someone</h3><span class="mono muted">Send them a link. They pick their own username and password. Works once, for 7 days.</span>
+        <h3>Invite someone</h3><span class="mono muted">Send them a link. They pick their own username and password. Works once, for 7 days. A guest pass stops working on the day you pick.</span>
         <div class="form-grid">
           <label class="field"><span>Who it's for (only you see this)</span><input type="text" name="label" maxlength="60" placeholder="e.g. Mum"></label>
           <label class="field mail-only"><span>Email it to (optional)</span><input type="email" name="email" maxlength="254" autocapitalize="none" spellcheck="false" placeholder="mum@example.com"></label>
-          <label class="field"><span>Role</span><select name="role"><option value="user">User</option><option value="admin">Admin</option></select></label>
+          <label class="field"><span>Role</span><select name="role"><option value="user">User</option><option value="guest">Guest</option><option value="admin">Admin</option></select></label>
+          <div class="field hidden" id="guest-until-field"><span>Guest pass ends</span>
+            <div class="row" style="margin:0"><select name="guestFor"><option value="1">After 1 day</option><option value="7" selected>After 1 week</option><option value="30">After 1 month</option><option value="date">On a date…</option></select>
+            <input type="date" name="guestDate" class="hidden" aria-label="Last day of the guest pass"></div></div>
           <div class="field"><span>Storage limit</span><div id="new-user-picker"></div></div>
         </div>
         <div class="row" id="invite-apps-row"><span class="mono muted">Apps</span><div class="checks" id="new-user-apps"></div></div>

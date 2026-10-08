@@ -29,8 +29,8 @@ function el(tag, props = {}, ...children) {
   return node;
 }
 
-function icon(name) {
-  const span = el('span', { class: 'icon-tile', 'aria-hidden': 'true' });
+function icon(name, cls = 'icon-tile') {
+  const span = el('span', { class: cls, 'aria-hidden': 'true' });
   span.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round">${ICONS[name] || ICONS.grid}</svg>`;
   return span;
 }
@@ -193,6 +193,8 @@ $('#welcome-form').addEventListener('submit', async (e) => {
       return;
     }
     f.reset();
+    // A brand-new Roost opens on the setup checklist (after two-step sign-in).
+    if (setupMode) location.hash = '#/admin';
     await enter(res.user);
   } catch (err) {
     $('#welcome-msg').textContent = err.message;
@@ -453,7 +455,8 @@ async function showJoin(token) {
   if (invite) {
     $('#join-title').textContent = `Join ${info.serverName}`;
     const who = info.invitedBy ? `${info.invitedBy} invited you` : "You're invited";
-    $('#join-lead').textContent = info.apps.length ? `${who} · ${info.apps.join(', ')}` : who;
+    const lead = info.apps.length ? `${who} · ${info.apps.join(', ')}` : who;
+    $('#join-lead').textContent = info.guestUntil ? `${lead} · guest pass until ${untilDate(info.guestUntil)}` : lead;
     $('#join-submit').textContent = 'Create account';
     usernameHint('');
   } else {
@@ -556,6 +559,14 @@ function linkBox(url, note, shareText) {
   return el('div', { class: 'link-box' }, input, el('div', { class: 'row', style: 'margin:0' }, copy, share), el('div', { class: 'mono muted', text: note }));
 }
 
+// When a guest pass ends: after some days, or at the end of the day picked.
+function guestUntil(f) {
+  if (f.guestFor.value !== 'date') return new Date(Date.now() + Number(f.guestFor.value) * 86400000).toISOString();
+  return f.guestDate.value ? new Date(`${f.guestDate.value}T23:59:59`).toISOString() : '';
+}
+
+const isGuest = (u) => u.role === 'guest';
+
 function untilDate(iso) {
   return new Date(iso).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
@@ -573,8 +584,10 @@ async function enter(user) {
   $('#join').classList.add('hidden');
   $('#shell').classList.remove('hidden');
   document.querySelectorAll('.admin-only').forEach((n) => n.classList.toggle('hidden', user.role !== 'admin'));
+  // Guests get a calm view: their apps and their profile, nothing about the server.
+  document.querySelectorAll('.member-only').forEach((n) => n.classList.toggle('hidden', isGuest(user)));
   renderUser();
-  await Promise.all([loadApps(), loadSystem()]);
+  await Promise.all([loadApps(), isGuest(user) ? null : loadSystem()]);
   route();
   if (user.role === 'admin' && !location.hash.startsWith('#/admin')) loadSetup();
 }
@@ -584,8 +597,11 @@ function renderUser() {
   const name = u.displayName || u.username;
   $('#avatar').textContent = name.charAt(0).toUpperCase();
   $('#who-name').textContent = name;
+  const role = isGuest(u) ? `guest until ${shortDate(u.guestUntil)}` : u.role;
+  $('#who-role').textContent = role;
+  $('#account-btn').setAttribute('aria-label', `Account menu for ${name}`);
   $('#hero-name').textContent = name;
-  $('#profile-role').textContent = u.role;
+  $('#profile-role').textContent = role;
   $('#profile-form').displayName.value = u.displayName;
   $('#profile-form').username.value = u.username;
   $('#profile-form').email.value = u.email || '';
@@ -596,20 +612,101 @@ const VIEWS = ['apps', 'nest', 'status', 'profile', 'admin'];
 const hasNest = () => state.apps.some((a) => a.id === 'nest' && a.url === '#/nest');
 
 function route() {
-  if (!state.user) return;
+  // Nothing opens behind the two-step screen; enter() routes once it is done.
+  if (!state.user || needsSecureStep(state.user)) return;
   const [first, ...rest] = location.hash.replace(/^#\/?/, '').split('/');
   let view = first || 'apps';
-  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'nest' && !hasNest())) view = 'apps';
+  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'status' && isGuest(state.user)) || (view === 'nest' && !hasNest())) view = 'apps';
   for (const v of VIEWS) $(`#view-${v}`).classList.toggle('hidden', v !== view);
-  document.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
+  document.querySelectorAll('#account-menu a').forEach((a) => {
+    if (a.dataset.view === view) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  });
+  document.querySelectorAll('#app-bar a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
+  $('#account-btn').classList.toggle('active', ['status', 'profile', 'admin'].includes(view));
+  closeMenu(false);
   if (view === 'admin') loadAdmin();
-  if (view === 'profile') { loadStorage(); loadTwoStep(); }
+  if (view === 'profile') { if (!isGuest(state.user)) loadStorage(); loadTwoStep(); }
   if (view === 'status') loadStatus();
   if (view === 'nest') window.nestOpen(rest);
   else document.title = state.serverName;
 }
 
 window.addEventListener('hashchange', () => { if (state.user) route(); });
+
+// ---------- account menu ----------
+// Opens on click or tap everywhere, and also on hover where there is a mouse.
+// Listeners on the document exist only while the menu is open.
+
+const menu = { open: false, byHover: false, timer: null };
+
+function menuItems() {
+  return [...$('#account-menu').querySelectorAll('[role="menuitem"]')].filter((n) => !n.classList.contains('hidden'));
+}
+
+function openMenu({ hover = false, focus = null } = {}) {
+  clearTimeout(menu.timer);
+  menu.byHover = hover;
+  if (!menu.open) {
+    menu.open = true;
+    $('#account-menu').classList.remove('hidden');
+    $('#account-btn').setAttribute('aria-expanded', 'true');
+    document.addEventListener('pointerdown', onOutside);
+  }
+  if (focus === 'first') menuItems()[0].focus();
+  if (focus === 'last') menuItems().at(-1).focus();
+}
+
+function closeMenu(returnFocus = false) {
+  clearTimeout(menu.timer);
+  if (!menu.open) return;
+  menu.open = false;
+  $('#account-menu').classList.add('hidden');
+  $('#account-btn').setAttribute('aria-expanded', 'false');
+  document.removeEventListener('pointerdown', onOutside);
+  if (returnFocus) $('#account-btn').focus();
+}
+
+function onOutside(e) {
+  if (!$('#who').contains(e.target)) closeMenu();
+}
+
+$('#account-btn').addEventListener('click', () => {
+  // A mouse that opened the menu by hovering and then clicks keeps it open.
+  if (menu.open && menu.byHover) menu.byHover = false;
+  else if (menu.open) closeMenu();
+  else openMenu();
+});
+
+$('#account-btn').addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openMenu({ focus: 'first' }); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); openMenu({ focus: 'last' }); }
+  else if (e.key === 'Escape') closeMenu();
+});
+
+$('#account-menu').addEventListener('keydown', (e) => {
+  const items = menuItems();
+  const i = items.indexOf(document.activeElement);
+  if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length].focus(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+  else if (e.key === 'Home') { e.preventDefault(); items[0].focus(); }
+  else if (e.key === 'End') { e.preventDefault(); items.at(-1).focus(); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeMenu(true); }
+  else if (e.key === 'Tab') closeMenu();
+});
+
+// Hover only for a real mouse; touch screens never open it by accident while scrolling.
+$('#who').addEventListener('pointerenter', (e) => {
+  if (e.pointerType !== 'mouse') return;
+  clearTimeout(menu.timer);
+  if (!menu.open) menu.timer = setTimeout(() => openMenu({ hover: true }), 150);
+});
+
+$('#who').addEventListener('pointerleave', (e) => {
+  if (e.pointerType !== 'mouse') return;
+  clearTimeout(menu.timer);
+  if (menu.open && menu.byHover) menu.timer = setTimeout(() => closeMenu(), 250);
+});
 
 $('#logout').addEventListener('click', async () => {
   await api('POST', '/api/logout').catch(() => {});
@@ -621,9 +718,15 @@ $('#logout').addEventListener('click', async () => {
 async function loadApps() {
   const { apps } = await api('GET', '/api/apps');
   state.apps = apps;
-  $('.nav [data-view=nest]').classList.toggle('hidden', !hasNest());
+  renderAppBar();
   renderApps();
   api('GET', '/api/apps/status').then(({ status }) => { state.status = status; renderApps(); }).catch(() => {});
+}
+
+function renderAppBar() {
+  $('#app-bar').replaceChildren(...state.apps.filter((app) => app.url).map((app) =>
+    el('a', app.url.startsWith('#/') ? { href: app.url, 'data-view': app.url.slice(2), class: location.hash.startsWith(app.url) ? 'active' : '' } : { href: resolveUrl(app.url), target: '_blank', rel: 'noopener' },
+      icon(app.icon, 'bar-icon'), el('span', { text: app.name }))));
 }
 
 function renderApps() {
@@ -731,7 +834,95 @@ function appState(a, dockerOk) {
   return { kind: a.web.state, label: WEB_LABEL[a.web.state] };
 }
 
-function appStatusCard(a, dockerOk) {
+// ---------- uptime history ----------
+
+const HISTORY_DAYS = 30;
+const uptimePick = {}; // app id → the day tapped on its strip
+
+function overlap(ranges, from, to) {
+  let ms = 0;
+  for (const [s, e] of ranges) ms += Math.max(0, Math.min(e, to) - Math.max(s, from));
+  return ms;
+}
+
+// One entry per local day, oldest first: how long it was watched and down.
+function uptimeDays(h, now) {
+  const days = [];
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  for (let i = HISTORY_DAYS - 1; i >= 0; i--) {
+    const start = new Date(today);
+    start.setDate(today.getDate() - i);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 1);
+    const from = start.getTime();
+    const to = Math.min(end.getTime(), now);
+    const watched = overlap(h.watched, from, to);
+    const down = Math.min(watched, overlap(h.outages, from, to));
+    const kind = !watched ? 'none' : !down ? 'up' : down * 2 >= watched ? 'down' : 'part';
+    days.push({ from, to, watched, down, kind, outages: h.outages.filter(([s, e]) => e > from && s < to) });
+  }
+  return days;
+}
+
+const clockTime = (ms) => new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+const dayName = (ms) => new Date(ms).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+const mins = (ms) => duration(Math.max(60, ms / 1000));
+
+function dayDetail(d) {
+  if (!d.watched) return `${dayName(d.from)} · no data`;
+  if (!d.down) return `${dayName(d.from)} · no downtime`;
+  const times = d.outages.slice(0, 3).map(([s, e]) => `${clockTime(Math.max(s, d.from))}–${clockTime(Math.min(e, d.to))}`);
+  const more = d.outages.length > 3 ? ` +${d.outages.length - 3}` : '';
+  return `${dayName(d.from)} · down ${mins(d.down)} (${times.join(', ')}${more})`;
+}
+
+function uptimeStrip(id, h, now) {
+  const days = uptimeDays(h, now);
+  const watched = days.reduce((n, d) => n + d.watched, 0);
+  const down = days.reduce((n, d) => n + d.down, 0);
+  if (!watched) return null;
+  // Any downtime shows a decimal and never rounds up to 100.
+  const percent = down ? Math.min(99.9, 100 * (1 - down / watched)).toFixed(1) : '100';
+  const outages = h.outages.length;
+  const summary = outages ? `${outages} outage${outages > 1 ? 's' : ''} · ${mins(down)}` : 'No outages';
+  const detail = el('div', { class: 'uptime-detail mono muted', 'aria-live': 'polite' });
+  const bars = el('div', { class: 'uptime-bars' }, days.map((d) => el('i', { class: d.kind })));
+  const strip = el('div', {
+    class: 'uptime-strip',
+    role: 'slider',
+    tabindex: '0',
+    'aria-label': `Last ${HISTORY_DAYS} days: ${percent}% up, ${summary.toLowerCase()}`,
+    'aria-valuemin': 0,
+    'aria-valuemax': HISTORY_DAYS - 1,
+  }, bars);
+  const pick = (i) => {
+    const n = Math.max(0, Math.min(HISTORY_DAYS - 1, i));
+    uptimePick[id] = n;
+    [...bars.children].forEach((b, j) => b.classList.toggle('picked', j === n));
+    strip.setAttribute('aria-valuenow', n);
+    strip.setAttribute('aria-valuetext', dayDetail(days[n]));
+    detail.textContent = dayDetail(days[n]);
+  };
+  // The whole strip is the tap target: thin bars are hard to hit on a phone.
+  strip.addEventListener('click', (e) => {
+    const r = bars.getBoundingClientRect();
+    pick(Math.floor(((e.clientX - r.left) / r.width) * HISTORY_DAYS));
+  });
+  strip.addEventListener('keydown', (e) => {
+    const step = { ArrowLeft: -1, ArrowRight: 1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    pick((uptimePick[id] ?? HISTORY_DAYS - 1) + step);
+  });
+  if (uptimePick[id] !== undefined) pick(uptimePick[id]);
+  return el('div', { class: 'uptime' },
+    el('div', { class: 'uptime-head mono muted' }, el('span', { text: `${percent}% · ${HISTORY_DAYS} days` }), el('span', { text: summary })),
+    strip,
+    detail);
+}
+
+function appStatusCard(a, dockerOk, history) {
   const st = appState(a, dockerOk);
   const lines = [];
   if (a.containers.length) {
@@ -749,6 +940,7 @@ function appStatusCard(a, dockerOk) {
     el('div', { class: 'app-status-head' }, icon(a.icon), el('div', { class: 'mono muted', text: a.tagline })),
     el('div', { class: 'stat-value', text: a.name }),
     el('div', { class: 'mono stat-state' }, el('span', { class: `dot ${st.kind}` }), st.label),
+    history && history.apps[a.id] ? uptimeStrip(a.id, history.apps[a.id], history.now) : null,
     el('div', { class: 'stat-lines mono muted' }, lines.map((t) => el('div', { text: t }))));
 }
 
@@ -793,7 +985,7 @@ function renderStatus(s) {
     return statCard(d.label, `${bytes(d.free)} free`, `${bytes(used)} of ${bytes(d.total)} used`, pct(used, d.total));
   }));
 
-  $('#status-apps').replaceChildren(...s.apps.map((a) => appStatusCard(a, s.docker.ok)));
+  $('#status-apps').replaceChildren(...s.apps.map((a) => appStatusCard(a, s.docker.ok, s.history)));
 
   const note = $('#status-note');
   note.classList.toggle('hidden', s.docker.ok);
@@ -1182,6 +1374,16 @@ function renderUsers() {
           `Set a new password for ${state.serverName}`));
       } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
     };
+    const ended = isGuest(u) && !(Date.parse(u.guestUntil) > Date.now());
+    const guestPass = async (body) => {
+      try {
+        await api('PATCH', `/api/admin/users/${u.id}`, body);
+        loadAdmin();
+      } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
+    };
+    // A week more, counted from now for a pass that has already ended.
+    const extend = () => guestPass({ guestUntil: new Date(Math.max(Date.now(), Date.parse(u.guestUntil)) + 7 * 86400000).toISOString() });
+    const endPass = () => confirm(`End ${u.displayName}'s guest pass now? They are signed out straight away.`) && guestPass({ endGuestPass: true });
     const remove = async () => {
       if (!confirm(`Remove ${u.displayName}? They will no longer be able to sign in.`)) return;
       try {
@@ -1189,12 +1391,16 @@ function renderUsers() {
         loadAdmin();
       } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
     };
-    return el('div', { class: 'user-row' },
+    return el('div', { class: `user-row${ended ? ' ended' : ''}` },
       el('div', { class: 'who' },
         el('span', { class: 'avatar', text: (u.displayName || u.username).charAt(0).toUpperCase() }),
         el('div', {}, el('div', { text: u.displayName }), el('div', { class: 'mono muted', text: [`@${u.username}`, u.email].filter(Boolean).join(' · ') })),
         el('span', { class: 'pill', text: u.role }),
         u.twoStep.on ? el('span', { class: 'pill approved', text: 'Two-step' }) : null),
+      isGuest(u) ? el('div', { class: 'row', style: 'margin:0' },
+        el('span', { class: 'mono muted', text: ended ? `Guest pass ended ${shortDate(u.guestUntil)}` : `Guest pass until ${untilDate(u.guestUntil)}` }),
+        el('button', { class: 'btn ghost small', type: 'button', text: 'Add a week', onclick: extend }),
+        ended ? null : el('button', { class: 'btn ghost small', type: 'button', text: 'End now', onclick: endPass })) : null,
       u.role === 'admin' ? el('span', { class: 'mono muted', text: 'Sees every app' }) : checks,
       el('div', { class: 'row user-storage' },
         el('span', { class: 'mono muted', text: `Storage · ${bytes(u.storage.usedBytes)} used` }),
@@ -1223,13 +1429,25 @@ function renderInvites(invites) {
     return el('div', { class: 'request-row' },
       el('div', {},
         el('div', { text: inv.label || 'Invite' }),
-        el('div', { class: 'mono muted', text: `${inv.role} · made ${shortDate(inv.createdAt)} · until ${untilDate(inv.expiresAt)}` })),
+        el('div', { class: 'mono muted', text: `${inv.role}${inv.guestUntil ? ` until ${shortDate(inv.guestUntil)}` : ''} · made ${shortDate(inv.createdAt)} · link works until ${untilDate(inv.expiresAt)}` })),
       el('button', { class: 'btn danger small', type: 'button', text: 'Cancel', onclick: cancel }));
   }));
 }
 
 $('#invite-form').role.addEventListener('change', (e) => {
-  $('#invite-apps-row').classList.toggle('hidden', e.target.value === 'admin');
+  const role = e.target.value;
+  $('#invite-apps-row').classList.toggle('hidden', role === 'admin');
+  $('#guest-until-field').classList.toggle('hidden', role !== 'guest');
+  // Guests start with just Jellyfin; tick more if they need them.
+  $('#new-user-apps').replaceChildren(...appChecks(role === 'guest' ? state.apps.filter((a) => a.id === 'jellyfin').map((a) => a.id) : null));
+  pickers.newUser.setValue(role === 'guest' ? 1 : state.defaultLimitGb);
+});
+
+$('#invite-form').guestFor.addEventListener('change', (e) => {
+  const f = e.target.form;
+  f.guestDate.classList.toggle('hidden', e.target.value !== 'date');
+  f.guestDate.required = e.target.value === 'date';
+  f.guestDate.min = new Date().toLocaleDateString('en-CA');
 });
 
 $('#invite-form').addEventListener('submit', async (e) => {
@@ -1241,10 +1459,14 @@ $('#invite-form').addEventListener('submit', async (e) => {
       email: state.mailEnabled ? f.email.value : '',
       role: f.role.value,
       apps: checkedApps($('#new-user-apps')),
+      guestUntil: f.role.value === 'guest' ? guestUntil(f) : undefined,
       limitGb: pickers.newUser.getValue(),
     });
     f.reset();
     $('#invite-apps-row').classList.remove('hidden');
+    $('#guest-until-field').classList.add('hidden');
+    f.guestDate.classList.add('hidden');
+    f.guestDate.required = false;
     flash(f, '');
     await loadAdmin();
     $('#invite-result').replaceChildren(linkBox(linkUrl('join', token),
@@ -1478,7 +1700,7 @@ $('#tls-off').addEventListener('click', async () => {
 (async function boot() {
   tickClock();
   setInterval(tickClock, 30 * 1000);
-  setInterval(() => { if (state.user && !$('#view-apps').classList.contains('hidden')) loadSystem(); }, 15 * 1000);
+  setInterval(() => { if (state.user && !isGuest(state.user) && !$('#view-apps').classList.contains('hidden')) loadSystem(); }, 15 * 1000);
   // The status page refreshes itself while it is open and the tab is visible.
   setInterval(() => {
     if (state.user && !document.hidden && !$('#view-status').classList.contains('hidden')) loadStatus();
