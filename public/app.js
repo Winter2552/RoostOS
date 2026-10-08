@@ -36,12 +36,23 @@ function icon(name, cls = 'icon-tile') {
 }
 
 async function api(method, url, body) {
-  const res = await fetch(url, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
-    credentials: 'same-origin',
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+      credentials: 'same-origin',
+    });
+  } catch {
+    connectionLost();
+    throw new Error("Can't reach the server");
+  }
+  if (serverDown(res)) {
+    connectionLost();
+    throw new Error("Can't reach the server");
+  }
+  connectionBack();
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 && !url.startsWith('/api/login') && !linkToken()) {
     showWelcome(false);
@@ -49,6 +60,90 @@ async function api(method, url, body) {
   if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status });
   return data;
 }
+
+// ---------- connection ----------
+// When the server stops answering, a banner says so in plain words and checks
+// again on a growing gap. It does nothing while the tab is hidden or the device
+// is offline, so a lost server costs no battery or data.
+
+const conn = { lost: false, booted: false, timer: null, tries: 0, checking: false };
+const RETRY_MS = [2000, 5000, 15000, 60000];
+
+// Roost always answers in JSON. A 5xx page that isn't JSON comes from a proxy
+// or tunnel in front of Roost saying it can't reach the server behind it.
+function serverDown(res) {
+  return res.status >= 502 && !String(res.headers.get('Content-Type')).includes('application/json');
+}
+
+function connectionWhy() {
+  return navigator.onLine
+    ? "The server may be off or restarting, or you're away from home and it can't be reached from here."
+    : 'This device is offline. Roost will reconnect when it is back online.';
+}
+
+function connectionLost() {
+  if (conn.lost) return;
+  conn.lost = true;
+  conn.tries = 0;
+  $('#conn-title').textContent = "Can't reach your Roost server";
+  $('#conn-why').textContent = connectionWhy();
+  $('#conn-retry').classList.remove('hidden');
+  $('#conn-banner').classList.remove('hidden', 'back');
+  scheduleCheck();
+}
+
+function connectionBack() {
+  conn.booted = true;
+  if (!conn.lost) return;
+  conn.lost = false;
+  clearTimeout(conn.timer);
+  $('#conn-title').textContent = 'Connected again';
+  $('#conn-why').textContent = '';
+  $('#conn-retry').classList.add('hidden');
+  $('#conn-banner').classList.add('back');
+  setTimeout(() => { if (!conn.lost) $('#conn-banner').classList.add('hidden'); }, 2000);
+  // Fill in whatever failed to load while the server was away.
+  if (state.user) {
+    loadApps().catch(() => {});
+    route();
+  }
+}
+
+function scheduleCheck() {
+  clearTimeout(conn.timer);
+  if (!conn.lost || document.hidden || !navigator.onLine) return;
+  conn.timer = setTimeout(checkServer, RETRY_MS[Math.min(conn.tries, RETRY_MS.length - 1)]);
+}
+
+async function checkServer() {
+  if (!conn.lost || conn.checking) return;
+  clearTimeout(conn.timer);
+  conn.checking = true;
+  $('#conn-retry').disabled = true;
+  $('#conn-retry').textContent = 'Checking…';
+  let ok = false;
+  try {
+    const res = await fetch('/api/ping', { cache: 'no-store', credentials: 'same-origin' });
+    ok = res.ok;
+  } catch {}
+  conn.checking = false;
+  $('#conn-retry').disabled = false;
+  $('#conn-retry').textContent = 'Try again';
+  if (ok) {
+    // The first load never finished, so start again from the top.
+    if (!conn.booted) return location.reload();
+    connectionBack();
+  } else {
+    conn.tries++;
+    $('#conn-why').textContent = connectionWhy();
+    scheduleCheck();
+  }
+}
+
+$('#conn-retry').addEventListener('click', checkServer);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && conn.lost) checkServer(); });
+window.addEventListener('online', () => { if (conn.lost) { conn.tries = 0; checkServer(); } });
+window.addEventListener('offline', () => { if (conn.lost) { $('#conn-why').textContent = connectionWhy(); clearTimeout(conn.timer); } });
 
 function flash(form, text, ok = true) {
   const msg = $('.msg', form);
@@ -1484,10 +1579,10 @@ $('#activity-more').addEventListener('click', () => loadActivity(true));
 (async function boot() {
   tickClock();
   setInterval(tickClock, 30 * 1000);
-  setInterval(() => { if (state.user && !$('#view-apps').classList.contains('hidden')) loadSystem(); }, 15 * 1000);
+  setInterval(() => { if (state.user && !conn.lost && !$('#view-apps').classList.contains('hidden')) loadSystem(); }, 15 * 1000);
   // The status page refreshes itself while it is open and the tab is visible.
   setInterval(() => {
-    if (state.user && !document.hidden && !$('#view-status').classList.contains('hidden')) loadStatus();
+    if (state.user && !conn.lost && !document.hidden && !$('#view-status').classList.contains('hidden')) loadStatus();
   }, STATUS_REFRESH_MS);
   const token = linkToken();
   if (token) return showJoin(token);
