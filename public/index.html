@@ -144,7 +144,8 @@
         <button class="btn nest-new" type="button" id="nest-new"><span aria-hidden="true">+</span> New</button>
         <nav class="nest-places mono" aria-label="Nest">
           <a href="#/nest" data-place="drive">My Drive</a>
-          <a href="#/nest/trash" data-place="trash">Trash</a>
+          <a href="#/nest/family" data-place="family" id="nest-family-link" class="hidden">Family</a>
+          <a href="#/nest/trash" data-place="trash" id="nest-trash-link">Trash</a>
         </nav>
         <div class="nest-storage">
           <div class="meter" aria-hidden="true"><i id="nest-meter"></i></div>
@@ -297,6 +298,17 @@
         <h3>Users</h3><span class="mono muted">Who can sign in, which apps they see and how much storage they get</span>
         <div id="users"></div>
       </div>
+
+      <form class="card panel" id="family-form">
+        <h3>Family</h3><span class="mono muted">A shared Family space in Nest. Members can all open, add, rename and remove what's in it. Its files count against the family's own limit, not anyone's personal space.</span>
+        <div class="checks family-members" id="family-members"></div>
+        <div class="row user-storage">
+          <span class="mono muted" id="family-used"></span>
+          <div id="family-picker"></div>
+          <button class="btn ghost small" type="submit">Save</button>
+        </div>
+        <div class="msg" role="status"></div>
+      </form>
 
       <form class="card panel" id="invite-form">
         <h3>Invite someone</h3><span class="mono muted">Send them a link. They pick their own username and password. Works once, for 7 days.</span>

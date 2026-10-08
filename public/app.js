@@ -138,10 +138,12 @@ const pickers = {
   request: gbPicker({ label: 'Storage you need' }),
   newUser: gbPicker({ label: 'Storage limit', allowNone: true }),
   default: gbPicker({ label: 'Default storage limit', allowNone: true }),
+  family: gbPicker({ label: 'Family storage limit', allowNone: true }),
 };
 $('#request-picker').replaceWith(pickers.request);
 $('#new-user-picker').replaceWith(pickers.newUser);
 $('#default-picker').replaceWith(pickers.default);
+$('#family-picker').replaceWith(pickers.family);
 
 function shortDate(iso) {
   return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
@@ -1159,9 +1161,9 @@ $('#setup-toggle').addEventListener('click', () => {
 
 async function loadAdmin() {
   loadSetup();
-  const [{ users }, { apps }, { requests, defaultLimitGb }, { invites, publicUrl }, { settings }] = await Promise.all([
+  const [{ users }, { apps }, { requests, defaultLimitGb }, { invites, publicUrl }, { settings }, { family }] = await Promise.all([
     api('GET', '/api/admin/users'), api('GET', '/api/apps'), api('GET', '/api/admin/storage-requests'), api('GET', '/api/admin/invites'),
-    api('GET', '/api/admin/settings')]);
+    api('GET', '/api/admin/settings'), api('GET', '/api/admin/family')]);
   $('#settings-form').adminsNeedTwoStep.checked = settings.adminsNeedTwoStep;
   renderMailSettings(settings);
   state.users = users;
@@ -1176,6 +1178,7 @@ async function loadAdmin() {
   loadActivity();
   renderAppsEditor();
   renderUsers();
+  renderFamily(family);
   renderInvites(invites);
   $('#new-user-apps').replaceChildren(...appChecks(null));
 }
@@ -1290,6 +1293,29 @@ function renderUsers() {
       msg);
   }));
 }
+
+// Members are ticked from the user list. People without Nest can be members,
+// but they only see the Family space once they're given Nest.
+function renderFamily(family) {
+  const hasNest = (u) => u.role === 'admin' || !Array.isArray(u.apps) || u.apps.includes('nest');
+  $('#family-members').replaceChildren(...state.users.map((u) => el('label', {},
+    el('input', { type: 'checkbox', value: u.id, checked: family.members.includes(u.id) }),
+    u.displayName,
+    hasNest(u) ? null : el('span', { class: 'mono muted', text: ' (no Nest)' }))));
+  $('#family-used').textContent = `Family storage · ${bytes(family.usedBytes)} used`;
+  pickers.family.setValue(family.limitGb);
+}
+
+$('#family-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    const { family } = await api('PUT', '/api/admin/family', { members: checkedApps($('#family-members')), limitGb: pickers.family.getValue() });
+    renderFamily(family);
+    state.user.family = family.members.includes(state.user.id);
+    if (window.nestFamily) window.nestFamily();
+    flash(e.target, 'Family saved');
+  } catch (err) { flash(e.target, err.message, false); }
+});
 
 function renderInvites(invites) {
   const list = $('#invites');
@@ -1426,6 +1452,7 @@ const ACTIVITY_LABELS = {
   'storage-declined': 'Declined storage',
   'apps-changed': 'Changed apps',
   'settings-changed': 'Changed server settings',
+  'family-changed': 'Changed family',
 };
 
 const activity = { filter: '', last: null };
