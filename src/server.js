@@ -422,6 +422,22 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     return { ...rest, publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()) };
   }
 
+  // The admin's notice on the dashboard. Expired notices are simply not
+  // returned, so nothing has to run to take one down.
+  function activeNotice() {
+    const n = db().settings.notice;
+    if (!n || (n.until && Date.parse(n.until) <= Date.now())) return null;
+    return n;
+  }
+
+  function cleanUntil(raw) {
+    if (raw === null || raw === undefined || raw === '') return null;
+    const t = Date.parse(raw);
+    if (Number.isNaN(t) || t <= Date.now()) throw new HttpError(400, 'The end time must be in the future');
+    if (t > Date.now() + 366 * 86400 * 1000) throw new HttpError(400, 'The end time must be within a year');
+    return new Date(t).toISOString();
+  }
+
   function adminView(user) {
     return { ...publicUser(db(), user), storage: storage.storageOf(db(), user) };
   }
@@ -792,6 +808,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         cpus: os.cpus().length,
         memory: { total: os.totalmem(), free: os.freemem() },
         disk,
+        notice: activeNotice(),
       });
     },
 
@@ -1199,6 +1216,21 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       store.save();
       if (changes.length) record(req, 'settings-changed', { actor: admin.username, detail: changes.join(', ') });
       send(res, 200, { settings: settingsView() });
+    },
+
+    'PUT /api/admin/notice': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const text = str(body.text, 200);
+      if (text) {
+        db().settings.notice = { text, until: cleanUntil(body.until), at: new Date().toISOString() };
+        record(req, 'notice-posted', { actor: admin.username, detail: text });
+      } else if (db().settings.notice) {
+        delete db().settings.notice;
+        record(req, 'notice-cleared', { actor: admin.username });
+      }
+      store.save();
+      send(res, 200, { notice: activeNotice() });
     },
 
     'GET /api/admin/activity': (req, res) => {

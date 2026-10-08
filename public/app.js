@@ -13,7 +13,7 @@ const ICONS = {
   home: '<path d="M3 11l9-7 9 7v9h-6v-6H9v6H3z"/>',
 };
 
-const state = { serverName: 'Roost', publicUrl: '', mailEnabled: false, user: null, apps: [], status: {}, arranging: null, users: [], defaultLimitGb: null, diskGb: null };
+const state = { serverName: 'Roost', publicUrl: '', mailEnabled: false, user: null, apps: [], status: {}, arranging: null, users: [], defaultLimitGb: null, diskGb: null, notice: null };
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -870,6 +870,7 @@ async function saveArrangement() {
 async function loadSystem() {
   try {
     const s = await api('GET', '/api/system');
+    renderNotice(s.notice);
     const used = s.memory.total - s.memory.free;
     $('#stat-uptime').textContent = duration(s.uptime);
     $('#stat-mem').textContent = `${bytes(used)} / ${bytes(s.memory.total)}`;
@@ -881,6 +882,71 @@ async function loadSystem() {
     // The panel just keeps its dashes if stats aren't available.
   }
 }
+
+// ---------- notice ----------
+
+// Hiding a notice is remembered in this browser only, keyed by when the notice
+// was posted, so a new notice shows again.
+const NOTICE_HIDDEN = 'roost.noticeHidden';
+
+function hiddenNotice() {
+  try { return localStorage.getItem(NOTICE_HIDDEN); } catch { return null; }
+}
+
+function renderNotice(n) {
+  state.notice = n || null;
+  const show = Boolean(n) && hiddenNotice() !== n.at;
+  if (show) $('#notice-text').textContent = n.text;
+  $('#notice').classList.toggle('hidden', !show);
+  renderNoticeAdmin();
+}
+
+$('#notice-close').addEventListener('click', () => {
+  try { localStorage.setItem(NOTICE_HIDDEN, state.notice.at); } catch { /* hides until the next refresh */ }
+  $('#notice').classList.add('hidden');
+});
+
+function noticeUntil(choice) {
+  const d = new Date();
+  if (choice === 'today') d.setHours(23, 59, 0, 0);
+  else if (choice === 'morning') { d.setDate(d.getDate() + 1); d.setHours(8, 0, 0, 0); }
+  else if (choice === 'day') d.setTime(d.getTime() + 86400 * 1000);
+  else if (choice === 'week') d.setTime(d.getTime() + 7 * 86400 * 1000);
+  else return null;
+  return d.toISOString();
+}
+
+function previewNotice() {
+  const text = $('#notice-form').text.value.trim();
+  $('#notice-count').textContent = `${$('#notice-form').text.value.length} / 200`;
+  $('.notice-text', $('#notice-preview')).textContent = text;
+  $('#notice-preview').classList.toggle('hidden', !text);
+}
+
+function renderNoticeAdmin() {
+  const n = state.notice;
+  $('#notice-now').textContent = !n ? 'No notice showing' : n.until ? `Showing now, until ${untilDate(n.until)}` : 'Showing now, until you clear it';
+  $('#notice-clear').classList.toggle('hidden', !n);
+}
+
+async function saveNotice(text, until) {
+  const f = $('#notice-form');
+  try {
+    const { notice } = await api('PUT', '/api/admin/notice', { text, until });
+    renderNotice(notice);
+    flash(f, notice ? 'Posted. Everyone sees it on their dashboard.' : 'Cleared');
+    if (!notice) { f.text.value = ''; previewNotice(); }
+  } catch (err) { flash(f, err.message, false); }
+}
+
+$('#notice-form').text.addEventListener('input', previewNotice);
+$('#notice-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = e.target.text.value.trim();
+  if (!text) return flash(e.target, 'Write a message first', false);
+  saveNotice(text, noticeUntil(e.target.until.value));
+});
+$('#notice-clear').addEventListener('click', () => saveNotice('', null));
 
 // ---------- status page ----------
 
@@ -1398,6 +1464,7 @@ async function loadAdmin() {
     api('GET', '/api/admin/users'), api('GET', '/api/apps'), api('GET', '/api/admin/storage-requests'), api('GET', '/api/admin/invites'),
     api('GET', '/api/admin/settings')]);
   $('#settings-form').adminsNeedTwoStep.checked = settings.adminsNeedTwoStep;
+  if (state.notice && !$('#notice-form').text.value) { $('#notice-form').text.value = state.notice.text; previewNotice(); }
   renderMailSettings(settings);
   state.users = users;
   state.apps = apps;
@@ -1692,6 +1759,8 @@ const ACTIVITY_LABELS = {
   'storage-declined': 'Declined storage',
   'apps-changed': 'Changed apps',
   'settings-changed': 'Changed server settings',
+  'notice-posted': 'Posted a notice',
+  'notice-cleared': 'Cleared the notice',
 };
 
 const activity = { filter: '', last: null };
