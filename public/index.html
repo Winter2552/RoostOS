@@ -286,8 +286,9 @@
         <h3>Apps</h3>
         <span class="mono muted">Use {host} in a link to mean "the address you opened Roost on", e.g. http://{host}:8096</span>
         <div id="apps-editor"></div>
+        <div class="app-picker hidden" id="app-picker" aria-live="polite"></div>
         <div class="row">
-          <button class="btn ghost small" type="button" id="add-app">+ Add app</button>
+          <button class="btn ghost small" type="button" id="add-app" aria-expanded="false" aria-controls="app-picker">+ Add app</button>
           <button class="btn" type="submit">Save apps</button>
         </div>
         <div class="msg" role="status"></div>
