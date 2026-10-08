@@ -110,6 +110,9 @@ function publicUser(db, u) {
     displayName: u.displayName,
     role: u.role,
     apps: u.apps,
+    // This person's own dashboard layout: app ids in their order, and their starred apps.
+    appOrder: u.appOrder || [],
+    favourites: u.favourites || [],
     ...(u.role === 'guest' ? { guestUntil: u.guestUntil } : {}),
     email: u.email || '',
     createdAt: u.createdAt,
@@ -139,6 +142,13 @@ function visibleApps(db, user) {
   return user.role === 'admin' || !Array.isArray(user.apps)
     ? db.apps
     : db.apps.filter((a) => user.apps.includes(a.id));
+}
+
+// A list of app ids from the client, kept to apps that exist, without repeats.
+function appIds(db, list) {
+  if (!Array.isArray(list)) throw new HttpError(400, 'Expected a list of apps');
+  const known = new Set(db.apps.map((a) => a.id));
+  return [...new Set(list)].filter((id) => known.has(id));
 }
 
 // True when the browser reached Roost over HTTPS: directly, or through a
@@ -662,6 +672,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         const email = str(body.email, 254).toLowerCase();
         if (email !== (user.email || '')) user.email = cleanEmail(email);
       }
+      if (body.appOrder !== undefined) user.appOrder = appIds(db(), body.appOrder);
+      if (body.favourites !== undefined) user.favourites = appIds(db(), body.favourites);
       if (body.newPassword !== undefined) {
         if (typeof body.currentPassword !== 'string' || !verifyPassword(body.currentPassword, user.password)) {
           throw new HttpError(400, 'Current password is wrong');

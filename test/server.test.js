@@ -271,6 +271,20 @@ test('users can rename themselves and change password', async () => {
   assert.equal(ok.status, 200);
 });
 
+test('each user keeps their own app order and favourites', async () => {
+  const { apps } = (await call('GET', '/api/apps', null, adminCookie)).body;
+  const ids = apps.map((a) => a.id);
+  const order = [...ids].reverse();
+  const saved = await call('PATCH', '/api/me', { appOrder: [...order, 'gone', order[0]], favourites: [ids[1], 'gone'] }, adminCookie);
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.body.user.appOrder, order);
+  assert.deepEqual(saved.body.user.favourites, [ids[1]]);
+  // The shared app list (and other people's layouts) stay as they were.
+  assert.deepEqual((await call('GET', '/api/apps', null, adminCookie)).body.apps.map((a) => a.id), ids);
+  assert.deepEqual((await call('GET', '/api/state', null, userCookie)).body.user.favourites, []);
+  assert.equal((await call('PATCH', '/api/me', { favourites: 'nest' }, adminCookie)).status, 400);
+});
+
 test('new users get the default storage limit; the first admin has none', async () => {
   const mine = await call('GET', '/api/me/storage', null, userCookie);
   assert.equal(mine.body.storage.limitGb, 50);
