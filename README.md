@@ -21,7 +21,7 @@ The steps live in `src/setup.js`, which is the single tally of what setting up R
 
 - **First run** creates the admin account.
 - **Dashboard**: greeting, live server stats (uptime, memory, load, free space on the data drive) and a card for every app you have access to, each showing whether the app is reachable.
-- **Status**: refreshes every 5 seconds. First, each app (and Roost itself) with its container state from Docker: running, stopped, restarting, unhealthy, how long it has been up and how often it restarted, plus whether it answers on its link. Admins also see every other container. Below that, server health: uptime, CPU, memory and free space on each drive. Problems are listed at the top.
+- **Status**: refreshes every 5 seconds. First, each app (and Roost itself) with its container state from Docker: running, stopped, restarting, unhealthy, how long it has been up and how often it restarted, plus whether it answers on its link. Admins also see every other container. Below that, server health: uptime, CPU, memory and free space on each drive. Each app also shows a 30-day uptime strip, one bar per day (tap a day to see when it was down). Roost keeps this itself in `uptime.json` next to its data, starting from the day it is installed; days Roost was off show as no data. Problems are listed at the top.
 - **Profile**: change your display name and password, turn two-step sign-in on or off, see your storage use and limit, and ask an admin for more space.
 - **Admin**: edit the app list and links, invite or remove users, make password reset links, choose which apps each user sees and how much storage they get, approve or decline storage requests, rename the server.
 
