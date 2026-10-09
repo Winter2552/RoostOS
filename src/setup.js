@@ -59,6 +59,26 @@ const STEPS = [
     check: (ctx) => ctx.drives.filter((d) => !d.missing).length >= 2,
   },
   {
+    id: 'drive-health',
+    group: 'Server',
+    title: 'Watch your drives\' health',
+    covers: ['SMART_DIR'],
+    why: 'Hear early when a drive runs hot, wears out or starts to fail, before files are lost.',
+    how: [
+      'Keep the roost-smart service, its devices and the smart volume from the compose file in the README.',
+      'Once the 3 TB drive is in, remove the # in front of its /dev/sdb line under roost-smart.',
+      'Redeploy Roost, wait a minute, and check Drive health on the status page lists every drive.',
+    ],
+    action: { label: 'Open status', view: 'status' },
+    // Done when every drive the status page knows about has a health reading.
+    check: (ctx) => {
+      const h = ctx.driveHealth;
+      if (!h || h.missing) return false;
+      const read = h.drives.filter((d) => d.verdict !== 'unknown').length;
+      return read >= Math.max(1, ctx.drives.filter((d) => !d.missing).length);
+    },
+  },
+  {
     id: 'docker',
     group: 'Server',
     title: 'Let Roost see your containers',
