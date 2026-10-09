@@ -671,8 +671,19 @@ function untilDate(iso) {
 
 // ---------- shell ----------
 
+// Coffee Galaxy sends signed-out visitors here with ?next=coffee; once they are
+// signed in, they go back to it.
+function followNext() {
+  if (new URLSearchParams(location.search).get('next') !== 'coffee') return false;
+  history.replaceState(null, '', location.pathname + location.hash);
+  if (/^[\d.]+$/.test(location.hostname) || !location.hostname.includes('.')) return false;
+  location.assign(`https://nova.${location.hostname}/coffee/`);
+  return true;
+}
+
 async function enter(user) {
   state.user = user;
+  if (followNext()) return;
   if (needsSecureStep(user)) {
     showSecure(user);
     return;
@@ -1816,6 +1827,7 @@ async function loadAdmin() {
   $('#new-user-apps').replaceChildren(...appChecks(null));
   loadTls();
   loadRemote();
+  loadCoffee();
   loadBackupAdmin();
   restoreView.night = '';
   browseBackup('');
@@ -2307,7 +2319,7 @@ async function loadTls() {
 
 // ---------- remote access ----------
 
-function ago(ms) {
+function agoMs(ms) {
   const m = Math.round((Date.now() - ms) / 60000);
   return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
 }
@@ -2325,11 +2337,11 @@ function renderRemote(r) {
     : ['', 'Not checked yet'];
   $('#remote-state').replaceChildren(el('span', { class: `dot ${kind}` }), el('span', { text: headline }));
   const lines = [];
-  if (r.dns && r.dns.ok) lines.push(`${r.domain} points at ${r.dns.ip} (${ago(r.dns.at)})`);
+  if (r.dns && r.dns.ok) lines.push(`${r.domain} points at ${r.dns.ip} (${agoMs(r.dns.at)})`);
   if (r.dns && !r.dns.ok) lines.push(r.dns.error);
   if (r.cgnat) lines.push('Ask your internet provider for a public address; port forwarding can\'t work until you have one');
   if (reach && !reach.ok) lines.push(reach.error);
-  if (reach) lines.push(`Checked ${ago(reach.at)}`);
+  if (reach) lines.push(`Checked ${agoMs(reach.at)}`);
   $('#remote-detail').textContent = lines.join(' · ');
   f.ddns.checked = r.ddns;
   f.cloudflareOnly.checked = r.cloudflareOnly;
@@ -2360,6 +2372,72 @@ $('#remote-check').addEventListener('click', async () => {
   btn.disabled = true;
   flash(f, 'Checking from outside…');
   try { renderRemote(await api('POST', '/api/admin/remote/check')); flash(f, 'Checked'); } catch (err) { flash(f, err.message, false); }
+  btn.disabled = false;
+});
+
+// ---------- Coffee Galaxy ----------
+
+function renderCoffee(c) {
+  const f = $('#coffee-form');
+  const ck = c.check;
+  const [kind, headline] = !c.peerPublicKey || !c.endpoint ? ['', 'Not linked yet']
+    : ck && ck.ok ? ['online', `Linked (${ck.ms} ms)`]
+    : ck ? ['offline', 'The link isn’t answering']
+    : ['starting', 'Saved, not checked yet'];
+  $('#coffee-state').replaceChildren(el('span', { class: `dot ${kind}` }), el('span', { text: headline }));
+  const lines = [];
+  if (ck && !ck.ok) lines.push(ck.error);
+  if (ck) lines.push(`Checked ${agoMs(ck.at)}`);
+  if (c.applied && !c.applied.ok) lines.push(c.applied.note);
+  if (c.enabled) lines.push(`Open at nova.${c.domain}/coffee`);
+  $('#coffee-detail').textContent = lines.join(' · ');
+  f.ownKey.value = c.publicKey;
+  for (const name of ['peerPublicKey', 'endpoint']) {
+    if (document.activeElement !== f[name] || !f[name].value) f[name].value = c[name] || '';
+  }
+  f.secret.placeholder = c.secretSaved ? 'Saved (leave blank to keep)' : 'Make one, or paste yours';
+  f.enabled.checked = c.enabled;
+}
+
+async function loadCoffee() {
+  if ($('#view-admin').classList.contains('hidden')) return;
+  try { renderCoffee(await api('GET', '/api/admin/coffee')); } catch { /* the rest of Admin still works */ }
+}
+
+$('#coffee-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    renderCoffee(await api('PUT', '/api/admin/coffee', { peerPublicKey: f.peerPublicKey.value, endpoint: f.endpoint.value, secret: f.secret.value, enabled: f.enabled.checked }));
+    f.secret.value = '';
+    flash(f, 'Saved');
+  } catch (err) { flash(f, err.message, false); }
+});
+
+$('#coffee-form').ownKey.addEventListener('focus', (e) => e.target.select());
+$('#coffee-copy').addEventListener('click', async () => {
+  const f = $('#coffee-form');
+  try { await copyPlain(f.ownKey.value); flash(f, 'Copied: give it to the other server'); } catch { flash(f, 'Select the key and copy it by hand', false); }
+});
+
+$('#coffee-secret').addEventListener('click', async () => {
+  const f = $('#coffee-form');
+  if (!confirm('Make a new shared secret? Coffee Galaxy will refuse Roost until you put the new one in its config.')) return;
+  try {
+    const res = await api('POST', '/api/admin/coffee/secret');
+    renderCoffee(res);
+    const line = $('#coffee-new-secret');
+    line.hidden = false;
+    line.replaceChildren(document.createTextNode(`Copy it now, it is shown once: ${res.secret} `), el('button', { class: 'link-btn mono', type: 'button', text: 'Copy', onclick: async () => { await copyPlain(res.secret); flash(f, 'Copied'); } }));
+  } catch (err) { flash(f, err.message, false); }
+});
+
+$('#coffee-check').addEventListener('click', async () => {
+  const f = $('#coffee-form');
+  const btn = $('#coffee-check');
+  btn.disabled = true;
+  flash(f, 'Checking the link…');
+  try { renderCoffee(await api('POST', '/api/admin/coffee/check')); flash(f, 'Checked'); } catch (err) { flash(f, err.message, false); }
   btn.disabled = false;
 });
 

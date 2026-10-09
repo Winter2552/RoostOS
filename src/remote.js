@@ -53,12 +53,14 @@ const isHome = (ip) => inList(HOME_LIST, ip);
 const isCgnat = (ip) => inList(CGNAT_LIST, ip);
 
 const HOUR = 60 * 60 * 1000;
+const sameNames = (a = [], b = []) => a.length === b.length && a.every((n, i) => n === b[i]);
 
 class RemoteAccess {
-  constructor({ getSettings, patch, getTls, fetchImpl = fetch, cloudflareApi, traceUrl = 'https://1.1.1.1/cdn-cgi/trace', now = Date.now, intervalMs = 5 * 60 * 1000, firstMs = 20 * 1000, timeoutMs = 8000 }) {
+  constructor({ getSettings, patch, getTls, extraNames = () => [], fetchImpl = fetch, cloudflareApi, traceUrl = 'https://1.1.1.1/cdn-cgi/trace', now = Date.now, intervalMs = 5 * 60 * 1000, firstMs = 20 * 1000, timeoutMs = 8000 }) {
     this.getSettings = getSettings;
     this.patch = patch;
     this.getTls = getTls;
+    this.extraNames = extraNames;
     this.fetch = fetchImpl;
     this.cloudflareApi = cloudflareApi;
     this.traceUrl = traceUrl;
@@ -122,11 +124,14 @@ class RemoteAccess {
       if (!dns) throw new Error('Save a domain and Cloudflare token under Secure connection first');
       const ip = await this.homeIp();
       // Nothing to do while the address hasn't moved, apart from a daily look.
-      if (!force && last.ok && last.ip === ip && last.domain === domain && this.now() - last.at < 24 * HOUR) {
+      if (!force && last.ok && last.ip === ip && last.domain === domain && sameNames(last.names, [domain, ...this.extraNames()]) && this.now() - last.at < 24 * HOUR) {
         result = { ...last };
       } else {
-        const rec = await dns.upsert({ type: 'A', name: domain, content: ip, proxied: true });
-        result = { ok: true, ip, domain, at: this.now(), changed: rec.changed, cgnat: isCgnat(ip) };
+        // The domain itself, plus any other names Roost answers (Coffee Galaxy's).
+        const names = [domain, ...this.extraNames()];
+        let changed = false;
+        for (const name of names) changed = (await dns.upsert({ type: 'A', name, content: ip, proxied: true })).changed || changed;
+        result = { ok: true, ip, domain, names, at: this.now(), changed, cgnat: isCgnat(ip) };
       }
     } catch (err) {
       result = { ok: false, ip: last.ip || '', domain, at: this.now(), error: err.message };

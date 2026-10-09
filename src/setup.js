@@ -252,6 +252,40 @@ const STEPS = [
     check: (ctx) => Boolean(ctx.remote.cloudflareOnly && ctx.remote.reach && ctx.remote.reach.ok),
   },
 
+  {
+    id: 'coffee-link',
+    group: 'Coffee Galaxy',
+    title: 'Link Roost to the Coffee Galaxy server',
+    why: 'A private WireGuard link, so the server needs no open door but one UDP port and Roost needs no router change.',
+    how: [
+      'On the Coffee Galaxy server, run deploy/wireguard-oracle.sh (the Coffee Galaxy project has it). It prints that server\'s public key.',
+      'In the server\'s cloud console, allow incoming UDP port 51820.',
+      'Under Admin → Coffee Galaxy, paste that public key and the server\'s address (e.g. 141.147.108.43) and press Save. Roost makes its own key and shows its public key.',
+      'Give Roost\'s public key to the Coffee Galaxy server\'s script, then press Check link here.',
+    ],
+    action: { label: 'Open Coffee Galaxy', view: 'admin', focus: 'coffee-form' },
+    optional: true,
+    covers: ['wireguard'],
+    // Coffee Galaxy answering over the link is the proof both ends match.
+    check: (ctx) => Boolean(ctx.coffee.check && ctx.coffee.check.ok),
+  },
+  {
+    id: 'coffee-gateway',
+    group: 'Coffee Galaxy',
+    title: 'Open Coffee Galaxy at nova.roostos.network',
+    why: 'People sign in to Roost only; Coffee Galaxy trusts Roost\'s signed sign-in. The Van Reader phone app keeps using its own token.',
+    how: [
+      'Under Admin → Coffee Galaxy press "Make a secret" and copy it into Coffee Galaxy\'s config.json as roost_sso_secret (never into chat or git). Set roost_gateway_ip to 10.77.0.1 there.',
+      'Tick "Open Coffee Galaxy through Roost" and press Save.',
+      'Under Remote access keep "Keep the domain pointed at this connection" on: it also points nova.roostos.network at home.',
+      'Under Admin → People, tick Coffee Galaxy for everyone who should have it.',
+    ],
+    action: { label: 'Open Coffee Galaxy', view: 'admin', focus: 'coffee-form' },
+    optional: true,
+    covers: ['coffee'],
+    check: (ctx) => Boolean(ctx.coffee.enabled && ctx.coffee.secretSaved),
+  },
+
   // ---------- email ----------
   {
     id: 'email',

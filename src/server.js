@@ -18,6 +18,8 @@ const { listContainers, containersFor } = require('./docker');
 const { DriveHealth } = require('./smart');
 const { OutsideServices } = require('./outside');
 const remoteAccess = require('./remote');
+const { Coffee, validSecret, newSecret } = require('./coffee');
+const wireguard = require('./wireguard');
 const templates = require('./templates');
 const { CertManager, validDomain } = require('./tls');
 const twoStep = require('./twostep');
@@ -56,9 +58,11 @@ function parseCookies(req) {
   return out;
 }
 
-function sessionCookie(token, secure) {
+// `domain` makes the cookie count on every name under the domain (nova.<domain>
+// for Coffee Galaxy); without it, only on the exact address.
+function sessionCookie(token, secure, domain = '') {
   const maxAge = token ? Math.floor(SESSION_TTL_MS / 1000) : 0;
-  return `${COOKIE}=${token || ''}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
+  return `${COOKIE}=${token || ''}; Path=/${domain ? `; Domain=${domain}` : ''}; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
 }
 
 function trustCookie(token, secure) {
@@ -194,7 +198,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000 } = {}) {
+function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, coffeeOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000 } = {}) {
   const store = new Store(dataDir);
   const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
   // The few outside services Roost leans on, for the admin's status page.
@@ -205,7 +209,19 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     getSettings: () => store.db.settings.remote,
     patch: (fields) => { store.db.settings.remote = { ...store.db.settings.remote, ...fields }; store.saveSoon(); },
     getTls: () => store.db.settings.tls,
+    // Coffee Galaxy answers on nova.<domain>, so that name needs the same record.
+    extraNames: () => {
+      const { domain } = store.db.settings.tls || {};
+      return domain && (store.db.settings.coffee || {}).enabled ? [`nova.${domain}`] : [];
+    },
     ...remoteOptions,
+  });
+  // Coffee Galaxy lives on another server, reached over a WireGuard link Roost makes.
+  const link = new wireguard.WireGuard(path.join(dataDir, 'wireguard'), coffeeOptions.wireguard);
+  const coffee = new Coffee({
+    getConfig: () => store.db.settings.coffee,
+    getDomain: () => (store.db.settings.tls || {}).domain,
+    ...(coffeeOptions.target ? { target: coffeeOptions.target } : {}),
   });
   const activity = new ActivityLog(dataDir, { saveDelayMs: activitySaveDelayMs });
   const traffic = new TrafficMeter(dataDir);
@@ -368,6 +384,14 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // Cookies are marked Secure whenever this request came over HTTPS.
   const secure = (req) => secureCookies || isSecure(req, trustProxy);
 
+  // With the Coffee Galaxy gateway on, the sign-in cookie covers every name under
+  // the domain, so signing in once works on nova.<domain> too (and signing out clears both).
+  function cookieDomain(req) {
+    const domain = coffee.enabled() ? (db().settings.tls || {}).domain : '';
+    const host = requestHost(req).toLowerCase();
+    return domain && (host === domain || host.endsWith(`.${domain}`)) ? domain : '';
+  }
+
   // A sign-in that names a device (an app on a phone) gets a long-lived device
   // key in the reply instead of a cookie.
   function login(req, res, user, { status = 200, cookies = [], device = '', password = null } = {}) {
@@ -378,7 +402,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     }
     const token = sessions.create(user.id, { name: deviceName(req.headers['user-agent']) });
     if (password !== null) linkJellyfin(sessions.get(token), user, password);
-    send(res, status, { user: publicUser(db(), user) }, { 'Set-Cookie': [sessionCookie(token, secure(req)), ...cookies] });
+    send(res, status, { user: publicUser(db(), user) }, { 'Set-Cookie': [sessionCookie(token, secure(req), cookieDomain(req)), ...cookies] });
   }
 
   // ---------- Jellyfin ----------
@@ -532,7 +556,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // Settings for the admin page. The mail password never leaves the server.
   function settingsView() {
     // The Cloudflare token (in tls) stays on the server.
-    const { mail: _mail, jellyfin: _jellyfin, tls: _tls, ...rest } = db().settings;
+    const { mail: _mail, jellyfin: _jellyfin, tls: _tls, coffee: _coffee, wireguard: _wireguard, ...rest } = db().settings;
     return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()) };
   }
 
@@ -799,7 +823,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const user = currentUser(req);
       if (user) record(req, 'sign-out', { actor: user.username });
       sessions.destroy(tokenOf(req));
-      send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie('', secure(req)) });
+      send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie('', secure(req), cookieDomain(req)) });
     },
 
     'PATCH /api/me': async (req, res) => {
@@ -1479,6 +1503,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         awayBytes: Object.values(traffic.summary().apps).reduce((n, a) => n + a.week, 0),
         tls: certs.status(),
         remote: remote.view(),
+        coffee: coffeeView(),
         ticked: db().settings.setupTicked || [],
         backup: backup.readStatus(dataDir),
       }));
@@ -1715,6 +1740,61 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 200, remote.view());
     },
 
+    // ---------- Coffee Galaxy gateway ----------
+
+    'GET /api/admin/coffee': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, coffeeView());
+    },
+
+    'PUT /api/admin/coffee': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const before = db().settings.coffee || {};
+      const w = db().settings.wireguard || {};
+      const peerPublicKey = str(body.peerPublicKey, 60);
+      const endpoint = body.endpoint === undefined || body.endpoint === '' ? '' : wireguard.cleanEndpoint(body.endpoint);
+      if (peerPublicKey && !wireguard.validKey(peerPublicKey)) throw new HttpError(400, 'That public key looks wrong; paste the whole line the Oracle script printed');
+      if (endpoint === null) throw new HttpError(400, 'The other server\'s address should look like 141.147.108.43 or 141.147.108.43:51820');
+      // A blank secret keeps the one already saved; it is never sent back.
+      const secret = str(body.secret, 300).toLowerCase() || before.secret || '';
+      if (secret && !validSecret(secret)) throw new HttpError(400, 'The shared secret should be at least 64 letters and digits (0-9, a-f); use Make one');
+      const enabled = body.enabled === true;
+      if (enabled && !secret) throw new HttpError(400, 'Make or paste the shared secret first');
+      if (enabled && !(db().settings.tls || {}).domain) throw new HttpError(400, 'Set the domain under Secure connection first');
+      db().settings.coffee = { ...before, enabled, secret };
+      db().settings.wireguard = { ...w, peerPublicKey: peerPublicKey || w.peerPublicKey || '', endpoint: endpoint || w.endpoint || '' };
+      const cfg = db().settings.wireguard;
+      if (cfg.peerPublicKey && cfg.endpoint) {
+        link.write({ peerPublicKey: cfg.peerPublicKey, endpoint: cfg.endpoint });
+        cfg.applied = { ...(await link.apply()), at: Date.now() };
+      }
+      store.save();
+      const changes = [];
+      if (enabled !== Boolean(before.enabled)) changes.push(`Coffee Galaxy gateway ${enabled ? 'on' : 'off'}`);
+      if (secret !== (before.secret || '')) changes.push('shared secret changed');
+      if (changes.length) record(req, 'settings-changed', { actor: admin.username, detail: changes.join(', ') });
+      send(res, 200, coffeeView());
+    },
+
+    // Makes a new shared secret and shows it once, to paste into Coffee Galaxy's config.
+    'POST /api/admin/coffee/secret': (req, res) => {
+      const admin = requireAdmin(req);
+      const secret = newSecret();
+      db().settings.coffee = { ...(db().settings.coffee || {}), secret };
+      store.save();
+      record(req, 'settings-changed', { actor: admin.username, detail: 'Coffee Galaxy shared secret made' });
+      send(res, 200, { secret, ...coffeeView() });
+    },
+
+    'POST /api/admin/coffee/check': async (req, res) => {
+      requireAdmin(req);
+      const result = await coffee.health(coffeeOptions.fetchImpl);
+      db().settings.coffee = { ...(db().settings.coffee || {}), check: result };
+      store.saveSoon();
+      send(res, 200, coffeeView());
+    },
+
     // ---------- HTTPS certificate ----------
 
     'GET /api/admin/tls': (req, res) => {
@@ -1915,6 +1995,53 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     jellyfin.proxy(req, res);
   }
 
+  // ---------- Coffee Galaxy ----------
+
+  function coffeeView() {
+    const c = db().settings.coffee || {};
+    const w = db().settings.wireguard || {};
+    return {
+      domain: (db().settings.tls || {}).domain || '',
+      enabled: Boolean(c.enabled),
+      secretSaved: Boolean(c.secret),
+      publicKey: link.publicKey(),
+      peerPublicKey: w.peerPublicKey || '',
+      endpoint: w.endpoint || '',
+      address: wireguard.ADDRESS,
+      peerAddress: wireguard.PEER_ADDRESS,
+      applied: w.applied || null,
+      check: c.check || null,
+    };
+  }
+
+  // Every request to nova.<domain>: only /coffee exists there, and everything
+  // except a few open paths needs a signed-in Roost person who has the app.
+  function serveCoffee(req, res, pathname, search) {
+    if (pathname === '/' || pathname === '/coffee') {
+      res.writeHead(302, { Location: `/coffee/${search}`, 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    const found = coffee.route(pathname);
+    if (!found) throw new HttpError(404, 'Not found');
+    const ip = clientIp(req, trustProxy);
+    if (found.open) {
+      if (found.helper && !coffee.helperAllowed(ip)) throw new HttpError(429, 'Too many requests, wait a minute');
+      return coffee.forward(req, res, { path: found.path, search, identity: null, ip, secure: secure(req) });
+    }
+    const user = currentUser(req);
+    if (!user) {
+      if (req.method === 'GET' && String(req.headers.accept || '').includes('text/html')) {
+        res.writeHead(302, { Location: `https://${(db().settings.tls || {}).domain}/?next=coffee`, 'Cache-Control': 'no-store' });
+        return res.end();
+      }
+      throw new HttpError(401, 'Sign in to Roost first');
+    }
+    if (!visibleApps(db(), user).some((a) => a.id === 'nova')) throw new HttpError(403, 'You don’t have access to Coffee Galaxy');
+    const identity = coffee.identity(user.username, user.role === 'admin' && !twoStepNeeded(db(), user));
+    if (!identity) throw new HttpError(403, 'This username can’t be used with Coffee Galaxy');
+    coffee.forward(req, res, { path: found.path, search, identity, ip, secure: secure(req) });
+  }
+
   // Runs first on every request: believes the visitor's real address only when
   // the connection is Cloudflare's, and turns away outside traffic that skipped
   // Cloudflare when the admin asked for that. True means the request is handled.
@@ -1942,7 +2069,9 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     try {
       const { pathname, searchParams } = new URL(req.url, 'http://roost');
       traffic.track(req, res, trafficApp(pathname), clientIp(req, trustProxy));
-      if (pathname === JELLYFIN_PREFIX || pathname.startsWith(`${JELLYFIN_PREFIX}/`)) {
+      if (coffee.matches(req)) {
+        serveCoffee(req, res, pathname, new URL(req.url, 'http://roost').search);
+      } else if (pathname === JELLYFIN_PREFIX || pathname.startsWith(`${JELLYFIN_PREFIX}/`)) {
         serveJellyfin(req, res, pathname);
       } else if (pathname.startsWith('/api/nest/')) {
         const user = requireUser(req);
