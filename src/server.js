@@ -14,6 +14,8 @@ const mail = require('./mail');
 const setup = require('./setup');
 const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
+const { DriveHealth } = require('./smart');
+const { OutsideServices } = require('./outside');
 const templates = require('./templates');
 const { CertManager, validDomain } = require('./tls');
 const twoStep = require('./twostep');
@@ -195,9 +197,11 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, tls: tlsOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000 } = {}) {
+function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000 } = {}) {
   const store = new Store(dataDir);
   const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
+  // The few outside services Roost leans on, for the admin's status page.
+  const outside = new OutsideServices({ tokenOf: () => (store.db.settings.tls || {}).token || '', ...outsideOptions });
   const activity = new ActivityLog(dataDir, { saveDelayMs: activitySaveDelayMs });
   // Nest used to be an outside app with no link; it is built in now.
   const nestApp = store.db.apps.find((a) => a.id === 'nest');
@@ -221,6 +225,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   // the drive Roost keeps its data on (the same drive is only listed once).
   const diskList = disks && disks.length ? disks : [{ label: 'System', path: '/' }, { label: 'Data', path: dataDir }];
   const db = () => store.db;
+  // SMART readings the roost-smart helper leaves behind; null when it isn't set up.
+  const driveHealth = new DriveHealth(smartDir);
 
   const nest = new Nest({
     dir: nestDir || path.join(dataDir, 'nest'),
@@ -1015,11 +1021,14 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       send(res, 200, {
         ...health,
         docker: docker.error ? { ok: false, error: docker.error } : { ok: true },
+        driveHealth: driveHealth.read(),
         apps,
         // Everything else Docker runs, for admins only.
         otherContainers: user.role === 'admin' ? all.filter((c) => !claimed.has(c.id)) : [],
         // Certificate health, for admins once HTTPS is set up.
         certificate: user.role === 'admin' ? certSummary() : null,
+        // Cloudflare, Let's Encrypt and Docker Hub at a glance, for admins only.
+        outside: user.role === 'admin' ? outside.view({ containers: docker.error ? null : all, cert: certs.status() }) : null,
         history: uptime.history(visibleApps(db(), user).map((a) => a.id)),
         checkedAt: new Date().toISOString(),
       });
@@ -1242,6 +1251,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         admin,
         nestDir: nestDir || path.join(dataDir, 'nest'),
         drives: readDisks(diskList),
+        driveHealth: driveHealth.read(),
         dockerOk: !docker.error,
         secureCookies,
         trustProxy,
@@ -1447,6 +1457,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       db().settings.tls = { domain, token, email };
       store.save();
       certs.lastError = null;
+      // A new token deserves a fresh look, not yesterday's answer.
+      if (token !== current.token) { outside.forgetCloudflare(); outside.check(); }
       if (body.renew !== false) certs.renew();
       send(res, 200, tlsView(req));
     },
@@ -1464,6 +1476,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       delete db().settings.tls;
       store.save();
       certs.clear();
+      outside.forgetCloudflare();
       send(res, 200, tlsView(req));
     },
 
@@ -1680,6 +1693,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   const server = http.createServer(handle);
   server.on('upgrade', onUpgrade);
   server.certs = certs;
+  server.outside = outside;
   // The HTTPS side shares every route; the certificate is looked up per
   // connection, so a renewal takes effect without a restart.
   // Browsers opening Roost by IP address send no name and get no certificate,
@@ -1691,6 +1705,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   };
   server.on('close', () => {
     certs.stop();
+    outside.stop();
     clearInterval(sweepTimer);
     clearInterval(uptimeTimer);
     clearInterval(uptimeSaveTimer);
@@ -1723,13 +1738,15 @@ if (require.main === module) {
   const roostContainer = process.env.ROOST_CONTAINER || 'roost';
   const nestDir = process.env.NEST_DIR || path.join(dataDir, 'nest');
   const trustProxy = process.env.BEHIND_PROXY === 'true';
+  const smartDir = process.env.SMART_DIR || '';
   const httpsPort = Number(process.env.HTTPS_PORT) || 8443;
   const staging = process.env.ROOST_ACME_STAGING === 'true';
-  const server = createServer({ dataDir, nestDir, secureCookies, disks, dockerHost, roostContainer, appToken, trustProxy, tls: { staging } });
+  const server = createServer({ dataDir, nestDir, secureCookies, disks, dockerHost, roostContainer, smartDir, appToken, trustProxy, tls: { staging } });
   server.listen(port, () => {
     console.log(`Roost is running on http://localhost:${port} (data in ${dataDir})`);
   });
   server.certs.start();
+  server.outside.start();
   server.createHttpsServer().listen(httpsPort, () => {
     console.log(`HTTPS is listening on port ${httpsPort}${server.certs.cert ? '' : ' (no certificate yet; set one up under Admin)'}`);
   });

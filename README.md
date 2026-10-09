@@ -150,6 +150,10 @@ Data is kept in `/DATA/AppData/roost` on the host, and Nest's files in `/DATA/ro
 
 Container status comes through the `docker-proxy` service in the compose file, which only lets Roost read the container list (it can't start, stop or change anything). Apps are matched to containers by name; if a container is named differently, put its name in the app's **Container** field under Admin. Without Docker access the status page falls back to checking each app's link and says so.
 
+Drive health (temperature, bad sectors, SSD wear) comes from the small `roost-smart` service, built from `smart/`. Once an hour it reads each drive's SMART data with `smartctl` and leaves it in a shared volume for Roost; it has no network, and it leaves sleeping drives asleep. It is given only the drives listed under its `devices:` (the SSD to start with). When the 3 TB drive is in, remove the `#` in front of its `/dev/sdb` line and redeploy. ZimaOS shows each drive's name under Storage.
+
+Admins also see **Outside services** on the status page: the Cloudflare tunnel (from its `cloudflared` container, plus whether the saved Cloudflare token still works), the Let's Encrypt certificate (expiry date, with a warning under 14 days) and Docker Hub. The container and certificate come from what Roost already reads; the token and Docker Hub are checked once a day, so the page never waits on the internet. Nothing extra to set up.
+
 The **Activity** section under Admin lists sign-ins, failed sign-in attempts (the username typed, never the password), user and app changes, and storage requests and approvals. It keeps the newest 1,000 entries in `/data/activity.json`. If Roost is reached through a tunnel or reverse proxy, set `BEHIND_PROXY=true` so the log shows each visitor's address instead of the proxy's; leave it off otherwise, since the forwarded-address header can be faked.
 
 ## Develop
