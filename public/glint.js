@@ -176,6 +176,10 @@
     bar.parentNode.classList.toggle('high', pctUsed >= 90);
     bar.parentNode.classList.toggle('hidden', !s.limitBytes);
     $('#glint-used').textContent = s.limitBytes ? `${bytes(s.usedBytes)} of ${bytes(s.limitBytes)} used` : `${bytes(s.usedBytes)} used`;
+    // Nearly full: say so, with the way to get more space right there.
+    const more = $('#glint-more');
+    more.classList.toggle('hidden', pctUsed < 90);
+    if (pctUsed >= 90) { const m = moreSpace(); more.href = m.href; more.textContent = m.text; }
   }
 
   function renderCrumbs() {
@@ -317,6 +321,7 @@
   }
 
   function paintSelection() {
+    if (G.mode === 'trash') { renderSel(); renderTrash(); return; }
     body.querySelectorAll('.gtile').forEach((t) => {
       t.classList.toggle('sel', G.sel.has(t.dataset.id));
       t.classList.toggle('selecting', G.sel.size > 0);
@@ -355,7 +360,8 @@
   function showDialog(title, content, buttons) {
     dialog.replaceChildren(el('h3', { text: title }), ...content, el('div', { class: 'ndialog-buttons' }, ...buttons));
     dialog.onclose = null;
-    dialog.showModal();
+    // Swapping one dialog for the next keeps the same window open.
+    if (!dialog.open) dialog.showModal();
   }
 
   function ask({ title, value = '', ok = 'OK' }) {
@@ -494,7 +500,7 @@
       }, gi('album'), el('span', { text: a.name }), el('span', { class: 'muted', text: String(a.count) })) ) : [el('div', { class: 'muted nmove-note', text: 'No albums yet' })]));
     showDialog(`Add ${plural(items.length, 'item')} to album`, [list], [
       el('button', { type: 'button', class: 'btn ghost small', text: 'Cancel', onclick: () => dialog.close() }),
-      el('button', { type: 'button', class: 'btn small', text: 'New album', onclick: () => { dialog.close(); newAlbum(items); } }),
+      el('button', { type: 'button', class: 'btn small', text: 'New album', onclick: () => newAlbum(items) }),
     ]);
   }
 
@@ -557,13 +563,6 @@
         el('span', { class: 'mono muted', text: `${plural(left(p.deletesAt), 'day')} left · ${bytes(p.size)}` }),
         el('button', { type: 'button', class: 'btn ghost small', text: 'Restore', onclick: () => restore([p]) })))));
   }
-
-  // Trash rows repaint on select instead of tile classes.
-  const paint = paintSelection;
-  paintSelection = function paintAll() { // eslint-disable-line no-func-assign
-    if (G.mode === 'trash') { renderSel(); renderTrash(); return; }
-    paint();
-  };
 
   // ---------- viewer ----------
 
@@ -746,6 +745,11 @@
     return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime();
   }
 
+  // A file's own modified time, when it has a real one.
+  function fileDate(file) {
+    return file && file.lastModified > 86400000 ? file.lastModified : null;
+  }
+
   function toJpeg(canvas) {
     return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.78));
   }
@@ -779,7 +783,7 @@
       }
       if (blob && !p.video) {
         taken = exifDate(await blob.slice(0, 131072).arrayBuffer());
-        if (taken === null && file && file.lastModified) taken = file.lastModified;
+        if (taken === null) taken = fileDate(file);
         const bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' });
         w = bmp.width;
         h = bmp.height;
@@ -789,7 +793,7 @@
         const out = await videoPreview(file ? file : null, p);
         ({ w, h, dur } = out);
         jpeg = out.jpeg;
-        if (file && file.lastModified) taken = file.lastModified;
+        taken = fileDate(file);
       }
     } catch {
       jpeg = null; // can't be drawn here; the tile keeps its placeholder
@@ -811,7 +815,7 @@
     const t = body.querySelector(`.gtile[data-id="${p.id}"]`);
     if (t) t.replaceWith(tile(p));
     // A new date can change where the photo belongs; the next load puts it in order.
-    if (taken !== null && G.items.indexOf(p) >= 0) G.stale = true;
+    if (taken !== null) reloadSoon();
   }
 
   function videoPreview(file, p) {
@@ -891,7 +895,17 @@
       if (t.state === 'cancelled') return;
       t.state = 'failed';
       t.error = err.message;
+      t.overLimit = err.code === 'over-limit';
+      // Nothing else will fit either: stop the rest instead of failing them one by one.
+      if (t.overLimit) for (const o of UP.tasks) if (o.state === 'queued') { o.state = 'failed'; o.error = t.error; o.overLimit = true; }
     }
+  }
+
+  // Where to get more space: admins raise their own limit, everyone else asks.
+  function moreSpace() {
+    return state.user && state.user.role === 'admin'
+      ? { href: '#/admin', text: 'Raise limit' }
+      : { href: '#/profile', text: 'Ask for more' };
   }
 
   function finish(t, item) {
@@ -907,7 +921,12 @@
   let reloadTimer = null;
   function reloadSoon() {
     clearTimeout(reloadTimer);
-    reloadTimer = setTimeout(() => { if (['photos', 'favourites'].includes(G.mode) && !UP.tasks.some((x) => x.state === 'uploading') && !thumbBusy) load(true); else if (['photos'].includes(G.mode)) reloadSoon(); }, 1500);
+    reloadTimer = setTimeout(() => {
+      if (!['photos', 'favourites'].includes(G.mode)) return;
+      // Wait until uploads and previews settle, so the list doesn't jump while they run.
+      if (UP.tasks.some((x) => x.state === 'uploading' || x.state === 'queued') || thumbBusy || thumbQueue.length) return reloadSoon();
+      load(true);
+    }, 1500);
   }
 
   function sendChunk(t, blob) {
@@ -921,7 +940,7 @@
         let d = {};
         try { d = JSON.parse(x.responseText); } catch { /* not JSON */ }
         if (x.status === 200 || (x.status === 409 && Number.isInteger(d.received))) return resolve(d);
-        const err = new Error(d.error || `Upload failed (${x.status})`);
+        const err = Object.assign(new Error(d.error || `Upload failed (${x.status})`), { code: d.code });
         err.fatal = [400, 401, 403, 404, 413, 507].includes(x.status);
         reject(err);
       };
@@ -986,6 +1005,7 @@
     if (!UP.tasks.length) { panel.classList.add('hidden'); return; }
     const busy = UP.tasks.some((t) => t.state === 'uploading' || t.state === 'queued');
     const failed = UP.tasks.some((t) => t.state === 'failed');
+    const full = UP.tasks.some((t) => t.state === 'failed' && t.overLimit);
     panel.replaceChildren(
       el('div', { class: 'nup-head' }, el('b', { class: 'nup-title' }),
         busy ? el('button', { type: 'button', class: 'link-btn mono', text: 'Cancel', onclick: cancelAll })
@@ -993,7 +1013,7 @@
       el('div', { class: 'glint-up' },
         el('div', { class: 'meter' }, el('i', { style: 'width:0' })),
         el('div', { class: 'nup-status mono muted' }),
-        failed && !busy ? el('button', { type: 'button', class: 'link-btn mono', text: 'Retry', onclick: retryFailed }) : null));
+        failed && !busy ? (full ? el('a', { class: 'link-btn mono', ...moreSpace() }) : el('button', { type: 'button', class: 'link-btn mono', text: 'Retry', onclick: retryFailed })) : null));
     panel.classList.remove('hidden');
     paintHead();
     if (!busy && !failed) {

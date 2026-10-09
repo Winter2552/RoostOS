@@ -112,9 +112,11 @@ test('uploads land in Photos/<year> in Nest, and previews and dates come from th
   // Not a JPEG: refused. Empty: the browser couldn't draw one, so stop asking.
   assert.equal((await preview(mia, item.id, '', Buffer.from('<svg/>'))).status, 400);
   const v = await upload(mia, 'clip.heic', 'heic data', { type: '' });
-  const none = await preview(mia, v.id, 'taken=0', Buffer.alloc(0));
+  const uploadedAt = (await photos(mia)).items.find((p) => p.id === v.id).taken;
+  const none = await preview(mia, v.id, '', Buffer.alloc(0));
   assert.equal(none.body.item.thumb, 2);
-  assert.equal(none.body.item.taken, 0);
+  // No date sent: it keeps the upload time instead of becoming 1970.
+  assert.equal(none.body.item.taken, uploadedAt);
 });
 
 test('the timeline is newest first and pages without gaps', async () => {
@@ -200,8 +202,12 @@ test('favourites and albums', async () => {
   await call('POST', `/api/glint/albums/${album}/remove`, { ids: [c.id] }, sam);
   assert.deepEqual((await photos(sam, `?album=${album}`)).items.map((p) => p.id), [a.id, b.id]);
   await call('PATCH', `/api/glint/albums/${album}`, { name: 'Summer' }, sam);
-  const list = (await call('GET', '/api/glint/albums', null, sam)).body.albums;
-  assert.deepEqual(list.map((x) => [x.name, x.count, x.cover]), [['Summer', 2, a.id]]);
+  // The cover is the newest photo that has a preview to show: `a` has none yet.
+  let albums = (await call('GET', '/api/glint/albums', null, sam)).body.albums;
+  assert.notEqual(albums[0].cover, a.id);
+  await preview(sam, a.id, `taken=${Date.UTC(2021, 0, 1)}`);
+  albums = (await call('GET', '/api/glint/albums', null, sam)).body.albums;
+  assert.deepEqual(albums.map((x) => [x.name, x.count, x.cover]), [['Summer', 2, a.id]]);
   // Albums are private too.
   assert.equal((await call('GET', `/api/glint/photos?album=${album}`, null, mia)).status, 404);
   assert.equal((await call('POST', `/api/glint/albums/${album}/add`, { ids: [a.id] }, mia)).status, 404);

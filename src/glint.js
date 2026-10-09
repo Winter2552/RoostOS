@@ -85,6 +85,7 @@ function idList(v) {
 }
 
 function num(v, min, max) {
+  if (v === null || v === undefined || v === '') return null; // Number(null) is 0, which is a real date
   const n = Number(v);
   return Number.isFinite(n) && n >= min && n <= max ? n : null;
 }
@@ -125,7 +126,7 @@ class Glint {
       albums: q(`SELECT a.*, COUNT(n.id) AS count,
                    (SELECT ap2.photo FROM album_photos ap2 JOIN nodes n2 ON n2.id = ap2.photo
                     JOIN photos p2 ON p2.id = ap2.photo
-                    WHERE ap2.album = a.id AND n2.trash_root IS NULL ORDER BY p2.taken DESC LIMIT 1) AS cover
+                    WHERE ap2.album = a.id AND n2.trash_root IS NULL AND p2.thumb = 1 ORDER BY p2.taken DESC LIMIT 1) AS cover
                  FROM albums a
                  LEFT JOIN album_photos ap ON ap.album = a.id
                  LEFT JOIN nodes n ON n.id = ap.photo AND n.trash_root IS NULL

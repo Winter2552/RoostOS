@@ -9,7 +9,7 @@ Roost is the home-server suite: one homepage that signs you in and shows the app
 | Jellyfin | Media (films, shows, music) |
 | Nova | The galaxies, starting with Coffee Galaxy (own repo for now, merging in later) |
 | Nest | File storage, built into Roost (the Files page) |
-| Glint | Photo storage |
+| Glint | Photos and videos, built into Roost (the Photos page) |
 
 ## Setup checklist
 
@@ -46,6 +46,19 @@ Nest is Roost's own file storage, built to work like Google Drive. Open it from 
 
 Files are stored as ordinary files and folders, laid out the way you see them, so they stay readable even without Roost: `NEST_DIR/<username>_<id>/files/...` (the trash is next to it in `trash/`). Folder details (ids, trash dates) are kept in `/data/nest.db` (SQLite, built into Node). Uploads are refused when they would go over your storage limit or leave less than 1 GB free on the drive. Removing a user leaves their Nest folder on the drive.
 
+## Glint (Photos)
+
+Glint is Roost's own photo library, built on Nest's storage. Open it from **Photos** in the menu or the Glint card.
+
+- **Photos**: everything newest first, with a heading per month. Tap a photo to open it full screen (arrow keys, or swipe sideways; swipe down to close), with favourite, add to album, download and delete right there. Videos play in place.
+- **Favourites**, **Albums** (make them from a selection; deleting an album keeps its photos) and **Trash** (30 days, same as Nest, and it only ever shows photos and videos).
+- **Upload** with the + button or by dropping files. On a phone the + opens the photo picker. Photos already in Glint (same name and size) are skipped, and the dates in the photo (the camera's date, not the upload day) decide where it sits in the timeline.
+- **No double work**: Glint uploads go into `Photos/<year>` in Nest, so they share the storage limit (with the same **Ask for more** link when it is full), the trash and zip downloads. Photos and videos you put in Nest yourself show up in Glint too.
+- **Light on the server**: Glint does no image processing. The browser that uploads a photo reads its date and draws the small preview (about 30 KB, kept in `.glint/` next to the user's files); older photos get theirs the first time they scroll into view. A format the browser can't draw, such as HEIC on Windows, shows a placeholder and offers a download instead.
+- **Not included**: automatic background backup (that needs a phone app, so for now it is a tap on Upload), and face or object recognition.
+
+Files can only be served as a photo or video type a browser can show, with scripts switched off, so an uploaded web page can't run inside Roost.
+
 ## Invites and password resets
 
 Nobody needs to be in the room to get an account. Under **Admin → Invite someone**, pick their role, apps and storage limit and press **Create invite link**. Copy the link (or use **Share** on a phone) and send it any way you like. It looks like `https://roostos.network/j/K7PX-2QM9`. They open it, choose their own username and password, and are signed straight in.
@@ -78,7 +91,7 @@ The relay password is kept in `roost.json` and is never sent back to the browser
 
 Every user has a storage limit in GB, picked with a slider that runs up to the size of the data drive (or typed exactly; admins can also tick "No limit"). New users start with the default set under **Admin → Server** (50 GB unless changed); only admins can change a limit. Other users can ask for more from their Profile, and the request waits under **Admin → Storage requests** until an admin approves it (optionally with a different amount) or declines it.
 
-Nest is part of Roost, so it enforces the limit itself and its usage shows up on the Profile straight away. From 90% full, Nest shows an **Ask for more** link under its storage bar (admins get **Raise limit**), and an upload that would go over stops with the same link instead of a retry. Glint, once it exists, reads the limit and reports its usage with the token in `ROOST_APP_TOKEN` (the app API is off when it is unset):
+Nest is part of Roost, so it enforces the limit itself and its usage shows up on the Profile straight away. From 90% full, Nest shows an **Ask for more** link under its storage bar (admins get **Raise limit**), and an upload that would go over stops with the same link instead of a retry. Glint stores its photos in Nest, so the same limit and the same link apply. The app API below is for any other storage app and uses the token in `ROOST_APP_TOKEN` (it is off when unset):
 
 ```
 GET /api/storage/users/<username>          → { storage: { limitBytes, usedBytes, remainingBytes, ... } }

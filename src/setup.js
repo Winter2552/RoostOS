@@ -35,8 +35,8 @@ const STEPS = [
   {
     id: 'data-drive',
     group: 'Server',
-    title: 'Keep Nest on the 3 TB drive',
-    why: 'Files go on the big data drive, not the 240 GB system SSD.',
+    title: 'Keep Nest and Glint on the 3 TB drive',
+    why: 'Files and photos go on the big data drive, not the 240 GB system SSD. Glint keeps its photos in Nest\'s folder, so this one setting covers both.',
     how: [
       'In ZimaOS, open Storage and note the mount folder of the 3 TB drive.',
       'In Roost\'s compose file, point the Nest volume at a folder on it, e.g. /media/Data/roost-nest:/nest.',
