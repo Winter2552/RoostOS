@@ -27,6 +27,9 @@ services:
       ROOST_DISKS: "System=/hostfs/system;Data=/hostfs/data"
       # Where Nest keeps everyone's files (the mount below).
       NEST_DIR: /nest
+      # The backup drive, read-only (the mount below), so Admin → Backups can
+      # browse backups and get files back out of them.
+      BACKUP_DIR: /backup
       # Container status and restarts go through roost-docker below, Roost's own
       # helper. Remove both to fall back to web checks (and no Restart buttons).
       DOCKER_HOST: tcp://roost-docker:2375
@@ -40,6 +43,9 @@ services:
       # Nest's files, as normal folders: one per user. Point the left side at a
       # folder on the 3 TB data drive (ZimaOS shows its mount under Storage).
       - /DATA/roost-nest:/nest
+      # The backup drive, read-only. Same folder as the roost-backup service's
+      # /backup line below.
+      - /media/Backup:/backup:ro
       # Read-only, only so the status page can see how full each drive is.
       # /DATA is on the system SSD. Point the second line at the 3 TB data drive's
       # mount folder (ZimaOS shows it under Storage); until then it repeats /DATA
@@ -47,6 +53,42 @@ services:
       - /DATA:/hostfs/system:ro
       - /DATA:/hostfs/data:ro
       - smart:/smart:ro
+
+  # Nightly backups (Roost Snapshots) to a drive plugged into the server. Same
+  # image as Roost, different start command. It reads Nest and the apps'
+  # settings read-only and writes only to the backup drive.
+  roost-backup:
+    build: .
+    container_name: roost-backup
+    restart: unless-stopped
+    command: ["node", "src/backup-service.js"]
+    # The Roost image checks its web page for health; this service has none.
+    healthcheck:
+      disable: true
+    environment:
+      DATA_DIR: /data
+      BACKUP_DIR: /backup
+      NEST_DIR: /source/nest
+      APPDATA_DIR: /source/appdata
+      # Your time zone, so backups run at your time of day (set the time in
+      # Admin → Backups), e.g. Europe/London.
+      TZ: "Etc/UTC"
+    volumes:
+      # Roost's data: backed up too, and where this service reports to Roost.
+      - /DATA/AppData/roost:/data
+      # The same folders as the Nest line above, read-only.
+      - /DATA/roost-nest:/source/nest:ro
+      # Every app's settings (Jellyfin users and watch history and so on).
+      # Caches, transcodes and logs are skipped. Films and shows live
+      # elsewhere and aren't backed up.
+      - /DATA/AppData:/source/appdata:ro
+      # The backup drive. Point the left side at the USB SSD's mount folder
+      # (ZimaOS shows it under Storage). Until then backups wait: Roost
+      # never backs up onto the drive the data is on.
+      - /media/Backup:/backup
+      # Only to bring a whole backup back after the server was lost: take the #
+      # off the next line, redeploy, and see "Bringing a backup back" in the README.
+      # - /DATA/restored:/restore
 
   # Roost's own narrow window onto Docker (src/docker-helper.js), built from the
   # same code. It lets Roost read the container list and restart only the

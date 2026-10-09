@@ -115,3 +115,23 @@ test('steps Roost cannot see are ticked by hand', async () => {
   await call('POST', '/api/admin/setup/email-replies', { done: false }, adminCookie);
   assert.equal(await stepDone('email-replies'), false);
 });
+
+test('backup steps tick off from what the backup service reports', async () => {
+  assert.equal(await stepDone('backup-drive'), false);
+  assert.equal((await call('GET', '/api/backup', null, adminCookie)).body.state, 'off');
+
+  const backup = require('../src/backup');
+  backup.writeStatus(dataDir, { drive: { ok: true, total: 1e12, free: 9e11 }, lastOk: null, snapshots: [] });
+  assert.equal(await stepDone('backup-drive'), true);
+  assert.equal(await stepDone('first-backup'), false);
+  assert.equal((await call('GET', '/api/backup', null, adminCookie)).body.state, 'none');
+
+  const done = new Date().toISOString();
+  backup.writeStatus(dataDir, { drive: { ok: true }, lastOk: done, last: { ok: true, files: 3 }, snapshots: [] });
+  assert.equal(await stepDone('first-backup'), true);
+  const b = (await call('GET', '/api/backup', null, adminCookie)).body;
+  assert.equal(b.state, 'ok');
+  assert.equal(b.lastOk, done);
+  assert.equal(b.last.files, 3);
+  assert.equal((await call('GET', '/api/backup')).status, 401);
+});

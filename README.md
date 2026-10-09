@@ -9,7 +9,7 @@ Roost is the home-server suite: one homepage that signs you in and shows the app
 | Jellyfin | Media (films, shows, music) |
 | Nova | The galaxies, starting with Coffee Galaxy (own repo for now, merging in later) |
 | Nest | File storage, built into Roost (the Files page) |
-| Glint | Photo storage |
+| Glint | Photos and videos, built into Roost (the Photos page) |
 
 ## Setup checklist
 
@@ -52,6 +52,19 @@ Nest is Roost's own file storage, built to work like Google Drive. Open it from 
 
 Files are stored as ordinary files and folders, laid out the way you see them, so they stay readable even without Roost: `NEST_DIR/<username>_<id>/files/...` (the trash is next to it in `trash/`). Folder details (ids, trash dates) are kept in `/data/nest.db` (SQLite, built into Node). Uploads are refused when they would go over your storage limit or leave less than 1 GB free on the drive. Removing a user leaves their Nest folder on the drive.
 
+## Glint (Photos)
+
+Glint is Roost's own photo library, built on Nest's storage. Open it from **Photos** in the menu or the Glint card.
+
+- **Photos**: everything newest first, with a heading per month. Tap a photo to open it full screen (arrow keys, or swipe sideways; swipe down to close), with favourite, add to album, download and delete right there. Videos play in place.
+- **Favourites**, **Albums** (make them from a selection; deleting an album keeps its photos) and **Trash** (30 days, same as Nest, and it only ever shows photos and videos).
+- **Upload** with the + button or by dropping files. On a phone the + opens the photo picker. Photos already in Glint (same name and size) are skipped, and the dates in the photo (the camera's date, not the upload day) decide where it sits in the timeline.
+- **No double work**: Glint uploads go into `Photos/<year>` in Nest, so they share the storage limit (with the same **Ask for more** link when it is full), the trash and zip downloads. Photos and videos you put in Nest yourself show up in Glint too.
+- **Light on the server**: Glint does no image processing. The browser that uploads a photo reads its date and draws the small preview (about 30 KB, kept in `.glint/` next to the user's files); older photos get theirs the first time they scroll into view. A format the browser can't draw, such as HEIC on Windows, shows a placeholder and offers a download instead.
+- **Not included**: automatic background backup (that needs a phone app, so for now it is a tap on Upload), and face or object recognition.
+
+Files can only be served as a photo or video type a browser can show, with scripts switched off, so an uploaded web page can't run inside Roost.
+
 ## Invites and password resets
 
 Nobody needs to be in the room to get an account. Under **Admin → Invite someone**, pick their role, apps and storage limit and press **Create invite link**. Copy the link (or use **Share** on a phone) and send it any way you like. It looks like `https://roostos.network/j/K7PX-2QM9`. They open it, choose their own username and password, and are signed straight in.
@@ -84,7 +97,7 @@ The relay password is kept in `roost.json` and is never sent back to the browser
 
 Every user has a storage limit in GB, picked with a slider that runs up to the size of the data drive (or typed exactly; admins can also tick "No limit"). New users start with the default set under **Admin → Server** (50 GB unless changed); only admins can change a limit. Other users can ask for more from their Profile, and the request waits under **Admin → Storage requests** until an admin approves it (optionally with a different amount) or declines it.
 
-Nest is part of Roost, so it enforces the limit itself and its usage shows up on the Profile straight away. From 90% full, Nest shows an **Ask for more** link under its storage bar (admins get **Raise limit**), and an upload that would go over stops with the same link instead of a retry. Glint, once it exists, reads the limit and reports its usage with the token in `ROOST_APP_TOKEN` (the app API is off when it is unset):
+Nest is part of Roost, so it enforces the limit itself and its usage shows up on the Profile straight away. From 90% full, Nest shows an **Ask for more** link under its storage bar (admins get **Raise limit**), and an upload that would go over stops with the same link instead of a retry. Glint stores its photos in Nest, so the same limit and the same link apply. The app API below is for any other storage app and uses the token in `ROOST_APP_TOKEN` (it is off when unset):
 
 ```
 GET /api/storage/users/<username>          → { storage: { limitBytes, usedBytes, remainingBytes, ... } }
@@ -120,6 +133,33 @@ docker restart roost
 ```
 
 Recovery codes and trusted devices are stored only as hashes. The authenticator secret has to be stored as-is in `roost.json`, so keep that file as private as the server itself.
+
+## Backups
+
+Every night (at 3:00 unless you change it), a second container (`roost-backup`, built from the same image) backs up Nest, every app's settings and Roost's own data to a USB SSD plugged into the server. Films and shows aren't backed up. The setup checklist walks through plugging the drive in.
+
+- Each night is a dated folder on the drive (`Roost Backups/2026-10-08 0300/`) that looks like a full copy. Unchanged files are hard links to the night before, so they take no space and no time; identical files are stored once; documents, settings and databases are stored gzipped (`.gz` added to the name).
+- By default it keeps the newest backup of each of the last 7 days and of each of the last 4 weeks.
+- **Admin → Backups** sets the time of day, how many nightly and weekly backups to keep and an optional drive size limit (the oldest backups go first). It also shows the drive's space, the last 14 runs, and has **Back up now** and **Cancel**. Roost passes these to the backup container through a small request file in its data folder.
+- Nest's database is copied with SQLite's `VACUUM INTO`, so the copy is consistent while Nest is running. Other files that change mid-copy are read again.
+- Roost never backs up onto the drive the data is on: if the SSD is unplugged, backups wait and the dashboard says "Backup drive not found".
+- The drive must be a Linux format (ext4) for hard links. ZimaOS Storage can format it.
+- The dashboard shows when the last backup finished, and turns amber after two missed nights and red when a backup failed or the drive is missing.
+
+### Getting files back
+
+**Admin → Backups → Get files back** browses any backup like a folder. For a file or folder you can **Download** it (folders come as a .zip) or **Restore to Nest** (inside Nest folders only). A restore never overwrites: it makes a new folder called "Restored from backup 2026-10-08 0300" in that person's Nest and puts the files there, with their original dates. It checks the person's storage limit first and refuses before anything is made if it won't fit. Nothing already in Nest is changed. To put a Nest file back where it was, move it out of that folder yourself.
+
+### If the server itself is gone
+
+Reinstall Roost, plug the backup drive in, and add a folder to the `roost-backup` service in `docker-compose.yml` to receive the files (the `/DATA/restored:/restore` line is there, commented out). Then:
+
+```sh
+docker exec -it roost-backup node src/restore-cli.js list
+docker exec -it roost-backup node src/restore-cli.js restore "2026-10-08 0300" /restore
+```
+
+You can pass a path inside the backup after the output folder (for example `Nest`) to get back only that part. The files land in `/DATA/restored` as `Nest/`, `Roost/` and `App settings/`; stop Roost, move each folder to where it came from (Nest to `/DATA/roost-nest`, Roost to `/DATA/AppData/roost`, App settings to `/DATA/AppData`), and start it again. The command refuses a folder that already has files in it. With `--replace` it moves the existing folder aside (to `<folder>.before-restore-<time>`, never deleted) after you type `restore` to confirm.
 
 ## Saving home upload
 
