@@ -179,6 +179,36 @@
       <input type="file" id="nest-pick-folder" webkitdirectory multiple hidden>
     </section>
 
+    <!-- Glint: photos (public/glint.js) -->
+    <section id="view-glint" class="nest glint hidden">
+      <aside class="nest-side">
+        <button class="btn nest-new" type="button" id="glint-upload"><span aria-hidden="true">+</span> Upload</button>
+        <nav class="nest-places mono" aria-label="Glint">
+          <a href="#/glint" data-place="photos">Photos</a>
+          <a href="#/glint/favourites" data-place="favourites">Favourites</a>
+          <a href="#/glint/albums" data-place="albums">Albums</a>
+          <a href="#/glint/trash" data-place="trash">Trash</a>
+        </nav>
+        <div class="nest-storage">
+          <div class="meter" aria-hidden="true"><i id="glint-meter"></i></div>
+          <span class="mono muted" id="glint-used"></span>
+        </div>
+      </aside>
+      <div class="nest-main" id="glint-main">
+        <div class="nest-bar">
+          <div class="nest-head">
+            <nav class="nest-crumbs" id="glint-crumbs" aria-label="Where you are"></nav>
+            <div class="nest-tools" id="glint-tools"></div>
+          </div>
+          <div class="nest-selbar hidden" id="glint-selbar" role="toolbar" aria-label="Selected photos"></div>
+        </div>
+        <div id="glint-body" tabindex="0" aria-label="Photos"></div>
+        <div class="nest-sentinel" id="glint-sentinel"></div>
+        <div class="nest-drop hidden" id="glint-drop"><span>Drop photos to upload</span></div>
+      </div>
+      <input type="file" id="glint-pick" accept="image/*,video/*,.heic,.heif" multiple hidden>
+    </section>
+
     <!-- Status view -->
     <section id="view-status" class="section hidden">
       <div class="section-head">
@@ -367,5 +397,6 @@
 
   <script src="/app.js"></script>
   <script src="/nest.js"></script>
+  <script src="/glint.js"></script>
 </body>
 </html>
