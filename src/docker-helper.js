@@ -3,7 +3,9 @@
 // Roost's own narrow window onto Docker. It runs as a second container (same
 // image, see docker-compose.yml), holds the Docker socket, and passes on only:
 //   GET  /containers/json             the container list
-//   GET  /containers/<id or name>/json one container's details
+//   GET  /containers/<id or name>/json one container's state and restart count
+//                                      only (never its environment, which can hold secrets)
+//   GET  /events                       container start/stop/crash events, for the uptime history
 //   POST /containers/<name>/restart   only for names in ROOST_RESTARTABLE
 //   GET  /roost/restartable           that list, so Roost knows which to offer
 // Everything else gets a 403, so even a broken-into Roost can't start, stop,
@@ -14,6 +16,7 @@ const http = require('http');
 const SOCKET = '/var/run/docker.sock';
 // Docker waits this long for an app to stop before forcing it.
 const STOP_WAIT_S = 10;
+const EVENT_FILTERS = encodeURIComponent(JSON.stringify({ type: ['container'] }));
 const NAME = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 
 function parseNames(spec) {
@@ -34,9 +37,11 @@ function allowed(method, rawUrl, restartable) {
   if (method === 'GET' && path === '/containers/json') {
     return { path: `/containers/json${url.searchParams.get('all') === '1' ? '?all=1' : ''}` };
   }
+  // Always the same filter and never since/until, whatever the caller asked for.
+  if (method === 'GET' && path === '/events') return { path: `/events?filters=${EVENT_FILTERS}`, stream: true };
   const m = path.match(/^\/containers\/([^/]+)\/(json|restart)$/);
   if (!m || !NAME.test(m[1])) return null;
-  if (method === 'GET' && m[2] === 'json') return { path: `/containers/${m[1]}/json` };
+  if (method === 'GET' && m[2] === 'json') return { path: `/containers/${m[1]}/json`, trim: true };
   if (method === 'POST' && m[2] === 'restart' && restartable.includes(m[1])) {
     return { path: `/containers/${m[1]}/restart?t=${STOP_WAIT_S}`, method: 'POST' };
   }
@@ -54,10 +59,26 @@ function createHelper({ socketPath = SOCKET, restartable = [] } = {}) {
     const to = allowed(req.method, req.url, restartable);
     if (!to) return json(403, { message: 'Roost\'s Docker helper does not allow that' });
     const up = http.request({ socketPath, path: to.path, method: to.method || 'GET' }, (dr) => {
+      if (to.trim && dr.statusCode === 200) {
+        // Inspect output carries every setting and environment variable; Roost needs two fields.
+        const chunks = [];
+        dr.on('data', (c) => chunks.push(c));
+        dr.on('end', () => {
+          try {
+            const { State, RestartCount } = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            json(200, { State, RestartCount });
+          } catch {
+            json(502, { message: 'Docker answered something unreadable' });
+          }
+        });
+        return;
+      }
       res.writeHead(dr.statusCode, { 'Content-Type': dr.headers['content-type'] || 'application/json' });
       dr.pipe(res);
     });
-    up.on('error', (err) => json(502, { message: `Docker: ${err.message}` }));
+    up.on('error', (err) => (res.headersSent ? res.destroy() : json(502, { message: `Docker: ${err.message}` })));
+    // An events stream stays open; let go of Docker when the reader leaves.
+    res.on('close', () => up.destroy());
     up.end();
   });
 }

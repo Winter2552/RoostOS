@@ -35,6 +35,8 @@ const KINDS = {
   'app-restarted': 'apps',
   'app-restart-failed': 'apps',
   'settings-changed': 'settings',
+  'notice-posted': 'settings',
+  'notice-cleared': 'settings',
 };
 const FILTERS = ['sign-ins', 'failed', 'users', 'storage', 'apps', 'settings'];
 

@@ -128,6 +128,25 @@ const STEPS = [
     covers: ['SECURE_COOKIES', 'BEHIND_PROXY'],
     check: (ctx) => ctx.secureCookies && ctx.trustProxy,
   },
+  {
+    id: 'https',
+    group: 'Reach it from anywhere',
+    title: 'Get a certificate for HTTPS',
+    why: 'Roost opens securely at home and away, with no browser warnings. The installable app needs it.',
+    how: [
+      'Make sure roostos.network is on your Cloudflare account (the free plan is enough).',
+      'In Cloudflare, go to My Profile → API Tokens → Create Token, pick "Edit zone DNS" and limit it to roostos.network.',
+      'Under Admin → Secure connection, enter roostos.network, paste the token and press Save. Roost gets the certificate and renews it itself.',
+      'Keep the 443:8443 port line in Roost\'s compose file (it is there by default).',
+    ],
+    action: { label: 'Set up HTTPS', view: 'admin', focus: 'tls-form', field: 'domain' },
+    // Roost works on plain HTTP without it, so it doesn't hold up the count.
+    optional: true,
+    // Settings and env vars this step is about.
+    covers: ['tls', 'HTTPS_PORT', 'ROOST_ACME_STAGING'],
+    // A certificate in use counts, even while a renewal is retrying.
+    check: (ctx) => ['active', 'warning'].includes(ctx.tls.state),
+  },
 
   // ---------- email ----------
   {
@@ -193,6 +212,36 @@ const STEPS = [
     action: { label: 'Make an invite', view: 'admin', focus: 'invite-form' },
     check: (ctx) => ctx.db.users.length > 1 || (ctx.db.links || []).some((l) => l.kind === 'invite'),
   },
+  {
+    id: 'install-app',
+    group: 'People',
+    title: 'Put Roost on phones and PCs',
+    why: 'Roost opens like an app, with the bird icon, from the home screen, Start menu or taskbar.',
+    how: [
+      'iPhone: open Roost in Safari, tap Share, then Add to Home Screen.',
+      'Android: open Roost in Chrome, tap ⋮, then Install app. On a plain http home address it is Add to home screen and opens in Chrome.',
+      'Windows: open Roost in Edge or Chrome and press the install icon at the right of the address bar. It shows once Roost has its https web address.',
+    ],
+    optional: true,
+    // Happens on each device, so Roost can't see it; tick it off yourself.
+    manual: true,
+    check: (ctx) => ctx.ticked.includes('install-app'),
+  },
+  {
+    id: 'guest-pass',
+    group: 'People',
+    title: 'Give a visitor a guest pass',
+    why: 'Someone staying a while can use Jellyfin (or any app you pick) and is turned away on the day you choose.',
+    how: [
+      'Under Admin → Invite someone, set Role to Guest and pick when the pass ends.',
+      'Share the link. They pick a username and password and see only their apps.',
+      'If they use Jellyfin, give them a Jellyfin account too, and switch it off in Jellyfin when the pass ends.',
+      'Under Admin → Users, "Add a week" extends a pass and "End now" signs them out straight away.',
+    ],
+    action: { label: 'Make a guest pass', view: 'admin', focus: 'invite-form' },
+    optional: true,
+    check: (ctx) => ctx.db.users.some((u) => u.role === 'guest') || (ctx.db.links || []).some((l) => l.role === 'guest'),
+  },
 ];
 
 // Settings with no step, and why. Anything else a change adds needs a step above.
@@ -204,6 +253,7 @@ const NO_STEP = {
   serverName: 'works as "Roost" until renamed under Admin → Server',
   defaultLimitGb: 'starts at 50 GB, changed under Admin → Server',
   setupTicked: 'this checklist\'s own record',
+  notice: 'optional, posted under Admin → Notice',
 };
 
 const MANUAL = STEPS.filter((s) => s.manual).map((s) => s.id);

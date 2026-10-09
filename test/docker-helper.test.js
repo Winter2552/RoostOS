@@ -22,6 +22,10 @@ const containers = [
 const docker = http.createServer((req, res) => {
   seen.push(`${req.method} ${req.url}`);
   if (req.url.startsWith('/containers/json')) return res.end(JSON.stringify(containers));
+  if (req.url.startsWith('/events')) return res.end('{"Type":"container"}\n');
+  if (/^\/containers\/\w+\/json$/.test(req.url)) {
+    return res.end(JSON.stringify({ State: { Status: 'running', Running: true }, RestartCount: 1, Config: { Env: ['SECRET=hunter2'] }, HostConfig: {} }));
+  }
   if (req.method === 'POST' && req.url.includes('/restart')) {
     res.statusCode = 204;
     return res.end();
@@ -56,6 +60,22 @@ test('the helper passes on reading containers and listed restarts', async () => 
   assert.deepEqual(seen, ['GET /containers/json?all=1', 'GET /containers/jellyfin/json', 'POST /containers/jellyfin/restart?t=10']);
   const list = await (await fetch(`${helperUrl}/roost/restartable`)).json();
   assert.deepEqual(list.names, ['jellyfin', 'roost']);
+});
+
+test('the helper hides everything but state from container details', async () => {
+  const info = await (await fetch(`${helperUrl}/containers/jellyfin/json`)).json();
+  assert.deepEqual(Object.keys(info).sort(), ['RestartCount', 'State']);
+});
+
+test('the helper passes on only the fixed container-events stream', async () => {
+  seen.length = 0;
+  const res = await fetch(`${helperUrl}/events?since=0&filters=${encodeURIComponent('{"type":["image"]}')}`);
+  assert.equal(res.status, 200);
+  assert.match(await res.text(), /container/);
+  assert.equal(seen.length, 1);
+  assert.ok(seen[0].startsWith('GET /events?filters='));
+  assert.ok(decodeURIComponent(seen[0]).includes('{"type":["container"]}'));
+  assert.ok(!seen[0].includes('since'));
 });
 
 test('the helper refuses everything else', async () => {
