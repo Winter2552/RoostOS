@@ -118,6 +118,29 @@ Roost checks the certificate twice a day and renews it 30 days before it runs ou
 
 Sign-in cookies are marked Secure whenever Roost is opened over HTTPS, directly or through Cloudflare.
 
+## Reach it from outside
+
+With HTTPS set up, **Admin → Remote access** gets Roost reachable away from home, behind Cloudflare, with no extra software:
+
+1. Tick **Keep the domain pointed at this connection**. Roost keeps the domain's DNS record (orange cloud on, so your home address stays hidden) on your current home address, using the same Cloudflare token.
+2. In your router, forward external port 443 (TCP) to this server's port 443. In Cloudflare → SSL/TLS, choose **Full (strict)**.
+3. Press **Check now**. Roost asks for its own address from outside and says what it found. If your internet provider shares one address between homes (CGNAT), Roost says so; ask them for a public address.
+4. Optional: tick **Only accept outside traffic that comes through Cloudflare**, so anyone who finds your home address can't skip Cloudflare. Your home network still gets in directly.
+
+Cloudflare's free plan limits one request to 100 MB, which Nest respects by uploading in 16 MB pieces. It doesn't allow streaming video through it, so Jellyfin from outside the house needs a different route (planned).
+
+## Coffee Galaxy through Roost
+
+Coffee Galaxy can stay on its own server and still be opened at `nova.<your domain>/coffee`, with Roost as the only sign-in. Roost and that server talk over a private WireGuard link, so the server needs no open door except one UDP port, and your router needs nothing new.
+
+1. On the Coffee Galaxy server, run its `deploy/wireguard-oracle.sh`; it prints the server's public key. Allow UDP 51820 in the server's cloud console.
+2. In **Admin → Coffee Galaxy**, paste that key and the server's address, press **Save**, then give Roost's public key (shown on the card, with a Copy button) to the server's script.
+3. Press **Make a secret**, copy it into Coffee Galaxy's `config.json` as `roost_sso_secret` (and set `roost_gateway_ip` to `10.77.0.1`). Keep it out of chat and git.
+4. Tick **Open Coffee Galaxy through Roost** and Save. With **Remote access → Keep the domain pointed** on, Roost also points `nova.<your domain>` at home.
+5. Tick Coffee Galaxy for the people who should have it (Admin → People). Guests get it too, until their pass ends.
+
+On every request Roost checks the sign-in, the app, and the guest pass, then adds `X-Roost-User`, `X-Roost-Admin`, `X-Roost-Ts` and `X-Roost-Sig` (HMAC-SHA256 of `ts\nuser\nadmin`, keyed with the secret text) and removes any such headers the browser sent. The Van Reader phone app's address (`/__vanstock/helper`, limited to 60 a minute per address), `/__health`, the manifest and the two icons need no Roost sign-in. The WireGuard link is made inside the Roost container, so the compose file gives it `NET_ADMIN`; remove that line if you don't use this.
+
 ## Two-step sign-in
 
 After the password, Roost asks for a 6-digit code from an authenticator app (Google or Microsoft Authenticator, 1Password, Bitwarden, or the phone's own passwords app). It's built into Roost with no outside service, using the standard TOTP codes (RFC 6238); Roost draws the setup QR code itself.

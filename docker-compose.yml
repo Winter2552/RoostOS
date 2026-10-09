@@ -7,6 +7,10 @@ services:
     build: .
     container_name: roost
     restart: unless-stopped
+    # Only for the WireGuard link to the Coffee Galaxy server: lets Roost make its own
+    # network link. Remove it if you don't use Coffee Galaxy through Roost.
+    cap_add:
+      - NET_ADMIN
     ports:
       - "8080:8080"
       # HTTPS, once a certificate is set up under Admin → Secure connection.

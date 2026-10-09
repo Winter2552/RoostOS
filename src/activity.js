@@ -103,6 +103,8 @@ class ActivityLog {
 // proxy appended last to X-Forwarded-For (earlier entries can be faked by the
 // visitor). Off by default, because then anyone could send that header.
 function clientIp(req, trustProxy) {
+  // Set by the remote access check when the request really came through Cloudflare.
+  if (req.roostIp) return req.roostIp;
   if (trustProxy) {
     const parts = String(req.headers['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean);
     if (parts.length) return parts[parts.length - 1];

@@ -1,7 +1,8 @@
 'use strict';
 
-// The few Cloudflare DNS calls Roost needs to prove it owns the domain:
-// find the zone, add a TXT record, remove it again. Uses an API token that
+// The few Cloudflare DNS calls Roost needs: find the zone, add a TXT record to
+// prove it owns the domain (and remove it again), and keep an A record pointed
+// at home. Uses an API token that
 // only needs "Zone · DNS · Edit" on the one domain.
 
 const API = 'https://api.cloudflare.com/client/v4';
@@ -44,6 +45,22 @@ class CloudflareDns {
     const zone = await this.zone();
     const rec = await this.call('POST', `/zones/${zone}/dns_records`, { type: 'TXT', name, content, ttl: 60 });
     return rec.id;
+  }
+
+  // Makes one DNS record say `content`, adding it or fixing it. Returns
+  // whether anything had to change. `proxied` is Cloudflare's orange cloud.
+  async upsert({ type, name, content, proxied = true }) {
+    const zone = await this.zone();
+    const found = await this.call('GET', `/zones/${zone}/dns_records?type=${type}&name=${encodeURIComponent(name)}`);
+    const body = { type, name, content, ttl: 1, proxied };
+    if (found && found.length) {
+      const now = found[0];
+      if (now.content === content && Boolean(now.proxied) === proxied) return { id: now.id, changed: false };
+      await this.call('PUT', `/zones/${zone}/dns_records/${now.id}`, body);
+      return { id: now.id, changed: true };
+    }
+    const made = await this.call('POST', `/zones/${zone}/dns_records`, body);
+    return { id: made.id, changed: true };
   }
 
   async remove(id) {

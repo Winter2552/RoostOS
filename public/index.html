@@ -487,6 +487,40 @@
         </div>
         <div class="msg" role="status"></div>
       </form>
+      <form class="card panel" id="remote-form">
+        <h3>Remote access</h3><span class="mono muted">Reach Roost away from home, through Cloudflare</span>
+        <p class="tls-state" id="remote-state"><span class="dot"></span><span>Checking…</span></p>
+        <p class="mono muted tls-detail" id="remote-detail"></p>
+        <label class="check-line" style="margin-top:18px"><input type="checkbox" name="ddns"> Keep the domain pointed at this connection</label>
+        <label class="check-line" style="margin-top:6px"><input type="checkbox" name="cloudflareOnly"> Only accept outside traffic that comes through Cloudflare</label>
+        <p class="mono muted tls-help">Needs the domain and token from Secure connection. Also forward port 443 on your router to this server and set Cloudflare's SSL mode to Full (strict); Check now tests the whole route from outside.</p>
+        <div class="row">
+          <button class="btn" type="submit">Save</button>
+          <button class="btn ghost small" type="button" id="remote-check">Check now</button>
+        </div>
+        <div class="msg" role="status"></div>
+      </form>
+      <form class="card panel" id="coffee-form">
+        <h3>Coffee Galaxy</h3><span class="mono muted">A private link to the Coffee Galaxy server, opened through Roost at nova.&lt;your domain&gt;/coffee</span>
+        <p class="tls-state" id="coffee-state"><span class="dot"></span><span>Checking…</span></p>
+        <p class="mono muted tls-detail" id="coffee-detail"></p>
+        <div class="form-grid">
+          <label class="field"><span>Roost's public key (give this to the other server)</span><input type="text" name="ownKey" readonly spellcheck="false"></label>
+          <label class="field"><span>Other server's public key</span><input type="text" name="peerPublicKey" autocomplete="off" spellcheck="false" autocapitalize="none"></label>
+          <label class="field"><span>Other server's address</span><input type="text" name="endpoint" placeholder="141.147.108.43" autocomplete="off" spellcheck="false" autocapitalize="none"></label>
+          <label class="field"><span>Shared secret</span><input type="password" name="secret" autocomplete="off" spellcheck="false"></label>
+        </div>
+        <p class="mono muted tls-help" id="coffee-new-secret" hidden></p>
+        <label class="check-line" style="margin-top:18px"><input type="checkbox" name="enabled"> Open Coffee Galaxy through Roost</label>
+        <p class="mono muted tls-help">The secret goes into Coffee Galaxy's own config (never into chat or git). Make one here and copy it once, or paste yours.</p>
+        <div class="row">
+          <button class="btn" type="submit">Save</button>
+          <button class="btn ghost small" type="button" id="coffee-copy">Copy Roost's key</button>
+          <button class="btn ghost small" type="button" id="coffee-secret">Make a secret</button>
+          <button class="btn ghost small" type="button" id="coffee-check">Check link</button>
+        </div>
+        <div class="msg" role="status"></div>
+      </form>
       <form class="card panel" id="mail-form">
         <h3>Email</h3><span class="mono muted">For "Forgot password?" and emailed invites. Roost hands mail to a relay such as Resend or Brevo; see the README.</span>
         <div class="form-grid">
