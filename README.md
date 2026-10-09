@@ -202,6 +202,15 @@ Connect Jellyfin under **Admin → Jellyfin sign-in**: its address as Roost reac
 
 If the new version doesn't start, the previous image and code are put back and the card says why (with the last lines of Roost's log under "Technical details"). Updates are written to Admin → Activity. An update is refused while a backup is running, and when the server's copy of the code has changes of its own that the update also changes: keep your own compose edits (drive folders, time zone) in `docker-compose.override.yml` next to `docker-compose.yml`, which Docker merges in and git never touches.
 
+**From SSH** (the first time, or whenever Roost itself is down), `scripts/update-roost.sh` does the same job by hand:
+
+```
+curl -fsSL https://raw.githubusercontent.com/Winter2552/RoostOS/main/scripts/update-roost.sh -o update-roost.sh
+bash update-roost.sh              # lists what's new, asks, then updates (-y skips the question, --check only looks)
+```
+
+It finds Docker and Roost's folder (cloning it first if it isn't there), fast-forwards the code while keeping any edits you made by hand (a copy is saved next to the folder), rebuilds and restarts with `docker compose`, waits for Roost to report healthy, and puts the old version back if it doesn't. It also starts the `roost-updater` service the first time, so Admin → Updates works afterwards. Your accounts and files live outside the folder and aren't touched.
+
 It's done by the `roost-updater` service (`updater/`, built from this repo, no outside image apart from Node and Alpine's `git` and `docker` packages). It has no web port: the Roost web app leaves a small request file in the data folder and reads the updater's report from another, so Roost itself never touches Docker or git. The updater does hold the Docker socket, so it only runs the fixed steps in `updater/update-service.js`, and only fetches this project's own repository. Point its `/src` line at the folder holding Roost's files; that folder must be a git copy (`git clone https://github.com/Winter2552/RoostOS`), and Roost must have been started from it with `docker compose up -d --build`, not imported by ZimaOS under another name (the updater says so if it was). When an update changes the compose file or the updater itself, the card says so: Roost and its backups are updated, and the rest needs one `docker compose up -d --build` in that folder.
 
 ## Stack
