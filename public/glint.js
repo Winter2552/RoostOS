@@ -40,8 +40,13 @@
   const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const coarse = matchMedia('(pointer: coarse)');
-  const thumbUrl = (p) => `/api/glint/thumbs/${p.id}`;
-  const mediaUrl = (p) => `/api/glint/media/${p.id}`;
+  // Which photos: '' is your own, 'family' the shared Family space. Every Glint
+  // address carries it, so previews, uploads and undo stay in the right place.
+  const sp = (url, space = G.space) => (space ? `${url}${url.includes('?') ? '&' : '?'}space=${space}` : url);
+  const gapi = (method, url, body, space) => api(method, sp(url, space), body);
+  const base = (space = G.space) => (space ? '#/glint/family' : '#/glint');
+  const thumbUrl = (p) => sp(`/api/glint/thumbs/${p.id}`);
+  const mediaUrl = (p) => sp(`/api/glint/media/${p.id}`);
 
   function monthName(ms) {
     return new Date(ms).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
@@ -59,6 +64,7 @@
   // ---------- state ----------
 
   const G = {
+    space: '',
     mode: 'photos', // photos | favourites | albums | album | trash
     album: null, // { id, name } when mode is 'album'
     items: [],
@@ -81,7 +87,15 @@
 
   window.glintOpen = (parts) => {
     closeViewer();
+    const space = parts[0] === 'family' ? 'family' : '';
+    if (space) parts = parts.slice(1);
+    if (space && !state.user.family) {
+      location.hash = '#/glint';
+      return;
+    }
     const [a, b] = parts;
+    if (space !== G.space) G.storage = null;
+    G.space = space;
     const mode = a === 'favourites' ? 'favourites' : a === 'albums' ? 'albums' : a === 'album' && b ? 'album' : a === 'trash' ? 'trash' : 'photos';
     G.mode = mode;
     G.album = mode === 'album' ? { id: b, name: '' } : null;
@@ -101,11 +115,11 @@
     G.loading = true;
     try {
       if (G.mode === 'albums') {
-        const { albums } = await api('GET', '/api/glint/albums');
+        const { albums } = await gapi('GET', '/api/glint/albums');
         if (token !== G.token) return;
         G.albums = albums;
       } else if (G.mode === 'trash') {
-        const d = await api('GET', '/api/glint/trash');
+        const d = await gapi('GET', '/api/glint/trash');
         if (token !== G.token) return;
         G.items = d.items;
         G.storage = d.storage;
@@ -114,13 +128,13 @@
         if (!first && G.next) q.set('before', G.next);
         if (G.mode === 'favourites') q.set('fav', '1');
         if (G.mode === 'album') q.set('album', G.album.id);
-        const d = await api('GET', `/api/glint/photos?${q}`);
+        const d = await gapi('GET', `/api/glint/photos?${q}`);
         if (token !== G.token) return;
         G.items = first ? d.items : G.items.concat(d.items);
         G.next = d.next;
         if (first) { G.total = d.total; G.storage = d.storage; }
         if (G.mode === 'album' && !G.album.name) {
-          const { albums } = await api('GET', '/api/glint/albums');
+          const { albums } = await gapi('GET', '/api/glint/albums');
           G.albums = albums;
           G.album.name = (albums.find((x) => x.id === G.album.id) || {}).name || 'Album';
         }
@@ -149,11 +163,22 @@
 
   // ---------- rendering ----------
 
+  // Admin → Family changed whether this person is in the family.
+  window.glintFamily = () => {
+    if (!view.classList.contains('hidden') && G.space && !state.user.family) location.hash = '#/glint';
+    else render();
+  };
+
   function render() {
     document.querySelectorAll('#view-glint [data-place]').forEach((a) => {
       const place = G.mode === 'album' ? 'albums' : G.mode;
       a.classList.toggle('active', a.dataset.place === place);
+      a.href = `${base()}${a.dataset.place === 'photos' ? '' : `/${a.dataset.place}`}`;
     });
+    document.querySelectorAll('#view-glint [data-space]').forEach((a) => {
+      a.classList.toggle('active', a.dataset.space === G.space);
+    });
+    $('#glint-spaces').classList.toggle('hidden', !state.user.family);
     renderStorage();
     renderCrumbs();
     renderTools();
@@ -187,13 +212,14 @@
     const crumbs = $('#glint-crumbs');
     if (G.mode === 'album') {
       crumbs.replaceChildren(
-        el('a', { class: 'crumb', href: '#/glint/albums', text: 'Albums' }),
+        el('a', { class: 'crumb', href: `${base()}/albums`, text: 'Albums' }),
         gi('right', 'crumb-sep'),
         el('h2', { text: G.album.name || '…' }));
       document.title = `${G.album.name || 'Album'} · ${state.serverName}`;
     } else {
-      crumbs.replaceChildren(el('h2', { text: names[G.mode] }));
-      document.title = `${names[G.mode]} · ${state.serverName}`;
+      const title = G.space ? `Family ${names[G.mode].toLowerCase()}` : names[G.mode];
+      crumbs.replaceChildren(el('h2', { text: title }));
+      document.title = `${title} · ${state.serverName}`;
     }
   }
 
@@ -417,7 +443,7 @@
 
   async function favourite(items, on) {
     try {
-      await api('POST', '/api/glint/favourite', { ids: items.map((i) => i.id), on });
+      await gapi('POST', '/api/glint/favourite', { ids: items.map((i) => i.id), on });
       for (const i of items) i.fav = on;
       if (G.mode === 'favourites' && !on) removeLocal(items.map((i) => i.id));
       else { render(); }
@@ -426,7 +452,7 @@
 
   function download(items) {
     const one = items.length === 1;
-    const a = el('a', { href: one ? `/api/glint/download/${items[0].id}` : `/api/glint/zip?ids=${items.map((i) => i.id).join(',')}`, download: '' });
+    const a = el('a', { href: sp(one ? `/api/glint/download/${items[0].id}` : `/api/glint/zip?ids=${items.map((i) => i.id).join(',')}`), download: '' });
     document.body.append(a);
     a.click();
     a.remove();
@@ -434,10 +460,10 @@
 
   async function trash(items) {
     try {
-      const { trashed } = await api('POST', '/api/glint/trash', { ids: items.map((i) => i.id) });
+      const { trashed } = await gapi('POST', '/api/glint/trash', { ids: items.map((i) => i.id) });
       removeLocal(trashed);
       toast(`${plural(trashed.length, 'item')} moved to trash`, async () => {
-        await api('POST', '/api/glint/restore', { ids: trashed });
+        await gapi('POST', '/api/glint/restore', { ids: trashed });
         load(true);
       });
     } catch (err) { toast(err.message); }
@@ -445,7 +471,7 @@
 
   async function restore(items) {
     try {
-      const { restored } = await api('POST', '/api/glint/restore', { ids: items.map((i) => i.id) });
+      const { restored } = await gapi('POST', '/api/glint/restore', { ids: items.map((i) => i.id) });
       removeLocal(restored.map((r) => r.id));
       toast(`${plural(restored.length, 'item')} restored`);
     } catch (err) { toast(err.message); }
@@ -454,7 +480,7 @@
   async function deleteForever(items) {
     if (!await confirmBox({ title: 'Delete forever?', text: `${plural(items.length, 'item')} will be gone for good. This can’t be undone.`, ok: 'Delete forever', danger: true })) return;
     try {
-      const { deleted, storage } = await api('POST', '/api/glint/trash/delete', { ids: items.map((i) => i.id) });
+      const { deleted, storage } = await gapi('POST', '/api/glint/trash/delete', { ids: items.map((i) => i.id) });
       G.storage = storage;
       removeLocal(deleted);
     } catch (err) { toast(err.message); }
@@ -463,7 +489,7 @@
   async function emptyTrash() {
     if (!await confirmBox({ title: 'Empty the trash?', text: 'Every photo and video in the trash will be gone for good. This can’t be undone.', ok: 'Empty trash', danger: true })) return;
     try {
-      const { storage } = await api('POST', '/api/glint/trash/delete', { all: true });
+      const { storage } = await gapi('POST', '/api/glint/trash/delete', { all: true });
       G.storage = storage;
       G.items = [];
       render();
@@ -476,7 +502,7 @@
     const name = await ask({ title: 'New album', value: '', ok: 'Create' });
     if (!name) return null;
     try {
-      const { album } = await api('POST', '/api/glint/albums', { name, ids: items.map((i) => i.id) });
+      const { album } = await gapi('POST', '/api/glint/albums', { name, ids: items.map((i) => i.id) });
       if (items.length) { toast(`Added to “${album.name}”`); clearSel(); } else await load(true);
       return album;
     } catch (err) { toast(err.message); return null; }
@@ -484,7 +510,7 @@
 
   async function albumPicker(items) {
     let albums = [];
-    try { ({ albums } = await api('GET', '/api/glint/albums')); } catch (err) { toast(err.message); return; }
+    try { ({ albums } = await gapi('GET', '/api/glint/albums')); } catch (err) { toast(err.message); return; }
     const list = el('div', { class: 'nmove-list' },
       ...(albums.length ? albums.map((a) => el('button', {
         type: 'button',
@@ -492,7 +518,7 @@
         onclick: async () => {
           dialog.close();
           try {
-            const { added } = await api('POST', `/api/glint/albums/${a.id}/add`, { ids: items.map((i) => i.id) });
+            const { added } = await gapi('POST', `/api/glint/albums/${a.id}/add`, { ids: items.map((i) => i.id) });
             toast(added ? `Added to “${a.name}”` : `Already in “${a.name}”`);
             clearSel();
           } catch (err) { toast(err.message); }
@@ -506,7 +532,7 @@
 
   async function removeFromAlbum(items) {
     try {
-      await api('POST', `/api/glint/albums/${G.album.id}/remove`, { ids: items.map((i) => i.id) });
+      await gapi('POST', `/api/glint/albums/${G.album.id}/remove`, { ids: items.map((i) => i.id) });
       removeLocal(items.map((i) => i.id));
     } catch (err) { toast(err.message); }
   }
@@ -515,7 +541,7 @@
     const name = await ask({ title: 'Rename album', value: G.album.name, ok: 'Rename' });
     if (!name || name === G.album.name) return;
     try {
-      const { album } = await api('PATCH', `/api/glint/albums/${G.album.id}`, { name });
+      const { album } = await gapi('PATCH', `/api/glint/albums/${G.album.id}`, { name });
       G.album.name = album.name;
       render();
     } catch (err) { toast(err.message); }
@@ -524,8 +550,8 @@
   async function deleteAlbum() {
     if (!await confirmBox({ title: 'Delete album?', text: `“${G.album.name}” will be removed. The photos in it stay in Glint.`, ok: 'Delete album', danger: true })) return;
     try {
-      await api('DELETE', `/api/glint/albums/${G.album.id}`);
-      location.hash = '#/glint/albums';
+      await gapi('DELETE', `/api/glint/albums/${G.album.id}`);
+      location.hash = `${base()}/albums`;
     } catch (err) { toast(err.message); }
   }
 
@@ -539,7 +565,7 @@
         el('span', { class: 'muted', text: 'Make one here, or select photos and choose Add to album.' })));
       return;
     }
-    body.replaceChildren(el('div', { class: 'glint-albums' }, ...G.albums.map((a) => el('a', { class: 'galbum', href: `#/glint/album/${a.id}` },
+    body.replaceChildren(el('div', { class: 'glint-albums' }, ...G.albums.map((a) => el('a', { class: 'galbum', href: `${base()}/album/${a.id}` },
       el('span', { class: 'galbum-cover' }, a.cover ? el('img', { src: thumbUrl({ id: a.cover }), alt: '', loading: 'lazy', draggable: 'false', onerror: (e) => e.target.remove() }) : gi('album')),
       el('b', { text: a.name }),
       el('span', { class: 'mono muted', text: plural(a.count, 'item') })))));
@@ -802,7 +828,7 @@
     if (taken !== null) q.set('taken', String(taken));
     if (w) { q.set('w', String(w)); q.set('h', String(h)); }
     if (dur) q.set('dur', String(dur));
-    const res = await fetch(`/api/glint/photos/${p.id}/preview?${q}`, {
+    const res = await fetch(sp(`/api/glint/photos/${p.id}/preview?${q}`), {
       method: 'PUT',
       headers: { 'Content-Type': 'image/jpeg' },
       credentials: 'same-origin',
@@ -848,17 +874,18 @@
   async function queueUploads(files) {
     const media = files.filter((f) => /^(image|video)\//.test(f.type) || /\.(jpe?g|png|gif|webp|heic|heif|avif|bmp|mp4|mov|m4v|webm|3gp)$/i.test(f.name));
     const skippedType = files.length - media.length;
+    const space = G.space;
     if (!media.length) { if (skippedType) toast('Glint takes photos and videos. Use Files for everything else.'); return; }
     let exists = [];
     try {
-      ({ exists } = await api('POST', '/api/glint/check', { files: media.map((f) => ({ name: f.name, size: f.size })) }));
+      ({ exists } = await gapi('POST', '/api/glint/check', { files: media.map((f) => ({ name: f.name, size: f.size })) }));
     } catch { /* the check is a courtesy; upload anyway */ }
     const fresh = media.filter((_, i) => !exists[i]);
     const dupes = media.length - fresh.length;
     if (dupes || skippedType) {
       toast([dupes ? `${plural(dupes, 'photo')} already in Glint, skipped` : '', skippedType ? `${plural(skippedType, 'file')} weren’t photos or videos` : ''].filter(Boolean).join(' · '));
     }
-    for (const file of fresh) UP.tasks.push({ file, name: file.name, size: file.size, sent: 0, live: 0, state: 'queued' });
+    for (const file of fresh) UP.tasks.push({ file, space, name: file.name, size: file.size, sent: 0, live: 0, state: 'queued' });
     renderPanel();
     pump();
   }
@@ -898,7 +925,7 @@
     try {
       if (!t.id) {
         const year = new Date(t.file.lastModified || Date.now()).getFullYear();
-        const s = await api('POST', '/api/glint/uploads', { name: t.name, size: t.size, type: t.file.type, year });
+        const s = await gapi('POST', '/api/glint/uploads', { name: t.name, size: t.size, type: t.file.type, year }, t.space);
         if (s.done) return finish(t, s.item);
         Object.assign(t, { id: s.id, chunk: s.chunkSize, sent: s.received });
       }
@@ -922,6 +949,7 @@
 
   // Where to get more space: admins raise their own limit, everyone else asks.
   function moreSpace() {
+    if (G.space) return state.user.role === 'admin' ? { href: '#/admin', text: 'Raise family limit' } : { href: base(), text: 'Ask an admin to raise the family limit' };
     return state.user && state.user.role === 'admin'
       ? { href: '#/admin', text: 'Raise limit' }
       : { href: '#/profile', text: 'Ask for more' };
@@ -952,7 +980,7 @@
     return new Promise((resolve, reject) => {
       const x = new XMLHttpRequest();
       t.xhr = x;
-      x.open('PUT', `/api/glint/uploads/${t.id}?offset=${t.sent}`);
+      x.open('PUT', sp(`/api/glint/uploads/${t.id}?offset=${t.sent}`, t.space));
       x.setRequestHeader('Content-Type', 'application/octet-stream');
       x.upload.onprogress = (e) => { t.live = t.sent + e.loaded; paintHead(); };
       x.onload = () => {
@@ -988,7 +1016,7 @@
       const was = t.state;
       if (t.state === 'queued' || t.state === 'uploading') t.state = 'cancelled';
       if (t.xhr && was === 'uploading') t.xhr.abort();
-      if (t.id && was === 'uploading') setTimeout(() => api('DELETE', `/api/glint/uploads/${t.id}`).catch(() => {}), 300);
+      if (t.id && was === 'uploading') setTimeout(() => gapi('DELETE', `/api/glint/uploads/${t.id}`, undefined, t.space).catch(() => {}), 300);
     }
     UP.tasks = UP.tasks.filter((t) => t.state === 'done' || t.state === 'failed');
     renderPanel();

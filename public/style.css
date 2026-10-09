@@ -1293,3 +1293,8 @@ ul.update-changes li > span:last-child { min-width: 0; overflow-wrap: anywhere; 
 .update-tech { font-size: 11px; margin-top: 8px; }
 .update-tech summary { cursor: pointer; min-height: 32px; }
 .update-tech pre { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; text-transform: none; }
+
+/* Glint: switch between your photos and the Family's */
+.glint-spaces { display: flex; gap: 4px; padding: 4px; margin: 4px 0 12px; border: 1px solid var(--line); border-radius: 999px; }
+.glint-spaces a { flex: 1; text-align: center; text-decoration: none; color: var(--muted); padding: 7px 10px; border-radius: 999px; font-size: 12px; }
+.glint-spaces a.active { color: var(--bg); background: var(--ink); }

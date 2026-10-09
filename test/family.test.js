@@ -118,3 +118,47 @@ test('a bad family limit is refused', async () => {
   assert.equal((await call('PUT', '/api/admin/family', { limitGb: 0 }, admin)).status, 400);
   assert.equal((await call('PUT', '/api/admin/family', { members: 'sam' }, admin)).status, 400);
 });
+
+// ---------- Family photos (Glint) ----------
+
+const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4, 0xff, 0xd9]);
+
+async function glintUpload(cookie, name, space) {
+  const q = space ? `?space=${space}` : '';
+  const start = await call('POST', `/api/glint/uploads${q}`, { name, size: JPEG.length, type: 'image/jpeg' }, cookie);
+  assert.equal(start.status, 201, JSON.stringify(start.body));
+  const res = await fetch(`${base}/api/glint/uploads/${start.body.id}?offset=0${space ? `&space=${space}` : ''}`, {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'Content-Type': 'application/octet-stream' },
+    body: JPEG,
+  });
+  const out = await res.json();
+  assert.equal(res.status, 200, JSON.stringify(out));
+  return out.item;
+}
+
+test('family photos and albums are shared, and separate from personal ones', async () => {
+  await call('POST', '/api/admin/users', { username: 'kit', password: 'password1', limitGb: 1 }, admin);
+  const kit = (await call('POST', '/api/login', { username: 'kit', password: 'password1' })).cookie;
+  await call('PUT', '/api/admin/family', { members: [ids.sam], limitGb: 2 }, admin);
+  assert.equal((await call('GET', '/api/glint/photos?space=family', null, kit)).status, 403);
+
+  const photo = await glintUpload(sam, 'beach.jpg', 'family');
+  await glintUpload(sam, 'mine.jpg', '');
+  const familyList = (await call('GET', '/api/glint/photos?space=family', null, sam)).body;
+  assert.deepEqual(familyList.items.map((i) => i.name), ['beach.jpg']);
+  assert.deepEqual((await call('GET', '/api/glint/photos', null, sam)).body.items.map((i) => i.name), ['mine.jpg']);
+
+  // Family photos are family storage, not Sam's own.
+  assert.equal((await call('GET', '/api/me/storage', null, sam)).body.storage.usage.nest, JPEG.length);
+  assert.equal((await call('GET', '/api/admin/family', null, admin)).body.family.usedBytes > 0, true);
+
+  // An album in the family space is visible to every member, and nobody else.
+  const album = await call('POST', '/api/glint/albums?space=family', { name: 'Holiday', ids: [photo.id] }, sam);
+  assert.equal(album.status, 201, JSON.stringify(album.body));
+  const albums = (await call('GET', '/api/glint/albums?space=family', null, sam)).body.albums;
+  assert.deepEqual(albums.map((a) => [a.name, a.count]), [['Holiday', 1]]);
+  assert.deepEqual((await call('GET', '/api/glint/albums', null, sam)).body.albums, []);
+  assert.equal((await call('GET', `/api/glint/media/${photo.id}?space=family`, null, sam)).status, 200);
+  assert.equal((await call('GET', `/api/glint/media/${photo.id}`, null, sam)).status, 404);
+});
