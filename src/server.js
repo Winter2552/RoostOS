@@ -25,6 +25,7 @@ const { qrSvg } = require('./qr');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
 const { HttpError, send, readJson, str } = require('./http');
 const { Nest, disposition } = require('./nest');
+const family = require('./family');
 const zip = require('./zip');
 const restore = require('./restore');
 const { Glint } = require('./glint');
@@ -117,6 +118,7 @@ function publicUser(db, u) {
     ...(u.role === 'guest' ? { guestUntil: u.guestUntil } : {}),
     email: u.email || '',
     createdAt: u.createdAt,
+    family: family.isMember(db, u),
     twoStep: {
       on: Boolean(u.twoStep),
       required,
@@ -233,10 +235,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // SMART readings the roost-smart helper leaves behind; null when it isn't set up.
   const driveHealth = new DriveHealth(smartDir);
 
+  // The family space is stored in Nest like one more user (see src/family.js).
+  family.familyOf(db());
   const nest = new Nest({
     dir: nestDir || path.join(dataDir, 'nest'),
     dbFile: path.join(dataDir, 'nest.db'),
-    users: (id) => db().users.find((u) => u.id === id) || null,
+    users: (id) => (id === family.FAMILY_ID ? family.familyOf(db()) : db().users.find((u) => u.id === id) || null),
     limitOf: (user) => {
       const s = storage.storageOf(db(), user);
       return { limitBytes: s.limitBytes, otherBytes: s.usedBytes - (s.usage.nest || 0) };
@@ -542,6 +546,19 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       seen.add(app.id);
       return app;
     });
+  }
+
+  // ?space=family works in the family space instead of the person's own files.
+  function spaceOwner(user, params) {
+    if (params.get('space') !== 'family') return user;
+    if (!family.isMember(db(), user)) throw new HttpError(403, 'You’re not in the family space');
+    return family.familyOf(db());
+  }
+
+  function familyView() {
+    const fam = family.familyOf(db());
+    const s = storage.storageOf(db(), fam);
+    return { members: fam.members, limitGb: s.limitGb, usedBytes: s.usedBytes };
   }
 
   // When a guest pass ends: a date or time after now, up to a year ahead.
@@ -1242,9 +1259,43 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (jellyfin.enabled()) jellyfin.disable(gone.username).catch(jellyfinFailed);
       db().links = (db().links || []).filter((l) => l.userId !== id);
       db().storageRequests = storage.requestsOf(db()).filter((r) => r.userId !== id);
+      const fam = family.familyOf(db());
+      fam.members = fam.members.filter((m) => m !== id);
       store.save();
       record(req, 'user-removed', { actor: admin.username, target: gone.username });
       send(res, 200, { ok: true });
+    },
+
+    // ---------- family ----------
+
+    'GET /api/admin/family': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, { family: familyView() });
+    },
+
+    'PUT /api/admin/family': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const fam = family.familyOf(db());
+      const changes = [];
+      if (body.members !== undefined) {
+        const members = family.cleanMembers(db(), body.members);
+        if (!members) throw new HttpError(400, 'Members must be a list of users');
+        const name = (id) => db().users.find((u) => u.id === id).username;
+        const added = members.filter((m) => !fam.members.includes(m)).map(name);
+        const removed = fam.members.filter((m) => !members.includes(m) && db().users.some((u) => u.id === m)).map(name);
+        if (added.length) changes.push(`added ${added.join(', ')}`);
+        if (removed.length) changes.push(`removed ${removed.join(', ')}`);
+        fam.members = members;
+      }
+      if (body.limitGb !== undefined) {
+        const limit = cleanLimit(body.limitGb);
+        if (limit !== fam.limitGb) changes.push(`limit ${gbText(fam.limitGb)} → ${gbText(limit)}`);
+        fam.limitGb = limit;
+      }
+      store.save();
+      if (changes.length) record(req, 'family-changed', { actor: admin.username, detail: changes.join(', ') });
+      send(res, 200, { family: familyView() });
     },
 
     // ---------- invite and reset links ----------
@@ -1971,11 +2022,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       } else if (pathname.startsWith('/api/nest/')) {
         const user = requireUser(req);
         if (!visibleApps(db(), user).some((a) => a.id === 'nest')) throw new HttpError(403, 'You don’t have access to Nest');
-        await nest.handle(req, res, user, pathname, searchParams);
+        await nest.handle(req, res, spaceOwner(user, searchParams), pathname, searchParams);
       } else if (pathname.startsWith('/api/glint/')) {
         const user = requireUser(req);
         if (!visibleApps(db(), user).some((a) => a.id === 'glint')) throw new HttpError(403, 'You don’t have access to Glint');
-        await glint.handle(req, res, user, pathname, searchParams);
+        await glint.handle(req, res, spaceOwner(user, searchParams), pathname, searchParams);
       } else if (pathname.startsWith('/api/')) {
         const found = route(req.method, pathname);
         if (!found) throw new HttpError(404, 'Not found');
