@@ -533,7 +533,9 @@ class Nest {
 
   // ---------- downloads ----------
 
-  async download(user, id, req, res) {
+  // inline: a photo or video type to show in the page instead of downloading
+  // (Glint passes it only for types a browser can't run as a page).
+  async download(user, id, req, res, { inline = '' } = {}) {
     const n = this.node(user, id, 'file');
     const file = this.diskPath(user, n.id);
     let stat;
@@ -546,13 +548,14 @@ class Nest {
     // instead of the whole file again: saves home upload when you're away.
     const etag = `"${n.id}-${stat.size}-${Math.floor(stat.mtimeMs)}"`;
     const headers = {
-      'Content-Type': 'application/octet-stream',
-      'Content-Disposition': disposition(n.name),
+      'Content-Type': inline || 'application/octet-stream',
+      'Content-Disposition': inline ? 'inline' : disposition(n.name),
       'Accept-Ranges': 'bytes',
       'Cache-Control': 'private, no-cache',
       ETag: etag,
       'Last-Modified': new Date(stat.mtimeMs).toUTCString(),
     };
+    if (inline) headers['Content-Security-Policy'] = "default-src 'none'; sandbox";
     if (req.headers['if-none-match'] === etag) {
       res.writeHead(304, headers);
       return res.end();

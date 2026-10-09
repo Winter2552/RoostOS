@@ -705,16 +705,17 @@ function renderUser() {
   $('#profile-form').email.value = u.email || '';
 }
 
-const VIEWS = ['apps', 'nest', 'status', 'profile', 'admin'];
+const VIEWS = ['apps', 'nest', 'glint', 'status', 'profile', 'admin'];
 
 const hasNest = () => state.apps.some((a) => a.id === 'nest' && a.url === '#/nest');
+const hasGlint = () => state.apps.some((a) => a.id === 'glint' && a.url === '#/glint');
 
 function route() {
   // Nothing opens behind the two-step screen; enter() routes once it is done.
   if (!state.user || needsSecureStep(state.user)) return;
   const [first, ...rest] = location.hash.replace(/^#\/?/, '').split('/');
   let view = first || 'apps';
-  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'status' && isGuest(state.user)) || (view === 'nest' && !hasNest())) view = 'apps';
+  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'status' && isGuest(state.user)) || (view === 'nest' && !hasNest()) || (view === 'glint' && !hasGlint())) view = 'apps';
   for (const v of VIEWS) $(`#view-${v}`).classList.toggle('hidden', v !== view);
   document.querySelectorAll('#account-menu a').forEach((a) => {
     if (a.dataset.view === view) a.setAttribute('aria-current', 'page');
@@ -727,7 +728,8 @@ function route() {
   if (view === 'profile') { if (!isGuest(state.user)) loadStorage(); loadTwoStep(); loadDevices(); }
   if (view === 'status') loadStatus();
   if (view === 'nest') window.nestOpen(rest);
-  else document.title = state.serverName;
+  if (view === 'glint') window.glintOpen(rest);
+  else if (view !== 'nest') document.title = state.serverName;
 }
 
 window.addEventListener('hashchange', () => { if (state.user) route(); });
@@ -1411,8 +1413,8 @@ function renderStatus(s) {
   const t = s.traffic;
   $('#status-traffic-wrap').classList.toggle('hidden', !t);
   if (t) {
-    const names = { roost: s.apps[0].name, nest: 'Nest', jellyfin: 'Jellyfin' };
-    $('#status-traffic').replaceChildren(...['roost', 'nest', 'jellyfin'].map((id) => {
+    const names = { roost: s.apps[0].name, nest: 'Nest', glint: 'Glint', jellyfin: 'Jellyfin' };
+    $('#status-traffic').replaceChildren(...['roost', 'nest', 'glint', 'jellyfin'].map((id) => {
       const a = t.apps[id] || { today: 0, week: 0 };
       return statCard(names[id], bytes(a.today), `today · ${bytes(a.week)} this week`);
     }));
