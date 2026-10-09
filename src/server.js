@@ -1,6 +1,7 @@
 'use strict';
 
 const http = require('http');
+const https = require('https');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
@@ -13,12 +14,15 @@ const mail = require('./mail');
 const setup = require('./setup');
 const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
+const templates = require('./templates');
+const { CertManager, validDomain } = require('./tls');
 const twoStep = require('./twostep');
 const { qrSvg } = require('./qr');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
 const { HttpError, send, readJson, str } = require('./http');
 const { Nest } = require('./nest');
 const { Jellyfin, PREFIX: JELLYFIN_PREFIX, OPENER_HTML } = require('./jellyfin');
+const { UptimeLog, watchDockerEvents } = require('./uptime');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const COOKIE = 'roost_session';
@@ -39,6 +43,7 @@ const MIME = {
   '.png': 'image/png',
   '.ico': 'image/x-icon',
   '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json',
 };
 
 // ---------- helpers ----------
@@ -107,22 +112,58 @@ function publicUser(db, u) {
     displayName: u.displayName,
     role: u.role,
     apps: u.apps,
+    // This person's own dashboard layout: app ids in their order, and their starred apps.
+    appOrder: u.appOrder || [],
+    favourites: u.favourites || [],
+    ...(u.role === 'guest' ? { guestUntil: u.guestUntil } : {}),
     email: u.email || '',
     createdAt: u.createdAt,
     twoStep: {
       on: Boolean(u.twoStep),
       required,
       // Offer it once after sign-in to people who don't have to use it.
-      offer: !u.twoStep && !required && !u.twoStepSkipped,
+      // Guests are only passing through, so they aren't asked.
+      offer: !u.twoStep && !required && !u.twoStepSkipped && u.role !== 'guest',
       recoveryLeft: u.twoStep ? u.twoStep.recovery.length : 0,
     },
   };
+}
+
+// Guests sign in until their pass ends, then Roost turns them away.
+const GUEST_MAX_MS = 366 * 24 * 60 * 60 * 1000;
+
+function cleanRole(v) {
+  return v === 'admin' || v === 'guest' ? v : 'user';
+}
+
+function guestEnded(user) {
+  return user.role === 'guest' && !(Date.parse(user.guestUntil) > Date.now());
 }
 
 function visibleApps(db, user) {
   return user.role === 'admin' || !Array.isArray(user.apps)
     ? db.apps
     : db.apps.filter((a) => user.apps.includes(a.id));
+}
+
+// A list of app ids from the client, kept to apps that exist, without repeats.
+function appIds(db, list) {
+  if (!Array.isArray(list)) throw new HttpError(400, 'Expected a list of apps');
+  const known = new Set(db.apps.map((a) => a.id));
+  return [...new Set(list)].filter((id) => known.has(id));
+}
+
+// True when the browser reached Roost over HTTPS: directly, or through a
+// trusted proxy such as Cloudflare, which talks HTTPS to the browser.
+function isSecure(req, trustProxy) {
+  return !!req.socket.encrypted || (trustProxy && req.headers['x-forwarded-proto'] === 'https');
+}
+
+// Addresses on the home network, which Roost can also reach from inside its
+// container. A public domain (through a tunnel) isn't, so it's never used
+// for background checks.
+function localHost(host) {
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.startsWith('[') || !host.includes('.') || /\.(local|lan|home\.arpa)$/.test(host);
 }
 
 function requestHost(req) {
@@ -154,8 +195,9 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10 } = {}) {
+function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, tls: tlsOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000 } = {}) {
   const store = new Store(dataDir);
+  const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
   const activity = new ActivityLog(dataDir, { saveDelayMs: activitySaveDelayMs });
   // Nest used to be an outside app with no link; it is built in now.
   const nestApp = store.db.apps.find((a) => a.id === 'nest');
@@ -205,9 +247,74 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     return auth.startsWith('Bearer ') ? auth.slice(7).trim() : parseCookies(req)[COOKIE];
   }
 
+  // Uptime history: containers are re-read when Docker reports a change, and
+  // apps without one get a web check every few minutes (see src/uptime.js).
+  const uptime = new UptimeLog(dataDir);
+  let lastDocker = { error: 'not checked' };
+  async function checkUptime({ web, containers = true }) {
+    // With Docker events coming through, the last container read is still current.
+    if (containers || lastDocker.error) {
+      lastDocker = dockerHost ? await listContainers(dockerHost, probeTimeoutMs) : { error: 'not configured' };
+    }
+    const docker = lastDocker;
+    const tracked = [];
+    await Promise.all(db().apps.map(async (a) => {
+      const list = docker.error ? [] : containersFor(a, docker.containers);
+      if (list.length) {
+        tracked.push(a.id);
+        uptime.observe(a.id, list.every((c) => c.state === 'running' && c.health !== 'unhealthy'));
+        return;
+      }
+      // Built-in apps are part of Roost; Roost's own row covers them.
+      if (!a.url || builtIn(a.url)) return;
+      tracked.push(a.id);
+      if (!web || (a.url.includes('{host}') && !uptime.host)) return;
+      const r = await timedProbe(a.url.replace(/\{host\}/g, uptime.host), probeTimeoutMs);
+      uptime.observe(a.id, r.state === 'online');
+    }));
+    uptime.forget(tracked);
+  }
+  let uptimeBusy = false;
+  let uptimeSoon = null;
+  const runUptime = (opts) => {
+    if (uptimeBusy) return;
+    uptimeBusy = true;
+    checkUptime(opts)
+      .catch((err) => console.error('Uptime check failed:', err))
+      .finally(() => { uptimeBusy = false; });
+  };
+  // A burst of Docker events (a restart is several) makes one check.
+  const events = watchDockerEvents(dockerHost, () => {
+    if (uptimeSoon) return;
+    uptimeSoon = setTimeout(() => { uptimeSoon = null; runUptime({ web: false }); }, 2000);
+    uptimeSoon.unref();
+  });
+  // Containers are only re-read on the timer when Docker events aren't coming through.
+  const uptimeTimer = setInterval(() => {
+    uptime.heartbeat();
+    runUptime({ web: true, containers: !events.live() });
+  }, uptimeCheckMs);
+  uptimeTimer.unref();
+  const uptimeSaveTimer = setInterval(() => uptime.save(), 60 * 60 * 1000);
+  uptimeSaveTimer.unref();
+  runUptime({ web: true });
+
   function currentUser(req) {
     const s = sessions.get(tokenOf(req));
-    return s ? db().users.find((u) => u.id === s.userId) || null : null;
+    const user = s ? db().users.find((u) => u.id === s.userId) || null : null;
+    if (user && guestEnded(user)) {
+      sessions.destroyUser(user.id);
+      return null;
+    }
+    return user;
+  }
+
+  // Signed-in people who aren't guests: guests see their apps and nothing
+  // about the server.
+  function requireMember(req) {
+    const user = requireUser(req);
+    if (user.role === 'guest') throw new HttpError(403, 'Not available on a guest pass');
+    return user;
   }
 
   function requireUser(req) {
@@ -229,16 +336,20 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
 
   const gbText = (limit) => (limit === null ? 'no limit' : `${limit} GB`);
 
+  // Cookies are marked Secure whenever this request came over HTTPS.
+  const secure = (req) => secureCookies || isSecure(req, trustProxy);
+
   // A sign-in that names a device (an app on a phone) gets a long-lived device
   // key in the reply instead of a cookie.
   function login(req, res, user, { status = 200, cookies = [], device = '', password = null } = {}) {
+    if (guestEnded(user)) throw new HttpError(403, 'Your guest pass has ended. Ask whoever invited you for more time.');
     if (device) {
       const key = sessions.create(user.id, { kind: 'app', name: device });
       return send(res, status, { user: publicUser(db(), user), key });
     }
     const token = sessions.create(user.id, { name: deviceName(req.headers['user-agent']) });
     if (password !== null) linkJellyfin(sessions.get(token), user, password);
-    send(res, status, { user: publicUser(db(), user) }, { 'Set-Cookie': [sessionCookie(token, secureCookies), ...cookies] });
+    send(res, status, { user: publicUser(db(), user) }, { 'Set-Cookie': [sessionCookie(token, secure(req)), ...cookies] });
   }
 
   // ---------- Jellyfin ----------
@@ -307,12 +418,12 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     return user.trusted.some((t) => t.hash === hash && t.expires > Date.now());
   }
 
-  function trustDevice(user) {
+  function trustDevice(req, user) {
     const token = crypto.randomBytes(32).toString('hex');
     const now = Date.now();
     user.trusted = (user.trusted || []).filter((t) => t.expires > now).slice(-(MAX_TRUSTED - 1));
     user.trusted.push({ hash: sha256(token), expires: now + TRUST_TTL_MS });
-    return trustCookie(token, secureCookies);
+    return trustCookie(token, secure(req));
   }
 
   function checkPassword(user, password) {
@@ -361,6 +472,13 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     });
   }
 
+  // When a guest pass ends: a date or time after now, up to a year ahead.
+  function cleanGuestUntil(v) {
+    const t = Date.parse(v);
+    if (!(t > Date.now() && t <= Date.now() + GUEST_MAX_MS)) throw new HttpError(400, 'Pick when the guest pass ends, up to a year from now');
+    return new Date(t).toISOString();
+  }
+
   function cleanLimit(v) {
     const limit = storage.parseLimitGb(v);
     if (limit === undefined) throw new HttpError(400, `Storage limit must be a whole number of GB from 1 to ${storage.MAX_LIMIT_GB}, or blank for no limit`);
@@ -388,12 +506,42 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     return { ...rest, publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()) };
   }
 
+  // The admin's notice on the dashboard. Expired notices are simply not
+  // returned, so nothing has to run to take one down.
+  function activeNotice() {
+    const n = db().settings.notice;
+    if (!n || (n.until && Date.parse(n.until) <= Date.now())) return null;
+    return n;
+  }
+
+  function cleanUntil(raw) {
+    if (raw === null || raw === undefined || raw === '') return null;
+    const t = Date.parse(raw);
+    if (Number.isNaN(t) || t <= Date.now()) throw new HttpError(400, 'The end time must be in the future');
+    if (t > Date.now() + 366 * 86400 * 1000) throw new HttpError(400, 'The end time must be within a year');
+    return new Date(t).toISOString();
+  }
+
   function adminView(user) {
     return { ...publicUser(db(), user), storage: storage.storageOf(db(), user) };
   }
 
   function requireApp(req) {
     if (!storage.appTokenOk(req, appToken)) throw new HttpError(401, 'App token missing or wrong');
+  }
+
+  function certSummary() {
+    const s = certs.status();
+    if (s.state === 'off') return null;
+    return { state: s.state, domain: s.domain, daysLeft: s.certificate ? s.certificate.daysLeft : null, expiresAt: s.certificate ? s.certificate.expiresAt : null, error: s.lastError };
+  }
+
+  // What the admin page shows, plus how this browser reached Roost.
+  function tlsView(req) {
+    return {
+      ...certs.status(),
+      connection: { secure: isSecure(req, trustProxy), viaCloudflare: !!req.headers['cf-connecting-ip'], host: requestHost(req) },
+    };
   }
 
   function cleanAppAccess(apps) {
@@ -516,6 +664,11 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   }
 
   const routes = {
+    // A tiny answer the app uses to check the server is back after losing it.
+    'GET /api/ping': (req, res) => {
+      res.writeHead(204, { 'Cache-Control': 'no-store' });
+      res.end();
+    },
     'GET /api/state': (req, res) => {
       const user = currentUser(req);
       send(res, 200, {
@@ -560,6 +713,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         throw new HttpError(401, 'Wrong username or password');
       }
       const device = str(body.device, 60);
+      if (guestEnded(user)) record(req, 'sign-in-failed', { target: user.username, detail: 'guest pass ended' });
       if (!user.twoStep || isTrusted(req, user)) {
         record(req, 'sign-in', { actor: user.username, detail: user.twoStep ? 'trusted device' : '' });
         return login(req, res, user, { device, password: body.password });
@@ -606,7 +760,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       }
       pendingCodes.delete(body.ticket);
       record(req, 'sign-in', { actor: user.username, detail: /^\d/.test(code) ? 'with code' : 'with recovery code' });
-      const cookies = body.trust === true && !pending.device ? [trustDevice(user)] : [];
+      const cookies = body.trust === true && !pending.device ? [trustDevice(req, user)] : [];
       store.save();
       login(req, res, user, { cookies, device: pending.device, password: pending.password });
     },
@@ -615,7 +769,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       const user = currentUser(req);
       if (user) record(req, 'sign-out', { actor: user.username });
       sessions.destroy(tokenOf(req));
-      send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie('', secureCookies) });
+      send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie('', secure(req)) });
     },
 
     'PATCH /api/me': async (req, res) => {
@@ -626,6 +780,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         const email = str(body.email, 254).toLowerCase();
         if (email !== (user.email || '')) user.email = cleanEmail(email);
       }
+      if (body.appOrder !== undefined) user.appOrder = appIds(db(), body.appOrder);
+      if (body.favourites !== undefined) user.favourites = appIds(db(), body.favourites);
       if (body.newPassword !== undefined) {
         if (typeof body.currentPassword !== 'string' || !verifyPassword(body.currentPassword, user.password)) {
           throw new HttpError(400, 'Current password is wrong');
@@ -698,14 +854,14 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       user.trusted = [];
       store.save();
       record(req, 'two-step-off', { actor: user.username, target: user.username });
-      send(res, 200, { user: publicUser(db(), user) }, { 'Set-Cookie': trustCookie('', secureCookies) });
+      send(res, 200, { user: publicUser(db(), user) }, { 'Set-Cookie': trustCookie('', secure(req)) });
     },
 
     'POST /api/me/two-step/forget-devices': (req, res) => {
       const user = requireUser(req);
       user.trusted = [];
       store.save();
-      send(res, 200, twoStepStatus(user), { 'Set-Cookie': trustCookie('', secureCookies) });
+      send(res, 200, twoStepStatus(user), { 'Set-Cookie': trustCookie('', secure(req)) });
     },
 
     // "Not now" on the offer after sign-in; it stays available in Profile.
@@ -798,6 +954,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     'GET /api/apps/status': async (req, res) => {
       const user = requireUser(req);
       const host = requestHost(req);
+      if (localHost(host)) uptime.setHost(host);
       const entries = await Promise.all(
         visibleApps(db(), user).map(async (a) => [a.id, (await appProbe(a, host, probeTimeoutMs)).state]),
       );
@@ -805,7 +962,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     },
 
     'GET /api/system': (req, res) => {
-      requireUser(req);
+      requireMember(req);
       let disk = null;
       try {
         const s = fs.statfsSync(dataDir);
@@ -820,12 +977,14 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         cpus: os.cpus().length,
         memory: { total: os.totalmem(), free: os.freemem() },
         disk,
+        notice: activeNotice(),
       });
     },
 
     'GET /api/status': async (req, res) => {
-      const user = requireUser(req);
+      const user = requireMember(req);
       const host = requestHost(req);
+      if (localHost(host)) uptime.setHost(host);
       const [health, docker, web] = await Promise.all([
         serverHealth({ cpu, disks: diskList }),
         listContainers(dockerHost, probeTimeoutMs),
@@ -859,6 +1018,9 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         apps,
         // Everything else Docker runs, for admins only.
         otherContainers: user.role === 'admin' ? all.filter((c) => !claimed.has(c.id)) : [],
+        // Certificate health, for admins once HTTPS is set up.
+        certificate: user.role === 'admin' ? certSummary() : null,
+        history: uptime.history(visibleApps(db(), user).map((a) => a.id)),
         checkedAt: new Date().toISOString(),
       });
     },
@@ -879,12 +1041,13 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         id: store.newId(),
         username,
         displayName: str(body.displayName, 60) || username,
-        role: body.role === 'admin' ? 'admin' : 'user',
+        role: cleanRole(body.role),
         apps: cleanAppAccess(body.apps),
         limitGb: body.limitGb === undefined ? storage.defaultLimitGb(db()) : cleanLimit(body.limitGb),
         password: hashPassword(body.password),
         createdAt: new Date().toISOString(),
       };
+      if (user.role === 'guest') user.guestUntil = cleanGuestUntil(body.guestUntil);
       db().users.push(user);
       store.save();
       syncJellyfinPassword(user, body.password);
@@ -915,10 +1078,20 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         user.limitGb = limit;
       }
       if (body.role !== undefined) {
-        const role = body.role === 'admin' ? 'admin' : 'user';
+        const role = cleanRole(body.role);
         if (user.id === admin.id && role !== 'admin') throw new HttpError(400, "You can't remove your own admin role");
+        if (role === 'guest' && user.role !== 'guest' && body.guestUntil === undefined) throw new HttpError(400, 'Pick when the guest pass ends');
         if (role !== user.role) changes.push(`role ${user.role} → ${role}`);
         user.role = role;
+        if (role !== 'guest') delete user.guestUntil;
+      }
+      if (user.role === 'guest' && body.endGuestPass === true) {
+        user.guestUntil = new Date().toISOString();
+        sessions.destroyUser(user.id);
+        changes.push('guest pass ended');
+      } else if (user.role === 'guest' && body.guestUntil !== undefined) {
+        user.guestUntil = cleanGuestUntil(body.guestUntil);
+        changes.push(`guest pass until ${user.guestUntil.slice(0, 10)}`);
       }
       if (body.password !== undefined) {
         if (!validPassword(body.password)) throw new HttpError(400, 'Password must be at least 8 characters');
@@ -968,7 +1141,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     'POST /api/admin/invites': async (req, res) => {
       const admin = requireAdmin(req);
       const body = await readJson(req);
-      const role = body.role === 'admin' ? 'admin' : 'user';
+      const role = cleanRole(body.role);
       const { token, link } = links.create(db(), {
         id: store.newId(),
         kind: 'invite',
@@ -976,6 +1149,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         role,
         apps: role === 'admin' ? null : cleanAppAccess(body.apps),
         limitGb: body.limitGb === undefined ? storage.defaultLimitGb(db()) : cleanLimit(body.limitGb),
+        ...(role === 'guest' ? { guestUntil: cleanGuestUntil(body.guestUntil) } : {}),
         createdBy: admin.id,
       }, links.INVITE_TTL_MS);
       store.save();
@@ -1047,6 +1221,17 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       deliver(user.email, ...resetEmail(user, token, '1 hour')).catch((err) => console.error(`Reset email to @${user.username} failed: ${err.message}`));
     },
 
+    // Admin → Apps → Add app. Docker is only asked when the picker opens.
+    'GET /api/admin/app-templates': async (req, res) => {
+      requireAdmin(req);
+      const docker = await listContainers(dockerHost, probeTimeoutMs);
+      send(res, 200, {
+        docker: docker.error ? { ok: false, error: docker.error } : { ok: true },
+        running: templates.suggestions(db().apps, docker.containers || [], roostContainer),
+        templates: templates.templates(),
+      });
+    },
+
     // ---------- setup checklist ----------
 
     'GET /api/admin/setup': async (req, res) => {
@@ -1060,8 +1245,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         dockerOk: !docker.error,
         secureCookies,
         trustProxy,
+        tls: certs.status(),
         ticked: db().settings.setupTicked || [],
-        jellyfinOk: jellyfin.enabled() && (await jellyfinView()).connected,
       }));
     },
 
@@ -1118,6 +1303,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         role: link.role,
         apps: apps.map((a) => a.name),
         expiresAt: link.expiresAt,
+        guestUntil: link.guestUntil,
       });
     },
 
@@ -1134,6 +1320,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         record(req, 'password-reset', { actor: user.username, target: user.username, detail: 'reset link' });
         return login(req, res, user, { password: body.password });
       }
+      if (link.role === 'guest' && !(Date.parse(link.guestUntil) > Date.now())) throw new HttpError(410, 'This guest pass has already ended');
       const username = str(body.username, 32).toLowerCase();
       const check = usernameCheck(username);
       if (!check.available) throw new HttpError(check.taken ? 409 : 400, check.reason);
@@ -1148,6 +1335,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         createdAt: new Date().toISOString(),
         invitedBy: link.createdBy,
       };
+      if (link.role === 'guest') user.guestUntil = link.guestUntil;
       if (body.email) user.email = cleanEmail(body.email);
       db().users.push(user);
       links.remove(db(), link);
@@ -1215,12 +1403,68 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       send(res, 200, { settings: settingsView() });
     },
 
+    'PUT /api/admin/notice': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const text = str(body.text, 200);
+      if (text) {
+        db().settings.notice = { text, until: cleanUntil(body.until), at: new Date().toISOString() };
+        record(req, 'notice-posted', { actor: admin.username, detail: text });
+      } else if (db().settings.notice) {
+        delete db().settings.notice;
+        record(req, 'notice-cleared', { actor: admin.username });
+      }
+      store.save();
+      send(res, 200, { notice: activeNotice() });
+    },
+
     'GET /api/admin/activity': (req, res) => {
       requireAdmin(req);
       const q = new URL(req.url, 'http://roost').searchParams;
       const before = Number(q.get('before')) || Infinity;
       const filter = FILTERS.includes(q.get('filter')) ? q.get('filter') : '';
       send(res, 200, activity.page({ before, filter, limit: 50 }));
+    },
+
+    // ---------- HTTPS certificate ----------
+
+    'GET /api/admin/tls': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, tlsView(req));
+    },
+
+    'PUT /api/admin/tls': async (req, res) => {
+      requireAdmin(req);
+      const body = await readJson(req);
+      const current = db().settings.tls || {};
+      const domain = str(body.domain, 200).toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^\*\./, '');
+      if (!validDomain(domain)) throw new HttpError(400, 'Enter the domain on its own, like roostos.network');
+      const email = str(body.email, 200);
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'That email address looks wrong');
+      // A blank token keeps the one already saved; it is never sent back to the browser.
+      const token = str(body.token, 200) || current.token || '';
+      if (!token) throw new HttpError(400, 'Paste a Cloudflare API token');
+      db().settings.tls = { domain, token, email };
+      store.save();
+      certs.lastError = null;
+      if (body.renew !== false) certs.renew();
+      send(res, 200, tlsView(req));
+    },
+
+    'POST /api/admin/tls/renew': (req, res) => {
+      requireAdmin(req);
+      if (!(db().settings.tls || {}).token) throw new HttpError(400, 'Save a domain and Cloudflare token first');
+      certs.renew();
+      send(res, 202, tlsView(req));
+    },
+
+    'DELETE /api/admin/tls': (req, res) => {
+      requireAdmin(req);
+      if (certs.busy) throw new HttpError(409, 'Wait for the current certificate request to finish');
+      delete db().settings.tls;
+      store.save();
+      certs.clear();
+      send(res, 200, tlsView(req));
     },
 
     // ---------- storage limits ----------
@@ -1234,6 +1478,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     'POST /api/me/storage-requests': async (req, res) => {
       const user = requireUser(req);
       if (user.role === 'admin') throw new HttpError(400, 'Admins set their own limit under Admin → Users');
+      if (user.role === 'guest') throw new HttpError(403, 'Not available on a guest pass');
       const body = await readJson(req);
       const requestedGb = storage.parseLimitGb(body.requestedGb);
       if (!requestedGb) throw new HttpError(400, 'Ask for a whole number of GB');
@@ -1331,6 +1576,28 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     return handler ? [handler, m[2]] : null;
   }
 
+  // What a phone or PC needs to install Roost as an app, named after the server.
+  function serveManifest(req, res) {
+    const name = db().settings.serverName || 'Roost';
+    const body = JSON.stringify({
+      id: '/',
+      name,
+      short_name: name.length > 12 ? 'Roost' : name,
+      start_url: '/',
+      scope: '/',
+      display: 'standalone',
+      background_color: '#0a0a0a',
+      theme_color: '#0a0a0a',
+      icons: [
+        { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
+        { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
+        { src: '/icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+      ],
+    });
+    res.writeHead(200, { 'Content-Type': MIME['.webmanifest'], 'Cache-Control': 'no-cache' });
+    res.end(req.method === 'HEAD' ? undefined : body);
+  }
+
   function serveStatic(req, res, pathname) {
     let rel = decodeURIComponent(pathname);
     if (rel === '/' || !path.extname(rel)) rel = '/index.html';
@@ -1340,7 +1607,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       if (err) return send(res, 404, { error: 'Not found' });
       res.writeHead(200, {
         'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-        'Cache-Control': 'no-cache',
+        // App icons rarely change; everything else is checked on every load.
+        'Cache-Control': rel.startsWith('/icons/') ? 'public, max-age=604800' : 'no-cache',
       });
       res.end(req.method === 'HEAD' ? undefined : data);
     });
@@ -1371,7 +1639,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     jellyfin.proxy(req, res);
   }
 
-  const server = http.createServer(async (req, res) => {
+  async function handle(req, res) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
     res.setHeader('X-Frame-Options', 'DENY');
@@ -1387,6 +1655,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         const found = route(req.method, pathname);
         if (!found) throw new HttpError(404, 'Not found');
         await found[0](req, res, found[1]);
+      } else if (pathname === '/manifest.webmanifest' && (req.method === 'GET' || req.method === 'HEAD')) {
+        serveManifest(req, res);
       } else if (req.method === 'GET' || req.method === 'HEAD') {
         serveStatic(req, res, pathname);
       } else {
@@ -1395,18 +1665,38 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     } catch (err) {
       const status = err.status || 500;
       if (status === 500) console.error(err);
-      if (!res.headersSent) send(res, status, { error: status === 500 ? 'Something went wrong' : err.message });
+      if (!res.headersSent) send(res, status, status === 500 ? { error: 'Something went wrong' } : { error: err.message, ...(err.code && { code: err.code }) });
     }
-  });
+  }
 
-  server.on('upgrade', (req, socket, head) => {
+  // Live updates from Jellyfin (a WebSocket) pass through on both the HTTP and
+  // HTTPS side.
+  function onUpgrade(req, socket, head) {
     const { pathname } = new URL(req.url, 'http://roost');
     if (pathname.startsWith(`${JELLYFIN_PREFIX}/`) && jellyfinAllowed(req)) return jellyfin.proxyUpgrade(req, socket, head);
     socket.destroy();
-  });
+  }
 
+  const server = http.createServer(handle);
+  server.on('upgrade', onUpgrade);
+  server.certs = certs;
+  // The HTTPS side shares every route; the certificate is looked up per
+  // connection, so a renewal takes effect without a restart.
+  // Browsers opening Roost by IP address send no name and get no certificate,
+  // which is right: the certificate is only valid for the domain.
+  server.createHttpsServer = () => {
+    const secureServer = https.createServer({ SNICallback: (name, cb) => cb(null, certs.context) }, handle);
+    secureServer.on('upgrade', onUpgrade);
+    return secureServer;
+  };
   server.on('close', () => {
+    certs.stop();
     clearInterval(sweepTimer);
+    clearInterval(uptimeTimer);
+    clearInterval(uptimeSaveTimer);
+    clearTimeout(uptimeSoon);
+    events.stop();
+    uptime.save();
     store.flush();
     activity.flush();
     sessions.flush();
@@ -1415,6 +1705,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   server.nest = nest;
   // Save anything still waiting, e.g. when the container is stopped.
   server.flushAll = () => {
+    uptime.save();
     store.flush();
     activity.flush();
     sessions.flush();
@@ -1432,9 +1723,15 @@ if (require.main === module) {
   const roostContainer = process.env.ROOST_CONTAINER || 'roost';
   const nestDir = process.env.NEST_DIR || path.join(dataDir, 'nest');
   const trustProxy = process.env.BEHIND_PROXY === 'true';
-  const server = createServer({ dataDir, nestDir, secureCookies, disks, dockerHost, roostContainer, appToken, trustProxy });
+  const httpsPort = Number(process.env.HTTPS_PORT) || 8443;
+  const staging = process.env.ROOST_ACME_STAGING === 'true';
+  const server = createServer({ dataDir, nestDir, secureCookies, disks, dockerHost, roostContainer, appToken, trustProxy, tls: { staging } });
   server.listen(port, () => {
     console.log(`Roost is running on http://localhost:${port} (data in ${dataDir})`);
+  });
+  server.certs.start();
+  server.createHttpsServer().listen(httpsPort, () => {
+    console.log(`HTTPS is listening on port ${httpsPort}${server.certs.cert ? '' : ' (no certificate yet; set one up under Admin)'}`);
   });
   // docker stop sends SIGTERM; save what is waiting and exit straight away.
   for (const signal of ['SIGTERM', 'SIGINT']) {

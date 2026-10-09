@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { createServer } = require('../src/server');
-const { STEPS } = require('../src/setup');
+const { STEPS, NO_STEP } = require('../src/setup');
 const { setUpTwoStep } = require('./helpers');
 
 let server;
@@ -50,6 +50,22 @@ test('every step explains itself', () => {
   }
 });
 
+// Keeps the checklist the one tally of setup: a new environment variable or
+// saved setting can't land without a step (or a reason it needs none).
+test('every setting in the code has a setup step', () => {
+  const src = path.join(__dirname, '..', 'src');
+  const found = new Set();
+  for (const file of fs.readdirSync(src).filter((f) => f.endsWith('.js'))) {
+    const code = fs.readFileSync(path.join(src, file), 'utf8');
+    for (const m of code.matchAll(/process\.env\.([A-Z_]+)/g)) found.add(m[1]);
+    for (const m of code.matchAll(/\bsettings\.([a-zA-Z]+)/g)) found.add(m[1]);
+  }
+  const covered = new Set([...STEPS.flatMap((s) => s.covers || []), ...Object.keys(NO_STEP)]);
+  const missing = [...found].filter((k) => !covered.has(k));
+  assert.deepEqual(missing, [], `Add a step in src/setup.js covering: ${missing.join(', ')}`);
+  assert.ok(found.has('NEST_DIR') && found.has('publicUrl'), 'the scan finds settings');
+});
+
 test('the checklist is for admins only', async () => {
   assert.equal((await call('GET', '/api/admin/setup')).status, 401);
 });
@@ -72,6 +88,11 @@ test('steps tick off as things get set up', async () => {
 
   await call('POST', '/api/admin/invites', {}, adminCookie);
   assert.equal(await stepDone('invite'), true);
+
+  assert.equal(await stepDone('two-step'), true);
+  await call('PATCH', '/api/admin/settings', { adminsNeedTwoStep: false }, adminCookie);
+  assert.equal(await stepDone('two-step'), false);
+  await call('PATCH', '/api/admin/settings', { adminsNeedTwoStep: true }, adminCookie);
 });
 
 test('email counts once a test email went through, until the settings change', async () => {
