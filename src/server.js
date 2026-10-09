@@ -12,17 +12,23 @@ const storage = require('./storage');
 const links = require('./links');
 const mail = require('./mail');
 const setup = require('./setup');
+const backup = require('./backup');
+const selfUpdate = require('./self-update');
 const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
-const { listContainers, containersFor } = require('./docker');
+const { listContainers, containersFor, restartContainer } = require('./docker');
 const { DriveHealth } = require('./smart');
 const { OutsideServices } = require('./outside');
 const templates = require('./templates');
+const { cleanSchedule, isDue } = require('./schedule');
 const { CertManager, validDomain } = require('./tls');
 const twoStep = require('./twostep');
 const { qrSvg } = require('./qr');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
 const { HttpError, send, readJson, str } = require('./http');
-const { Nest } = require('./nest');
+const { Nest, disposition } = require('./nest');
+const family = require('./family');
+const zip = require('./zip');
+const restore = require('./restore');
 const { Glint } = require('./glint');
 const { Assets } = require('./assets');
 const { TrafficMeter } = require('./traffic');
@@ -113,6 +119,7 @@ function publicUser(db, u) {
     ...(u.role === 'guest' ? { guestUntil: u.guestUntil } : {}),
     email: u.email || '',
     createdAt: u.createdAt,
+    family: family.isMember(db, u),
     twoStep: {
       on: Boolean(u.twoStep),
       required,
@@ -190,7 +197,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000 } = {}) {
+function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000 } = {}) {
   const store = new Store(dataDir);
   const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
   // The few outside services Roost leans on, for the admin's status page.
@@ -220,6 +227,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   const pendingCodes = new Map();
   const pendingSetups = new Map();
   const cpu = new CpuMeter();
+  // When each app was last restarted from the status page, to stop double taps.
+  const restartedAt = new Map();
   // Drives shown on the status page. Without a list, show the system drive and
   // the drive Roost keeps its data on (the same drive is only listed once).
   const diskList = disks && disks.length ? disks : [{ label: 'System', path: '/' }, { label: 'Data', path: dataDir }];
@@ -227,10 +236,12 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   // SMART readings the roost-smart helper leaves behind; null when it isn't set up.
   const driveHealth = new DriveHealth(smartDir);
 
+  // The family space is stored in Nest like one more user (see src/family.js).
+  family.familyOf(db());
   const nest = new Nest({
     dir: nestDir || path.join(dataDir, 'nest'),
     dbFile: path.join(dataDir, 'nest.db'),
-    users: (id) => db().users.find((u) => u.id === id) || null,
+    users: (id) => (id === family.FAMILY_ID ? family.familyOf(db()) : db().users.find((u) => u.id === id) || null),
     limitOf: (user) => {
       const s = storage.storageOf(db(), user);
       return { limitBytes: s.limitBytes, otherBytes: s.usedBytes - (s.usage.nest || 0) };
@@ -240,6 +251,16 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       store.saveSoon();
     },
   });
+  // The backup drive, read-only: for browsing and restoring from backups.
+  const backups = new restore.Backups(backupDir);
+  // The one restore into Nest that may be running, and how it is going.
+  let restoreJob = null;
+  // The Roost user whose Nest files a backed-up path is in: Nest/<username>_<id>/files/...
+  // With `inside`, the path must be at or under the files folder, not above it.
+  function nestOwner(segs, inside = false) {
+    if (segs[0] !== 'Nest' || segs.length < 2 || (inside && (segs.length < 3 || segs[2] !== 'files'))) return null;
+    return db().users.find((u) => `${u.username}_${u.id}` === segs[1]) || null;
+  }
   nest.syncUsage();
   const glint = new Glint({ nest });
   const search = createSearch({ sources: [nestSource(nest)], visibleApps: (user) => visibleApps(db(), user) });
@@ -305,6 +326,52 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   const uptimeSaveTimer = setInterval(() => uptime.save(), 60 * 60 * 1000);
   uptimeSaveTimer.unref();
   runUptime({ web: true });
+
+  // Restarts an app's containers that the Docker helper lists. Turned away with
+  // an HttpError when it can't (no Docker, not on the list, restarted less than
+  // minGapMs ago); a restart Docker itself fails carries restartFailed.
+  async function restartApp(app, minGapMs) {
+    const docker = await listContainers(dockerHost, probeTimeoutMs);
+    if (docker.error) throw new HttpError(503, 'Docker is not connected');
+    const allowed = new Set(docker.restartable);
+    const names = containersFor(app, docker.containers)
+      .map((c) => c.name)
+      .filter((n) => allowed.has(n) && n !== roostContainer);
+    if (!names.length) throw new HttpError(403, `${app.name} can't be restarted from Roost`);
+    if (Date.now() - (restartedAt.get(app.id) || 0) < minGapMs) throw new HttpError(429, `${app.name} was just restarted. Give it a moment.`);
+    restartedAt.set(app.id, Date.now());
+    try {
+      await Promise.all(names.map((n) => restartContainer(dockerHost, n)));
+    } catch (cause) {
+      restartedAt.delete(app.id);
+      throw Object.assign(new Error('restart failed'), { restartFailed: true, cause });
+    }
+    return names;
+  }
+
+  // Scheduled restarts. One cheap check every 20 seconds (no Docker call unless
+  // an app is due); each schedule fires once in its minute, skips an app that
+  // was restarted in the last 10 minutes, and a restart missed because Roost
+  // was off is not made up later.
+  const scheduledMinute = new Map();
+  const runSchedules = () => {
+    const now = new Date();
+    const minute = Math.floor(now.getTime() / 60000);
+    for (const app of db().apps) {
+      if (!isDue(app.restartSchedule, now) || scheduledMinute.get(app.id) === minute) continue;
+      scheduledMinute.set(app.id, minute);
+      restartApp(app, 10 * 60 * 1000).then(
+        (names) => activity.add('app-restarted', { actor: 'schedule', detail: `${app.name} (${names.join(', ')})` }),
+        (err) => {
+          if (err.status === 429) return; // Someone just restarted it by hand.
+          const why = err.restartFailed ? err.cause.message : err.message;
+          activity.add('app-restart-failed', { actor: 'schedule', detail: `${app.name}: ${why}` });
+        },
+      );
+    }
+  };
+  const scheduleTimer = setInterval(runSchedules, scheduleCheckMs);
+  scheduleTimer.unref();
 
   function currentUser(req) {
     const s = sessions.get(tokenOf(req));
@@ -471,12 +538,28 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         container: str(a.container, 200),
         icon: ICONS.includes(a.icon) ? a.icon : 'grid',
       };
+      const schedule = cleanSchedule(a.restartSchedule);
+      if (schedule instanceof Error) throw new HttpError(400, `${app.name || 'App'}: ${schedule.message}`);
+      if (schedule) app.restartSchedule = schedule;
       if (!app.name) throw new HttpError(400, 'Every app needs a name');
       if (!/^[a-z0-9-]+$/i.test(app.id) || seen.has(app.id)) throw new HttpError(400, 'Bad app id');
       if (!validAppUrl(app.url)) throw new HttpError(400, `${app.name}: link must start with http:// or https://`);
       seen.add(app.id);
       return app;
     });
+  }
+
+  // ?space=family works in the family space instead of the person's own files.
+  function spaceOwner(user, params) {
+    if (params.get('space') !== 'family') return user;
+    if (!family.isMember(db(), user)) throw new HttpError(403, 'You’re not in the family space');
+    return family.familyOf(db());
+  }
+
+  function familyView() {
+    const fam = family.familyOf(db());
+    const s = storage.storageOf(db(), fam);
+    return { members: fam.members, limitGb: s.limitGb, usedBytes: s.usedBytes };
   }
 
   // When a guest pass ends: a date or time after now, up to a year ahead.
@@ -510,7 +593,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   // Settings for the admin page. The mail password never leaves the server.
   function settingsView() {
     const { mail: _mail, jellyfin: _jellyfin, ...rest } = db().settings;
-    return { ...rest, publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()) };
+    return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()) };
   }
 
   // The admin's notice on the dashboard. Expired notices are simply not
@@ -1015,6 +1098,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         Promise.all(visibleApps(db(), user).map((a) => appProbe(a, host, probeTimeoutMs))),
       ]);
       const all = docker.containers || [];
+      const canRestart = new Set(user.role === 'admin' ? docker.restartable || [] : []);
       const claimed = new Set();
       const claim = (list) => { list.forEach((c) => claimed.add(c.id)); return list; };
       const apps = [
@@ -1027,14 +1111,20 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
           uptime: process.uptime(),
           containers: claim(containersFor({ id: 'roost', container: roostContainer }, all)),
         },
-        ...visibleApps(db(), user).map((a, i) => ({
-          id: a.id,
-          name: a.name,
-          tagline: a.tagline,
-          icon: a.icon,
-          web: web[i],
-          containers: claim(containersFor(a, all)),
-        })),
+        ...visibleApps(db(), user).map((a, i) => {
+          const containers = claim(containersFor(a, all));
+          return {
+            id: a.id,
+            name: a.name,
+            tagline: a.tagline,
+            icon: a.icon,
+            web: web[i],
+            containers,
+            // Admins get a Restart button when the Docker helper lists this app's containers.
+            restartSchedule: user.role === 'admin' ? a.restartSchedule || null : undefined,
+            restartable: containers.some((c) => canRestart.has(c.name) && c.name !== roostContainer),
+          };
+        }),
       ];
       send(res, 200, {
         ...health,
@@ -1052,6 +1142,23 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         history: uptime.history(visibleApps(db(), user).map((a) => a.id)),
         checkedAt: new Date().toISOString(),
       });
+    },
+
+    // Restarts the app's containers that Roost's Docker helper allows. Roost
+    // itself is never restarted from here: the page would lose its answer.
+    'POST /api/admin/apps/:id/restart': async (req, res, id) => {
+      const admin = requireAdmin(req);
+      const app = db().apps.find((a) => a.id === id);
+      if (!app) throw new HttpError(404, 'No such app');
+      try {
+        const names = await restartApp(app, 30 * 1000);
+        record(req, 'app-restarted', { actor: admin.username, detail: `${app.name} (${names.join(', ')})` });
+      } catch (err) {
+        if (!err.restartFailed) throw err;
+        record(req, 'app-restart-failed', { actor: admin.username, detail: `${app.name}: ${err.cause.message}` });
+        throw new HttpError(502, `${app.name} didn't restart (${err.cause.message})`);
+      }
+      send(res, 200, { ok: true });
     },
 
     'GET /api/admin/users': (req, res) => {
@@ -1153,9 +1260,43 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       if (jellyfin.enabled()) jellyfin.disable(gone.username).catch(jellyfinFailed);
       db().links = (db().links || []).filter((l) => l.userId !== id);
       db().storageRequests = storage.requestsOf(db()).filter((r) => r.userId !== id);
+      const fam = family.familyOf(db());
+      fam.members = fam.members.filter((m) => m !== id);
       store.save();
       record(req, 'user-removed', { actor: admin.username, target: gone.username });
       send(res, 200, { ok: true });
+    },
+
+    // ---------- family ----------
+
+    'GET /api/admin/family': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, { family: familyView() });
+    },
+
+    'PUT /api/admin/family': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const fam = family.familyOf(db());
+      const changes = [];
+      if (body.members !== undefined) {
+        const members = family.cleanMembers(db(), body.members);
+        if (!members) throw new HttpError(400, 'Members must be a list of users');
+        const name = (id) => db().users.find((u) => u.id === id).username;
+        const added = members.filter((m) => !fam.members.includes(m)).map(name);
+        const removed = fam.members.filter((m) => !members.includes(m) && db().users.some((u) => u.id === m)).map(name);
+        if (added.length) changes.push(`added ${added.join(', ')}`);
+        if (removed.length) changes.push(`removed ${removed.join(', ')}`);
+        fam.members = members;
+      }
+      if (body.limitGb !== undefined) {
+        const limit = cleanLimit(body.limitGb);
+        if (limit !== fam.limitGb) changes.push(`limit ${gbText(fam.limitGb)} → ${gbText(limit)}`);
+        fam.limitGb = limit;
+      }
+      store.save();
+      if (changes.length) record(req, 'family-changed', { actor: admin.username, detail: changes.join(', ') });
+      send(res, 200, { family: familyView() });
     },
 
     // ---------- invite and reset links ----------
@@ -1250,6 +1391,26 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       deliver(user.email, ...resetEmail(user, token, '1 hour')).catch((err) => console.error(`Reset email to @${user.username} failed: ${err.message}`));
     },
 
+    // ---------- backups ----------
+
+    // The dashboard line. Everyone sees how backups are doing; only admins
+    // see why one failed and what the drive holds.
+    'GET /api/backup': (req, res) => {
+      const user = requireMember(req);
+      const status = backup.readStatus(dataDir);
+      const out = backup.summarize(status);
+      if (user.role !== 'admin') {
+        send(res, 200, { state: out.state, lastOk: out.lastOk || null });
+        return;
+      }
+      send(res, 200, {
+        ...out,
+        drive: status && status.drive,
+        last: status && status.last,
+        snapshots: status ? status.snapshots : [],
+      });
+    },
+
     // Admin → Apps → Add app. Docker is only asked when the picker opens.
     'GET /api/admin/app-templates': async (req, res) => {
       requireAdmin(req);
@@ -1259,6 +1420,209 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         running: templates.suggestions(db().apps, docker.containers || [], roostContainer),
         templates: templates.templates(),
       });
+    },
+
+    // Admin → Backups: everything the card shows, in one call.
+    'GET /api/admin/backup': (req, res) => {
+      requireAdmin(req);
+      const status = backup.readStatus(dataDir);
+      const snapshots = status && status.snapshots ? status.snapshots : [];
+      send(res, 200, {
+        ...backup.summarize(status),
+        config: backup.config(db().settings.backup),
+        drive: status && status.drive,
+        last: status && status.last,
+        history: status && status.history ? status.history : [],
+        snapshots: { count: snapshots.length, newest: snapshots[0] ? snapshots[0].at : null, oldest: snapshots.length ? snapshots[snapshots.length - 1].at : null },
+        requested: backup.hasRequest(dataDir),
+      });
+    },
+
+    // "Back up now" and "Cancel" leave a request for the backup service.
+    'POST /api/admin/backup/run': (req, res) => {
+      const admin = requireAdmin(req);
+      const { state, message } = backup.summarize(backup.readStatus(dataDir));
+      if (state === 'off' || state === 'stopped') throw new HttpError(409, 'The backup service isn’t running. Check that roost-backup is started.');
+      if (state === 'running') throw new HttpError(409, 'A backup is already running');
+      if (state === 'drive') throw new HttpError(409, message || 'Backup drive not found');
+      backup.writeRequest(dataDir, 'run');
+      record(req, 'settings-changed', { actor: admin.username, detail: 'backup started by hand' });
+      send(res, 202, { ok: true });
+    },
+
+    'POST /api/admin/backup/cancel': (req, res) => {
+      const admin = requireAdmin(req);
+      if (backup.summarize(backup.readStatus(dataDir)).state !== 'running') throw new HttpError(409, 'No backup is running');
+      backup.writeRequest(dataDir, 'cancel');
+      record(req, 'settings-changed', { actor: admin.username, detail: 'backup cancelled' });
+      send(res, 202, { ok: true });
+    },
+
+    // ---------- updating Roost ----------
+    // Admin → Updates. Roost only leaves requests for the roost-updater service
+    // and reads what it reports; it never runs git or Docker itself.
+
+    'GET /api/admin/update': (req, res) => {
+      requireAdmin(req);
+      const summary = selfUpdate.summarize(selfUpdate.readStatus(dataDir));
+      // Write an update's outcome to the activity log, once.
+      const last = summary.last;
+      if (last && last.finishedAt && selfUpdate.lastLogged(dataDir) !== last.finishedAt && !last.nothing) {
+        selfUpdate.markLogged(dataDir, last.finishedAt);
+        record(req, 'settings-changed', {
+          target: 'roost-updater',
+          detail: last.ok
+            ? `Roost updated to ${String(last.to).slice(0, 7)} (${last.count} ${last.count === 1 ? 'change' : 'changes'})`
+            : `Roost update ${last.rolledBack ? 'failed and was rolled back' : 'failed'}: ${last.error}`,
+        });
+      }
+      send(res, 200, { ...summary, requested: selfUpdate.hasRequest(dataDir) });
+    },
+
+    'POST /api/admin/update/check': (req, res) => {
+      requireAdmin(req);
+      const { state } = selfUpdate.summarize(selfUpdate.readStatus(dataDir));
+      if (state === 'off' || state === 'stopped') throw new HttpError(409, 'The updater isn’t running. Check that roost-updater is started.');
+      if (state === 'applying') throw new HttpError(409, 'Roost is being updated right now');
+      selfUpdate.writeRequest(dataDir, 'check');
+      send(res, 202, { ok: true });
+    },
+
+    'POST /api/admin/update/apply': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      // The button asks first; the server insists on the answer too.
+      if (body.confirm !== true) throw new HttpError(400, 'Confirm the update first');
+      const summary = selfUpdate.summarize(selfUpdate.readStatus(dataDir));
+      if (selfUpdate.hasRequest(dataDir) || summary.state === 'applying') throw new HttpError(409, 'An update is already on its way');
+      if (summary.state === 'off' || summary.state === 'stopped') throw new HttpError(409, 'The updater isn’t running. Check that roost-updater is started.');
+      if (summary.state !== 'available') throw new HttpError(409, 'There is nothing new to update to');
+      if (summary.conflicts.length) throw new HttpError(409, `You changed ${summary.conflicts.join(', ')} on the server, and this update changes it too. Move your own settings into docker-compose.override.yml first.`);
+      selfUpdate.writeRequest(dataDir, 'apply');
+      record(req, 'settings-changed', { actor: admin.username, detail: `Roost update started (${summary.behind} ${summary.behind === 1 ? 'change' : 'changes'})` });
+      send(res, 202, { ok: true });
+    },
+
+    // ---------- restoring from a backup ----------
+    // Everything here is admin-only and read-only on the backup drive. Getting
+    // files back never overwrites anything: it is a download, or a new folder
+    // in the person's Nest.
+
+    // Browse a night like a folder tree.
+    'GET /api/admin/backup/browse': async (req, res) => {
+      requireAdmin(req);
+      const q = new URL(req.url, 'http://roost').searchParams;
+      const nights = backups.nights();
+      if (!backupDir || !nights.length) {
+        send(res, 200, { available: false, reason: !backupDir ? 'not-mounted' : 'no-backups', nights: [] });
+        return;
+      }
+      const night = await backups.night(q.get('snapshot') || nights[0].name);
+      const p = restore.cleanPath(q.get('path'));
+      if (!night || p === null || night.kind(p) !== 'folder') throw new HttpError(404, 'That folder isn’t in this backup');
+      const listing = night.list(p);
+      const here = restore.parts(p);
+      // Whose Nest an item would be restored into, when it is in someone's files.
+      const personOf = (segs) => {
+        const o = nestOwner(segs, true);
+        return o ? o.displayName || o.username : null;
+      };
+      const label = (segs) => {
+        // Nest/<username>_<id> shows as the person's name.
+        if (segs[0] === 'Nest' && segs.length === 2) {
+          const owner = nestOwner(segs);
+          return owner ? owner.displayName || owner.username : null;
+        }
+        return null;
+      };
+      send(res, 200, {
+        available: true,
+        nights: nights.map((n) => ({ name: n.name, at: n.at.toISOString() })),
+        snapshot: { name: night.name, files: night.count, bytes: night.bytes },
+        path: here.map((name, i) => ({ name, label: label(here.slice(0, i + 1)) })),
+        folders: listing.folders.map((f) => ({ ...f, label: label([...here, f.name]), restoreFor: personOf([...here, f.name]) })),
+        files: listing.files.map((f) => ({ ...f, restoreFor: personOf([...here, f.name]) })),
+        restoreTo: personOf(here) ? { name: personOf(here) } : null,
+        job: restoreJob,
+      });
+    },
+
+    // A file as it was, or a folder as a zip.
+    'GET /api/admin/backup/download': async (req, res) => {
+      requireAdmin(req);
+      const q = new URL(req.url, 'http://roost').searchParams;
+      const night = await backups.night(q.get('snapshot') || '');
+      const p = restore.cleanPath(q.get('path'));
+      const kind = night && p ? night.kind(p) : null;
+      if (!kind) throw new HttpError(404, 'That isn’t in this backup');
+      const last = p.slice(p.lastIndexOf('/') + 1);
+      if (kind === 'file') {
+        const entry = night.under(p)[0];
+        // gzipped files are stored smaller than they are, so no Content-Length for them
+        const name = last;
+        const headers = { 'Content-Type': 'application/octet-stream', 'Content-Disposition': disposition(name), 'Cache-Control': 'no-store' };
+        if (!entry[4]) headers['Content-Length'] = entry[1];
+        res.writeHead(200, headers);
+        try {
+          await require('stream/promises').pipeline(night.open(entry), res);
+        } catch (err) {
+          console.error('Backup download stopped:', err.message);
+          res.destroy();
+        }
+        return;
+      }
+      const base = p.includes('/') ? p.slice(0, p.lastIndexOf('/') + 1) : '';
+      const files = night.under(p);
+      const plan = zip.plan(files.map((f) => ({ name: f[0].slice(base.length), open: () => night.open(f), size: f[1], mtime: f[2] })));
+      res.writeHead(200, {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': disposition(`${last || 'Roost backup'} (backup ${night.name}).zip`),
+        'Content-Length': plan.total,
+        'Cache-Control': 'no-store',
+      });
+      try {
+        await zip.streamZip(res, plan);
+      } catch (err) {
+        console.error('Backup zip stopped:', err.message);
+        res.destroy();
+      }
+    },
+
+    // Puts a person's files from a backup into a new folder in their Nest.
+    'POST /api/admin/backup/restore': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      if (restoreJob && restoreJob.running) throw new HttpError(409, 'A restore is already running');
+      const night = await backups.night(str(body.snapshot, 40));
+      const p = restore.cleanPath(body.path);
+      const segs = restore.parts(p);
+      const owner = night && p ? nestOwner(segs, true) : null;
+      if (!night || !p || !night.kind(p)) throw new HttpError(404, 'That isn’t in this backup');
+      if (!owner) throw new HttpError(400, 'Only a person’s Nest files can be restored here. Download the rest instead.');
+      // Everything under what was picked, named from the picked item on down;
+      // the whole "files" folder restores its contents straight into the new folder.
+      const entries = night.under(p);
+      const cut = segs.length === 3 ? p.length + 1 : p.length - segs[segs.length - 1].length;
+      const files = entries.map((f) => ({ rel: f[0].slice(cut), size: f[1], mtime: f[2], open: () => night.open(f) }));
+      const folderName = `Restored from backup ${night.name}`;
+      const total = files.reduce((a, f) => a + f.size, 0);
+      // Space is checked before anything is made, so a refusal leaves no trace.
+      nest.checkSpace(owner, total);
+      const job = { running: true, snapshot: night.name, path: p, person: owner.displayName || owner.username, files: 0, total: files.length, bytes: 0, totalBytes: total, folder: null, error: null, startedAt: new Date().toISOString() };
+      restoreJob = job;
+      record(req, 'settings-changed', { actor: admin.username, target: owner.username, detail: `restored ${segs[segs.length - 1]} from backup ${night.name} into ${owner.username}'s Nest` });
+      nest.importFolder(owner, folderName, files, {
+        onFile: (f, n) => { job.files = n; job.bytes += f.size; },
+      }).then((top) => { job.folder = top.name; }).catch((err) => {
+        job.error = err.status ? err.message : `Stopped: ${err.message}`;
+        console.error('Restore from backup failed:', err);
+      }).finally(() => { job.running = false; job.finishedAt = new Date().toISOString(); });
+      send(res, 202, { job });
+    },
+
+    'GET /api/admin/backup/restore': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, { job: restoreJob });
     },
 
     // ---------- setup checklist ----------
@@ -1273,11 +1637,14 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         drives: readDisks(diskList),
         driveHealth: driveHealth.read(),
         dockerOk: !docker.error,
+        restartable: docker.restartable || [],
         secureCookies,
         trustProxy,
         awayBytes: Object.values(traffic.summary().apps).reduce((n, a) => n + a.week, 0),
         tls: certs.status(),
         ticked: db().settings.setupTicked || [],
+        backup: backup.readStatus(dataDir),
+        update: selfUpdate.summarize(selfUpdate.readStatus(dataDir)),
       }));
     },
 
@@ -1380,7 +1747,17 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       const admin = requireAdmin(req);
       const body = await readJson(req);
       const before = new Map(db().apps.map((a) => [a.id, a]));
-      db().apps = cleanApps(body.apps);
+      const apps = cleanApps(body.apps);
+      // A schedule for an app Roost can't restart would only fail every night.
+      const docker = apps.some((a) => a.restartSchedule) ? await listContainers(dockerHost, probeTimeoutMs) : { error: 'skipped' };
+      if (!docker.error) {
+        for (const a of apps) {
+          const same = JSON.stringify(a.restartSchedule) === JSON.stringify((before.get(a.id) || {}).restartSchedule);
+          const ok = containersFor(a, docker.containers).some((c) => docker.restartable.includes(c.name) && c.name !== roostContainer);
+          if (a.restartSchedule && !same && !ok) throw new HttpError(400, `${a.name} isn't on the restart list, so it can't restart on a schedule (see Admin → Setup)`);
+        }
+      }
+      db().apps = apps;
       const after = new Set(db().apps.map((a) => a.id));
       const changes = [
         ...db().apps.filter((a) => !before.has(a.id)).map((a) => `added ${a.name}`),
@@ -1429,7 +1806,23 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         db().settings.mail = cleanMail(body.mail, mailSettings());
         changes.push(`email ${db().settings.mail ? `via ${db().settings.mail.host}` : 'turned off'}`);
       }
+      let tellBackups = false;
+      if (body.backup !== undefined) {
+        let next;
+        try {
+          next = backup.cleanConfig(body.backup);
+        } catch (err) {
+          throw new HttpError(400, err.message);
+        }
+        if (JSON.stringify(next) !== JSON.stringify(backup.config(db().settings.backup))) {
+          changes.push(`backups ${next.time}, keep ${next.keepDaily} nightly + ${next.keepWeekly} weekly${next.capGb ? `, up to ${next.capGb} GB` : ''}`);
+          tellBackups = true;
+        }
+        db().settings.backup = next;
+      }
       store.save();
+      // The backup service picks the new settings up within a few seconds.
+      if (tellBackups) backup.writeRequest(dataDir, 'reload');
       if (changes.length) record(req, 'settings-changed', { actor: admin.username, detail: changes.join(', ') });
       send(res, 200, { settings: settingsView() });
     },
@@ -1605,7 +1998,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/invites|admin\/storage-requests|admin\/setup|storage\/users|links|me\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/setup|storage\/users|links|me\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }
@@ -1676,11 +2069,11 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       } else if (pathname.startsWith('/api/nest/')) {
         const user = requireUser(req);
         if (!visibleApps(db(), user).some((a) => a.id === 'nest')) throw new HttpError(403, 'You don’t have access to Nest');
-        await nest.handle(req, res, user, pathname, searchParams);
+        await nest.handle(req, res, spaceOwner(user, searchParams), pathname, searchParams);
       } else if (pathname.startsWith('/api/glint/')) {
         const user = requireUser(req);
         if (!visibleApps(db(), user).some((a) => a.id === 'glint')) throw new HttpError(403, 'You don’t have access to Glint');
-        await glint.handle(req, res, user, pathname, searchParams);
+        await glint.handle(req, res, spaceOwner(user, searchParams), pathname, searchParams);
       } else if (pathname.startsWith('/api/')) {
         const found = route(req.method, pathname);
         if (!found) throw new HttpError(404, 'Not found');
@@ -1726,6 +2119,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     clearInterval(sweepTimer);
     clearInterval(uptimeTimer);
     clearInterval(uptimeSaveTimer);
+    clearInterval(scheduleTimer);
     clearTimeout(uptimeSoon);
     events.stop();
     uptime.save();
@@ -1761,7 +2155,7 @@ if (require.main === module) {
   const smartDir = process.env.SMART_DIR || '';
   const httpsPort = Number(process.env.HTTPS_PORT) || 8443;
   const staging = process.env.ROOST_ACME_STAGING === 'true';
-  const server = createServer({ dataDir, nestDir, secureCookies, disks, dockerHost, roostContainer, smartDir, appToken, trustProxy, tls: { staging } });
+  const server = createServer({ dataDir, nestDir, backupDir: process.env.BACKUP_DIR || '', secureCookies, disks, dockerHost, roostContainer, smartDir, appToken, trustProxy, tls: { staging } });
   server.listen(port, () => {
     console.log(`Roost is running on http://localhost:${port} (data in ${dataDir})`);
   });

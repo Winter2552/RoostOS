@@ -21,7 +21,7 @@ The steps live in `src/setup.js`, which is the single tally of what setting up R
 
 - **First run** creates the admin account.
 - **Dashboard**: greeting, live server stats (uptime, memory, load, free space on the data drive) and a card for every app you have access to, each showing whether the app is reachable.
-- **Status**: refreshes every 5 seconds. First, each app (and Roost itself) with its container state from Docker: running, stopped, restarting, unhealthy, how long it has been up and how often it restarted, plus whether it answers on its link. Admins also see every other container. Below that, server health: uptime, CPU, memory and free space on each drive. Each app also shows a 30-day uptime strip, one bar per day (tap a day to see when it was down). Roost keeps this itself in `uptime.json` next to its data, starting from the day it is installed; days Roost was off show as no data. Problems are listed at the top.
+- **Status**: refreshes every 5 seconds. First, each app (and Roost itself) with its container state from Docker: running, stopped, restarting, unhealthy, how long it has been up and how often it restarted, plus whether it answers on its link. Admins also see every other container, and a **Restart** button on apps they're allowed to restart (it asks first, then waits until the app is back up). Below that, server health: uptime, CPU, memory and free space on each drive. Each app also shows a 30-day uptime strip, one bar per day (tap a day to see when it was down). Roost keeps this itself in `uptime.json` next to its data, starting from the day it is installed; days Roost was off show as no data. Problems are listed at the top.
 - **Profile**: change your display name and password, turn two-step sign-in on or off, see where you're signed in and sign other devices out, see your storage use and limit, and ask an admin for more space.
 - **Admin**: edit the app list and links, invite or remove users, make password reset links, choose which apps each user sees and how much storage they get, approve or decline storage requests, connect Jellyfin sign-in, rename the server, and set up HTTPS.
 
@@ -134,6 +134,33 @@ docker restart roost
 
 Recovery codes and trusted devices are stored only as hashes. The authenticator secret has to be stored as-is in `roost.json`, so keep that file as private as the server itself.
 
+## Backups
+
+Every night (at 3:00 unless you change it), a second container (`roost-backup`, built from the same image) backs up Nest, every app's settings and Roost's own data to a USB SSD plugged into the server. Films and shows aren't backed up. The setup checklist walks through plugging the drive in.
+
+- Each night is a dated folder on the drive (`Roost Backups/2026-10-08 0300/`) that looks like a full copy. Unchanged files are hard links to the night before, so they take no space and no time; identical files are stored once; documents, settings and databases are stored gzipped (`.gz` added to the name).
+- By default it keeps the newest backup of each of the last 7 days and of each of the last 4 weeks.
+- **Admin → Backups** sets the time of day, how many nightly and weekly backups to keep and an optional drive size limit (the oldest backups go first). It also shows the drive's space, the last 14 runs, and has **Back up now** and **Cancel**. Roost passes these to the backup container through a small request file in its data folder.
+- Nest's database is copied with SQLite's `VACUUM INTO`, so the copy is consistent while Nest is running. Other files that change mid-copy are read again.
+- Roost never backs up onto the drive the data is on: if the SSD is unplugged, backups wait and the dashboard says "Backup drive not found".
+- The drive must be a Linux format (ext4) for hard links. ZimaOS Storage can format it.
+- The dashboard shows when the last backup finished, and turns amber after two missed nights and red when a backup failed or the drive is missing.
+
+### Getting files back
+
+**Admin → Backups → Get files back** browses any backup like a folder. For a file or folder you can **Download** it (folders come as a .zip) or **Restore to Nest** (inside Nest folders only). A restore never overwrites: it makes a new folder called "Restored from backup 2026-10-08 0300" in that person's Nest and puts the files there, with their original dates. It checks the person's storage limit first and refuses before anything is made if it won't fit. Nothing already in Nest is changed. To put a Nest file back where it was, move it out of that folder yourself.
+
+### If the server itself is gone
+
+Reinstall Roost, plug the backup drive in, and add a folder to the `roost-backup` service in `docker-compose.yml` to receive the files (the `/DATA/restored:/restore` line is there, commented out). Then:
+
+```sh
+docker exec -it roost-backup node src/restore-cli.js list
+docker exec -it roost-backup node src/restore-cli.js restore "2026-10-08 0300" /restore
+```
+
+You can pass a path inside the backup after the output folder (for example `Nest`) to get back only that part. The files land in `/DATA/restored` as `Nest/`, `Roost/` and `App settings/`; stop Roost, move each folder to where it came from (Nest to `/DATA/roost-nest`, Roost to `/DATA/AppData/roost`, App settings to `/DATA/AppData`), and start it again. The command refuses a folder that already has files in it. With `--replace` it moves the existing folder aside (to `<folder>.before-restore-<time>`, never deleted) after you type `restore` to confirm.
+
 ## Saving home upload
 
 Home upload is slow (about 18 Mb/s), so Roost sends as little as it can to people away from home, with nothing outside to set up:
@@ -165,6 +192,18 @@ Connect Jellyfin under **Admin → Jellyfin sign-in**: its address as Roost reac
 - **Jellyfin's own apps** (TV, phone) sign in with the same username and password once per device.
 - If Jellyfin is down or the link is off, Roost works as before and the card opens Jellyfin's own address.
 
+## Updating Roost
+
+**Admin → Updates** shows what's new on GitHub and updates Roost with one button. Nothing updates by itself: Roost looks at GitHub when the updater starts and every 12 hours (one small `git fetch`), or when you press **Check now**, and lists the changes waiting. **Update Roost** asks first, then:
+
+1. brings in the new code (a fast-forward only, so it never overwrites anything),
+2. builds the new version while the old one keeps running (a version that won't build changes nothing),
+3. restarts Roost and its backup service, and waits for Roost to report healthy.
+
+If the new version doesn't start, the previous image and code are put back and the card says why (with the last lines of Roost's log under "Technical details"). Updates are written to Admin → Activity. An update is refused while a backup is running, and when the server's copy of the code has changes of its own that the update also changes: keep your own compose edits (drive folders, time zone) in `docker-compose.override.yml` next to `docker-compose.yml`, which Docker merges in and git never touches.
+
+It's done by the `roost-updater` service (`updater/`, built from this repo, no outside image apart from Node and Alpine's `git` and `docker` packages). It has no web port: the Roost web app leaves a small request file in the data folder and reads the updater's report from another, so Roost itself never touches Docker or git. The updater does hold the Docker socket, so it only runs the fixed steps in `updater/update-service.js`, and only fetches this project's own repository. Point its `/src` line at the folder holding Roost's files; that folder must be a git copy (`git clone https://github.com/Winter2552/RoostOS`), and Roost must have been started from it with `docker compose up -d --build`, not imported by ZimaOS under another name (the updater says so if it was). When an update changes the compose file or the updater itself, the card says so: Roost and its backups are updated, and the rest needs one `docker compose up -d --build` in that folder.
+
 ## Stack
 
 Plain Node.js (22.13+) with no npm dependencies, and a vanilla HTML/CSS/JS front end with no build step. Accounts and the app list live in one JSON file (`/data/roost.json`); Nest's folder details live in SQLite (`/data/nest.db`, using Node's built-in `node:sqlite`). Passwords are hashed with scrypt; sessions are HttpOnly, SameSite=Strict cookies held in memory, so a restart signs everyone out.
@@ -178,7 +217,7 @@ Plain Node.js (22.13+) with no npm dependencies, and a vanilla HTML/CSS/JS front
 
 Data is kept in `/DATA/AppData/roost` on the host, and Nest's files in `/DATA/roost-nest`. Before storing real files, change that `/DATA/roost-nest` mount in `docker-compose.yml` to a folder on the 3 TB data drive. For the status page to show the data drive, change the second `/DATA` mount in `docker-compose.yml` to the folder ZimaOS mounted the 3 TB drive on; `ROOST_DISKS` sets the labels.
 
-Container status comes through the `docker-proxy` service in the compose file, which only lets Roost read the container list (it can't start, stop or change anything). Apps are matched to containers by name; if a container is named differently, put its name in the app's **Container** field under Admin. Without Docker access the status page falls back to checking each app's link and says so.
+Container status comes through `roost-docker`, Roost's own small Docker helper (`src/docker-helper.js`, built from the same image). It lets Roost read the container list and restart only the containers named in its `ROOST_RESTARTABLE` setting; it refuses starting, stopping, removing, exec and everything else, and has no port open outside. Roost never restarts itself. Each restart shows up under Admin → Activity → Apps. An app on the list can also restart itself to stay fresh: under Admin → Apps, set **Auto-restart** to every day or every week at a time on your clock (daylight saving is handled). A schedule is refused for an app that isn't on the list, skips an app restarted in the last 10 minutes, and isn't made up if Roost was off at that time; scheduled restarts appear in the activity log as "schedule". Apps are matched to containers by name; if a container is named differently, put its name in the app's **Container** field under Admin. Without Docker access the status page falls back to checking each app's link and says so. Set `SECURE_COOKIES=true` only when Roost is served over HTTPS.
 
 Drive health (temperature, bad sectors, SSD wear) comes from the small `roost-smart` service, built from `smart/`. Once an hour it reads each drive's SMART data with `smartctl` and leaves it in a shared volume for Roost; it has no network, and it leaves sleeping drives asleep. It is given only the drives listed under its `devices:` (the SSD to start with). When the 3 TB drive is in, remove the `#` in front of its `/dev/sdb` line and redeploy. ZimaOS shows each drive's name under Storage.
 
