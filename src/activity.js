@@ -33,6 +33,8 @@ const KINDS = {
   'storage-declined': 'storage',
   'apps-changed': 'settings',
   'settings-changed': 'settings',
+  'notice-posted': 'settings',
+  'notice-cleared': 'settings',
 };
 const FILTERS = ['sign-ins', 'failed', 'users', 'storage', 'settings'];
 
