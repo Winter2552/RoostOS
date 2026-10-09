@@ -90,7 +90,9 @@ class Assets {
     const headers = {
       'Content-Type': asset.type,
       ETag: etag,
-      'Cache-Control': version && version === asset.hash ? `public, max-age=${YEAR}, immutable` : 'no-cache',
+      // App icons rarely change, so they are kept for a week without asking.
+      'Cache-Control': version && version === asset.hash ? `public, max-age=${YEAR}, immutable`
+        : rel.startsWith('/icons/') ? 'public, max-age=604800' : 'no-cache',
     };
     if (asset.compress) headers.Vary = 'Accept-Encoding';
     if (req.headers['if-none-match'] === etag) {

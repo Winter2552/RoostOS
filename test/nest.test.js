@@ -162,6 +162,7 @@ test('the storage limit is enforced', async () => {
   const r = await call('POST', '/api/nest/uploads', { parent: 'root', name: 'huge.iso', size: 2 * 1024 ** 3 }, sam);
   assert.equal(r.status, 413);
   assert.match(r.body.error, /Not enough space/);
+  assert.equal(r.body.code, 'over-limit');
 });
 
 test('rename, move and copy', async () => {
