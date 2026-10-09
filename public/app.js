@@ -35,7 +35,7 @@ function icon(name, cls = 'icon-tile') {
   return span;
 }
 
-async function api(method, url, body) {
+async function api(method, url, body, signal) {
   let res;
   try {
     res = await fetch(url, {
@@ -43,8 +43,10 @@ async function api(method, url, body) {
       headers: body ? { 'Content-Type': 'application/json' } : {},
       body: body ? JSON.stringify(body) : undefined,
       credentials: 'same-origin',
+      signal,
     });
-  } catch {
+  } catch (err) {
+    if (err.name === 'AbortError') throw err;
     connectionLost();
     throw new Error("Can't reach the server");
   }
@@ -812,8 +814,9 @@ $('#logout').addEventListener('click', async () => {
 // ---------- apps ----------
 
 async function loadApps() {
-  const { apps } = await api('GET', '/api/apps');
+  const { apps, searchable } = await api('GET', '/api/apps');
   state.apps = apps;
+  window.searchSetup(searchable || []);
   renderAppBar();
   renderApps();
   loadWatching(true);
