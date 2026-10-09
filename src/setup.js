@@ -13,6 +13,8 @@
 //   action              where in Roost to do it: { label, view, focus, field }
 //                       (focus is the id of the form to jump to, field the input)
 //   optional            true for nice-to-haves (not counted in progress)
+//   covers              the environment variables and saved settings this step
+//                       is about; test/setup.test.js fails if one in src/ has no step
 //   check(ctx)          true when done; ctx is built by the server
 
 const fs = require('fs');
@@ -40,6 +42,7 @@ const STEPS = [
       'In Roost\'s compose file, point the Nest volume at a folder on it, e.g. /media/Data/roost-nest:/nest.',
       'Redeploy Roost from the ZimaOS app settings.',
     ],
+    covers: ['NEST_DIR'],
     check: (ctx) => driveSize(ctx.nestDir) >= TB,
   },
   {
@@ -52,6 +55,7 @@ const STEPS = [
       'Redeploy Roost.',
     ],
     action: { label: 'Open status', view: 'status' },
+    covers: ['ROOST_DISKS'],
     check: (ctx) => ctx.drives.filter((d) => !d.missing).length >= 2,
   },
   {
@@ -64,6 +68,7 @@ const STEPS = [
       'Redeploy Roost.',
     ],
     action: { label: 'Open status', view: 'status' },
+    covers: ['DOCKER_HOST'],
     check: (ctx) => ctx.dockerOk,
   },
   {
@@ -77,6 +82,7 @@ const STEPS = [
       'In Roost\'s compose file, point the roost-backup service\'s /backup line at it, e.g. /media/Backup:/backup, and set TZ to your time zone so backups run at 3:00 your time.',
       'Redeploy Roost. This ticks off once Roost has found the drive.',
     ],
+    covers: ['BACKUP_DIR', 'APPDATA_DIR', 'BACKUP_TIME', 'backup'],
     check: (ctx) => Boolean(ctx.backup && ctx.backup.drive && ctx.backup.drive.ok),
   },
   {
@@ -111,23 +117,44 @@ const STEPS = [
     why: 'Invite and reset links use it, so they open from anywhere.',
     how: [
       'Buy the domain (roostos.network) and add it to a free Cloudflare account.',
-      'In Cloudflare Zero Trust → Networks → Tunnels, create a tunnel and add its cloudflared container on ZimaOS.',
-      'In the tunnel, add a public hostname pointing roostos.network at http://roost:8080 (or the server\'s address and port 8080).',
+      'Point the domain at your home connection (the remote access step will walk through this once it is built).',
       'Under Admin → Server, set Public address to https://roostos.network.',
     ],
     action: { label: 'Set address', view: 'admin', focus: 'settings-form', field: 'publicUrl' },
+    covers: ['publicUrl'],
     check: (ctx) => Boolean(ctx.db.settings.publicUrl),
   },
   {
-    id: 'behind-tunnel',
+    id: 'behind-proxy',
     group: 'Reach it from anywhere',
-    title: 'Tell Roost it is behind the tunnel',
-    why: 'Sign-in cookies only travel over HTTPS, and the activity log shows visitors\' real addresses.',
+    title: 'Behind a tunnel or proxy? Tell Roost',
+    why: 'Sign-in cookies stay on HTTPS and the activity log shows visitors\' real addresses. Skip this if Roost answers on its own address.',
     how: [
-      'In Roost\'s compose file, set SECURE_COOKIES to "true" and BEHIND_PROXY to "true".',
-      'Redeploy Roost. From then on, open it through https://roostos.network rather than plain http.',
+      'Only if something else (a tunnel or reverse proxy) sits in front of Roost: in Roost\'s compose file, set SECURE_COOKIES to "true" and BEHIND_PROXY to "true".',
+      'Redeploy Roost. Leave BEHIND_PROXY off otherwise: without a proxy, visitors could fake their address.',
     ],
+    optional: true,
+    covers: ['SECURE_COOKIES', 'BEHIND_PROXY'],
     check: (ctx) => ctx.secureCookies && ctx.trustProxy,
+  },
+  {
+    id: 'https',
+    group: 'Reach it from anywhere',
+    title: 'Get a certificate for HTTPS',
+    why: 'Roost opens securely at home and away, with no browser warnings. The installable app needs it.',
+    how: [
+      'Make sure roostos.network is on your Cloudflare account (the free plan is enough).',
+      'In Cloudflare, go to My Profile → API Tokens → Create Token, pick "Edit zone DNS" and limit it to roostos.network.',
+      'Under Admin → Secure connection, enter roostos.network, paste the token and press Save. Roost gets the certificate and renews it itself.',
+      'Keep the 443:8443 port line in Roost\'s compose file (it is there by default).',
+    ],
+    action: { label: 'Set up HTTPS', view: 'admin', focus: 'tls-form', field: 'domain' },
+    // Roost works on plain HTTP without it, so it doesn't hold up the count.
+    optional: true,
+    // Settings and env vars this step is about.
+    covers: ['tls', 'HTTPS_PORT', 'ROOST_ACME_STAGING'],
+    // A certificate in use counts, even while a renewal is retrying.
+    check: (ctx) => ['active', 'warning'].includes(ctx.tls.state),
   },
 
   // ---------- email ----------
@@ -143,6 +170,7 @@ const STEPS = [
       'Press "Send me a test email" and check it arrived.',
     ],
     action: { label: 'Set up email', view: 'admin', focus: 'mail-form' },
+    covers: ['mail'],
     check: (ctx) => Boolean(ctx.db.settings.mail && ctx.db.settings.mail.verifiedAt),
   },
   {
@@ -171,6 +199,20 @@ const STEPS = [
 
   // ---------- people ----------
   {
+    id: 'two-step',
+    group: 'People',
+    title: 'Use two-step sign-in',
+    why: 'A stolen password alone can\'t get into Roost once it is reachable from outside.',
+    how: [
+      'On Profile, under Two-step sign-in, press Set up and scan the code with an authenticator app.',
+      'Keep the recovery codes somewhere safe.',
+      'Under Admin → Server, keep "Admins must use two-step sign-in" ticked.',
+    ],
+    action: { label: 'Open profile', view: 'profile', focus: 'two-step-panel' },
+    covers: ['adminsNeedTwoStep'],
+    check: (ctx) => Boolean(ctx.admin.twoStep) && ctx.db.settings.adminsNeedTwoStep !== false,
+  },
+  {
     id: 'invite',
     group: 'People',
     title: 'Invite someone',
@@ -179,7 +221,49 @@ const STEPS = [
     action: { label: 'Make an invite', view: 'admin', focus: 'invite-form' },
     check: (ctx) => ctx.db.users.length > 1 || (ctx.db.links || []).some((l) => l.kind === 'invite'),
   },
+  {
+    id: 'install-app',
+    group: 'People',
+    title: 'Put Roost on phones and PCs',
+    why: 'Roost opens like an app, with the bird icon, from the home screen, Start menu or taskbar.',
+    how: [
+      'iPhone: open Roost in Safari, tap Share, then Add to Home Screen.',
+      'Android: open Roost in Chrome, tap ⋮, then Install app. On a plain http home address it is Add to home screen and opens in Chrome.',
+      'Windows: open Roost in Edge or Chrome and press the install icon at the right of the address bar. It shows once Roost has its https web address.',
+    ],
+    optional: true,
+    // Happens on each device, so Roost can't see it; tick it off yourself.
+    manual: true,
+    check: (ctx) => ctx.ticked.includes('install-app'),
+  },
+  {
+    id: 'guest-pass',
+    group: 'People',
+    title: 'Give a visitor a guest pass',
+    why: 'Someone staying a while can use Jellyfin (or any app you pick) and is turned away on the day you choose.',
+    how: [
+      'Under Admin → Invite someone, set Role to Guest and pick when the pass ends.',
+      'Share the link. They pick a username and password and see only their apps.',
+      'If they use Jellyfin, give them a Jellyfin account too, and switch it off in Jellyfin when the pass ends.',
+      'Under Admin → Users, "Add a week" extends a pass and "End now" signs them out straight away.',
+    ],
+    action: { label: 'Make a guest pass', view: 'admin', focus: 'invite-form' },
+    optional: true,
+    check: (ctx) => ctx.db.users.some((u) => u.role === 'guest') || (ctx.db.links || []).some((l) => l.role === 'guest'),
+  },
 ];
+
+// Settings with no step, and why. Anything else a change adds needs a step above.
+const NO_STEP = {
+  PORT: 'fixed by the compose file',
+  DATA_DIR: 'fixed by the compose file',
+  ROOST_CONTAINER: 'only if the Roost container is renamed',
+  ROOST_APP_TOKEN: 'only for an outside storage app; Nest is built in',
+  serverName: 'works as "Roost" until renamed under Admin → Server',
+  defaultLimitGb: 'starts at 50 GB, changed under Admin → Server',
+  setupTicked: 'this checklist\'s own record',
+  notice: 'optional, posted under Admin → Notice',
+};
 
 const MANUAL = STEPS.filter((s) => s.manual).map((s) => s.id);
 
@@ -197,4 +281,4 @@ async function checklist(ctx) {
   return { steps, done: required.filter((s) => s.done).length, total: required.length };
 }
 
-module.exports = { STEPS, MANUAL, checklist };
+module.exports = { STEPS, NO_STEP, MANUAL, checklist };
