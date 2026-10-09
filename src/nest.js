@@ -542,14 +542,25 @@ class Nest {
     } catch {
       throw new HttpError(404, 'That file is missing from the drive');
     }
+    // A device that already has this exact file gets a tiny "not changed"
+    // instead of the whole file again: saves home upload when you're away.
+    const etag = `"${n.id}-${stat.size}-${Math.floor(stat.mtimeMs)}"`;
     const headers = {
       'Content-Type': 'application/octet-stream',
       'Content-Disposition': disposition(n.name),
       'Accept-Ranges': 'bytes',
       'Cache-Control': 'private, no-cache',
+      ETag: etag,
+      'Last-Modified': new Date(stat.mtimeMs).toUTCString(),
     };
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, headers);
+      return res.end();
+    }
     // One byte range, so interrupted downloads can carry on.
-    const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+    // A resumed download of a file that has since changed starts over.
+    const ifRange = req.headers['if-range'];
+    const range = ifRange && ifRange !== etag ? null : /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
     let start = 0;
     let end = stat.size - 1;
     let status = 200;
