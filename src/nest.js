@@ -160,6 +160,7 @@ class Nest {
       staleUploads: q('SELECT id, owner FROM uploads WHERE created < ?'),
     };
     this.pages = new Map();
+    this.finds = new Map();
   }
 
   close() {
@@ -266,6 +267,31 @@ class Nest {
       more: rows.length > PAGE,
       total: this.q.count.get(user.id, folder.id).n,
       storage: this.storage(user),
+    };
+  }
+
+  // ---------- search ----------
+
+  // Items (not in the trash) whose names hold every word typed, in any case.
+  // Names starting with the first word come first, then the newest.
+  search(user, q, limit = 20) {
+    const words = String(q).split(/\s+/).filter(Boolean).slice(0, 6);
+    if (!words.length) return { items: [], more: false };
+    if (!this.finds.has(words.length)) {
+      this.finds.set(words.length, this.db.prepare(`SELECT * FROM nodes WHERE owner = ? AND trash_root IS NULL
+        ${words.map(() => "AND name LIKE ? ESCAPE '\\'").join(' ')}
+        ORDER BY name LIKE ? ESCAPE '\\' DESC, modified DESC LIMIT ?`));
+    }
+    const like = (w) => w.replace(/[\\%_]/g, (c) => `\\${c}`);
+    const rows = this.finds.get(words.length).all(user.id, ...words.map((w) => `%${like(w)}%`), `${like(words[0])}%`, limit + 1);
+    const places = new Map();
+    const where = (parent) => {
+      if (!places.has(parent)) places.set(parent, ['My Drive', ...(parent ? this.q.chain.all(parent).map((c) => c.name) : [])].join(' / '));
+      return places.get(parent);
+    };
+    return {
+      items: rows.slice(0, limit).map((n) => ({ ...item(n), parent: n.parent || 'root', where: where(n.parent) })),
+      more: rows.length > limit,
     };
   }
 
