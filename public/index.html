@@ -6,6 +6,12 @@
   <meta name="theme-color" content="#0a0a0a">
   <title>Roost</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <!-- Installable app: Android and Windows read the manifest, iPhone the apple-* lines. -->
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <!-- Fonts load when the server has internet; the page falls back to system fonts otherwise. -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -13,6 +19,14 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <!-- Shown when the server stops answering (public/app.js, "connection") -->
+  <div id="conn-banner" class="conn-banner hidden" role="status" aria-live="polite">
+    <div class="conn-text">
+      <strong id="conn-title"></strong>
+      <span id="conn-why" class="muted"></span>
+    </div>
+    <button class="btn small ghost" type="button" id="conn-retry">Try again</button>
+  </div>
   <!-- Setup and sign-in -->
   <main id="welcome" class="welcome hidden">
     <section class="card welcome-card">
@@ -107,7 +121,7 @@
         </button>
         <div class="account-menu hidden" id="account-menu" role="menu" aria-labelledby="account-btn">
           <div class="menu-head"><b id="who-name"></b><span class="mono muted" id="who-role"></span></div>
-          <a role="menuitem" href="#/status" data-view="status">Status</a>
+          <a role="menuitem" href="#/status" data-view="status" class="member-only">Status</a>
           <a role="menuitem" href="#/profile" data-view="profile">Profile</a>
           <a role="menuitem" href="#/admin" data-view="admin" class="admin-only">Admin</a>
           <button role="menuitem" type="button" id="logout">Sign out</button>
@@ -117,21 +131,27 @@
 
     <!-- Apps view -->
     <section id="view-apps">
+      <div class="notice hidden" id="notice" role="status">
+        <span class="notice-label mono">Notice</span>
+        <p class="notice-text" id="notice-text"></p>
+        <button class="notice-close" type="button" id="notice-close" aria-label="Hide this notice">×</button>
+      </div>
       <div class="hero">
         <div class="mono muted" id="greeting">Hello</div>
         <h1>Welcome home, <span id="hero-name"></span></h1>
-        <div class="stats mono">
+        <div class="stats mono member-only">
           <div class="stat">Uptime<b id="stat-uptime">—</b></div>
           <div class="stat">Memory<b id="stat-mem">—</b></div>
           <div class="stat">Load<b id="stat-load">—</b></div>
           <div class="stat">Storage<b id="stat-disk">—</b></div>
         </div>
-        <a class="more-link mono" href="#/status">Server status →</a>
+        <a class="more-link mono member-only" href="#/status">Server status →</a>
         <a class="more-link mono setup-nudge hidden" id="setup-nudge" href="#/admin"></a>
       </div>
       <div class="section">
         <div class="section-head">
           <h2>Your apps</h2>
+          <div class="arrange-actions" id="arrange-actions"></div>
           <span class="mono muted" id="clock"></span>
         </div>
         <div class="apps" id="apps"></div>
@@ -149,6 +169,7 @@
         <div class="nest-storage">
           <div class="meter" aria-hidden="true"><i id="nest-meter"></i></div>
           <span class="mono muted" id="nest-used"></span>
+          <a class="link-btn mono hidden" id="nest-more"></a>
         </div>
       </aside>
       <div class="nest-main" id="nest-main">
@@ -222,10 +243,11 @@
         <div class="row"><button class="btn" type="submit">Save</button></div>
         <div class="msg" role="status"></div>
       </form>
-      <div class="card panel" id="storage-panel">
+      <div class="card panel member-only" id="storage-panel">
         <h3>Storage</h3><span class="mono muted">Space for your files and photos in Nest and Glint</span>
         <div class="meter" aria-hidden="true"><div class="meter-fill" id="storage-fill"></div></div>
         <div class="meter-label"><b id="storage-used">—</b><span class="mono muted" id="storage-limit"></span></div>
+        <div class="usage-key hidden" id="storage-key"></div>
         <form id="storage-request-form">
           <div class="form-grid">
             <div class="field"><span>How much do you need?</span><div id="request-picker"></div></div>
@@ -288,12 +310,36 @@
         <div id="storage-requests-admin"></div>
       </div>
 
+      <form class="card panel" id="notice-form">
+        <h3>Notice</h3><span class="mono muted">A short message at the top of everyone's dashboard, e.g. for maintenance</span>
+        <div class="form-grid">
+          <label class="field"><span>Message <b class="notice-count" id="notice-count">0 / 200</b></span><input type="text" name="text" maxlength="200" placeholder="Server maintenance tonight at 10pm"></label>
+          <label class="field"><span>Show until</span><select name="until">
+            <option value="today">End of today</option>
+            <option value="morning">Tomorrow morning (8:00)</option>
+            <option value="day">24 hours</option>
+            <option value="week">1 week</option>
+            <option value="">Until I clear it</option>
+          </select></label>
+        </div>
+        <div class="notice notice-preview hidden" id="notice-preview" aria-hidden="true">
+          <span class="notice-label mono">Notice</span><p class="notice-text"></p>
+        </div>
+        <p class="mono muted notice-now" id="notice-now">No notice showing</p>
+        <div class="row">
+          <button class="btn" type="submit">Post notice</button>
+          <button class="btn ghost small hidden" type="button" id="notice-clear">Clear</button>
+        </div>
+        <div class="msg" role="status"></div>
+      </form>
+
       <form class="card panel" id="apps-form">
         <h3>Apps</h3>
         <span class="mono muted">Use {host} in a link to mean "the address you opened Roost on", e.g. http://{host}:8096</span>
         <div id="apps-editor"></div>
+        <div class="app-picker hidden" id="app-picker" aria-live="polite"></div>
         <div class="row">
-          <button class="btn ghost small" type="button" id="add-app">+ Add app</button>
+          <button class="btn ghost small" type="button" id="add-app" aria-expanded="false" aria-controls="app-picker">+ Add app</button>
           <button class="btn" type="submit">Save apps</button>
         </div>
         <div class="msg" role="status"></div>
@@ -305,11 +351,14 @@
       </div>
 
       <form class="card panel" id="invite-form">
-        <h3>Invite someone</h3><span class="mono muted">Send them a link. They pick their own username and password. Works once, for 7 days.</span>
+        <h3>Invite someone</h3><span class="mono muted">Send them a link. They pick their own username and password. Works once, for 7 days. A guest pass stops working on the day you pick.</span>
         <div class="form-grid">
           <label class="field"><span>Who it's for (only you see this)</span><input type="text" name="label" maxlength="60" placeholder="e.g. Mum"></label>
           <label class="field mail-only"><span>Email it to (optional)</span><input type="email" name="email" maxlength="254" autocapitalize="none" spellcheck="false" placeholder="mum@example.com"></label>
-          <label class="field"><span>Role</span><select name="role"><option value="user">User</option><option value="admin">Admin</option></select></label>
+          <label class="field"><span>Role</span><select name="role"><option value="user">User</option><option value="guest">Guest</option><option value="admin">Admin</option></select></label>
+          <div class="field hidden" id="guest-until-field"><span>Guest pass ends</span>
+            <div class="row" style="margin:0"><select name="guestFor"><option value="1">After 1 day</option><option value="7" selected>After 1 week</option><option value="30">After 1 month</option><option value="date">On a date…</option></select>
+            <input type="date" name="guestDate" class="hidden" aria-label="Last day of the guest pass"></div></div>
           <div class="field"><span>Storage limit</span><div id="new-user-picker"></div></div>
         </div>
         <div class="row" id="invite-apps-row"><span class="mono muted">Apps</span><div class="checks" id="new-user-apps"></div></div>
@@ -331,6 +380,23 @@
         <div class="msg" role="status"></div>
       </form>
 
+      <form class="card panel" id="tls-form">
+        <h3>Secure connection</h3><span class="mono muted">HTTPS for your domain and every name under it, renewed automatically</span>
+        <p class="tls-state" id="tls-state"><span class="dot"></span><span>Checking…</span></p>
+        <p class="mono muted tls-detail" id="tls-detail"></p>
+        <div class="form-grid">
+          <label class="field"><span>Domain</span><input type="text" name="domain" placeholder="roostos.network" autocapitalize="none" spellcheck="false" required></label>
+          <label class="field"><span>Cloudflare API token</span><input type="password" name="token" autocomplete="off" spellcheck="false"></label>
+          <label class="field"><span>Email (optional)</span><input type="email" name="email" placeholder="For Let's Encrypt notices" autocapitalize="none"></label>
+        </div>
+        <p class="mono muted tls-help">Make the token in Cloudflare under My Profile → API Tokens → Create Token, using the "Edit zone DNS" template limited to this domain. Roost keeps it on the server and never shows it again.</p>
+        <div class="row">
+          <button class="btn" type="submit" id="tls-save">Save and get certificate</button>
+          <button class="btn ghost small hidden" type="button" id="tls-renew">Renew now</button>
+          <button class="btn danger small hidden" type="button" id="tls-off">Turn off</button>
+        </div>
+        <div class="msg" role="status"></div>
+      </form>
       <form class="card panel" id="mail-form">
         <h3>Email</h3><span class="mono muted">For "Forgot password?" and emailed invites. Roost hands mail to a relay such as Resend or Brevo; see the README.</span>
         <div class="form-grid">
