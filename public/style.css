@@ -728,6 +728,7 @@ a.btn { text-decoration: none; text-align: center; }
 .nest-crumbs h2, .nest-crumbs .crumb { font-size: 28px; font-weight: 500; letter-spacing: -0.03em; margin: 0; }
 .nest-crumbs .crumb { color: var(--muted); text-decoration: none; border-radius: 10px; padding: 2px 6px; margin: 0 -6px; }
 .crumb-sep { color: var(--muted); flex: none; }
+.nest-crumbs .nest-trash-switch { font-size: 13px; letter-spacing: 0; margin: 0 0 0 14px; padding: 4px 8px; align-self: center; white-space: nowrap; }
 .crumb-sep svg { width: 18px; height: 18px; }
 
 .nest-tools { display: flex; align-items: center; gap: 8px; flex: none; }

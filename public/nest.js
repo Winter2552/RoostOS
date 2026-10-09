@@ -1,6 +1,6 @@
 'use strict';
 
-// Nest: My Drive and Trash. Plain JS, no build step. Loaded after app.js and
+// Nest: My Drive, the Family space and Trash. Plain JS, no build step. Loaded after app.js and
 // uses its helpers ($, el, api, bytes).
 //
 // Mouse: click selects (Ctrl/Cmd adds, Shift picks a range), double-click
@@ -81,6 +81,7 @@
 
   const N = {
     mode: 'drive', // or 'trash'
+    space: '', // '' is My Drive, 'family' the Family space
     folderId: 'root',
     folder: { id: 'root', name: 'My Drive' },
     path: [],
@@ -103,27 +104,50 @@
   // ---------- loading ----------
 
   window.nestOpen = (parts) => {
+    const space = parts[0] === 'family' ? 'family' : '';
+    if (space) parts = parts.slice(1);
+    if (space && !state.user.family) {
+      location.hash = '#/nest';
+      return;
+    }
     const mode = parts[0] === 'trash' ? 'trash' : 'drive';
     const folderId = mode === 'drive' && parts[0] === 'f' && parts[1] ? parts[1] : 'root';
-    const same = mode === N.mode && folderId === N.folderId;
+    const same = mode === N.mode && folderId === N.folderId && space === N.space;
     N.mode = mode;
     N.folderId = folderId;
+    N.space = space;
     if (!same) {
       N.sel.clear();
       N.items = [];
       N.path = [];
-      N.folder = { id: folderId, name: folderId === 'root' ? 'My Drive' : '' };
+      N.storage = null;
+      N.folder = { id: folderId, name: folderId === 'root' ? rootName() : '' };
       render();
     }
     load(same ? N.items.length : 0);
   };
 
-  function folderUrl(id) {
-    return id === 'root' || !id ? '#/nest' : `#/nest/f/${id}`;
+  // Admin → Family changed whether this person is in the family.
+  window.nestFamily = () => {
+    if (!view.classList.contains('hidden') && N.space && !state.user.family) location.hash = '#/nest';
+    else render();
+  };
+
+  const rootName = (space = N.space) => (space ? 'Family' : 'My Drive');
+  const base = (space = N.space) => (space ? '#/nest/family' : '#/nest');
+
+  function folderUrl(id, space = N.space) {
+    return id === 'root' || !id ? base(space) : `${base(space)}/f/${id}`;
+  }
+
+  // A Nest API address in the given space. Undo and uploads pass the space they
+  // started in, so they still land in the right place after switching.
+  function sp(url, space = N.space) {
+    return space ? `${url}${url.includes('?') ? '&' : '?'}space=${space}` : url;
   }
 
   async function fetchPage(offset) {
-    return api('GET', `/api/nest/folders/${N.folderId}?sort=${prefs.sort}&dir=${prefs.dir}&offset=${offset}`);
+    return api('GET', sp(`/api/nest/folders/${N.folderId}?sort=${prefs.sort}&dir=${prefs.dir}&offset=${offset}`));
   }
 
   // Loads the folder again, keeping at least `keep` items so the scroll position holds.
@@ -131,7 +155,7 @@
     const t = ++N.token;
     try {
       if (N.mode === 'trash') {
-        const d = await api('GET', '/api/nest/trash');
+        const d = await api('GET', sp('/api/nest/trash'));
         if (t !== N.token) return;
         Object.assign(N, { items: d.items, more: false, total: d.items.length, storage: d.storage, days: d.days });
       } else {
@@ -142,13 +166,13 @@
           if (t !== N.token) return;
           items = items.concat(d.items);
         } while (d.more && items.length < keep);
-        Object.assign(N, { folder: d.folder, path: d.path, items, more: d.more, total: d.total, storage: d.storage });
+        Object.assign(N, { folder: d.folder.id ? d.folder : { ...d.folder, name: rootName() }, path: d.path, items, more: d.more, total: d.total, storage: d.storage });
       }
     } catch (err) {
       if (t !== N.token) return;
       if (N.mode === 'drive' && N.folderId !== 'root') {
         toast(err.message);
-        location.hash = '#/nest';
+        location.hash = folderUrl('root');
         return;
       }
       toast(err.message);
@@ -188,8 +212,11 @@
 
   function render() {
     const trash = N.mode === 'trash';
+    const place = trash ? 'trash' : N.space || 'drive';
+    $('#nest-family-link').classList.toggle('hidden', !state.user.family);
+    $('#nest-trash-link').href = `${base()}/trash`;
     document.querySelectorAll('.nest-places a').forEach((a) => {
-      const on = a.dataset.place === N.mode;
+      const on = a.dataset.place === place;
       a.classList.toggle('active', on);
       if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
     });
@@ -205,10 +232,15 @@
   function renderCrumbs() {
     const c = $('#nest-crumbs');
     if (N.mode === 'trash') {
-      c.replaceChildren(el('h2', { text: 'Trash' }));
+      // Members switch between their own trash and the family's from here.
+      const other = N.space ? '' : 'family';
+      c.replaceChildren(
+        el('h2', { text: N.space ? 'Family trash' : 'Trash' }),
+        state.user.family ? el('a', { class: 'crumb nest-trash-switch mono', href: `${base(other)}/trash`, text: other ? 'Family trash' : 'My trash' }) : null);
+      document.title = `${N.space ? 'Family trash' : 'Trash'} · ${state.serverName}`;
       return;
     }
-    const trail = [{ id: 'root', name: 'My Drive' }, ...N.path];
+    const trail = [{ id: 'root', name: rootName() }, ...N.path];
     const parts = [];
     trail.forEach((p, i) => {
       const last = i === trail.length - 1;
@@ -572,7 +604,7 @@
   async function moveDialog(items) {
     const moving = new Set(items.map((i) => i.id));
     const startParent = N.mode === 'drive' ? N.folderId : 'root';
-    let at = { id: 'root', name: 'My Drive', path: [] };
+    let at = { id: 'root', name: rootName(), path: [] };
     const listBox = el('div', { class: 'nmove-list' });
     const where = el('div', { class: 'nmove-where mono muted' });
     const go = el('button', { type: 'button', class: 'btn small', text: 'Move here' });
@@ -583,11 +615,11 @@
         let folders = [];
         let d;
         do {
-          d = await api('GET', `/api/nest/folders/${id}?folders=1&offset=${folders.length}`);
+          d = await api('GET', sp(`/api/nest/folders/${id}?folders=1&offset=${folders.length}`));
           folders = folders.concat(d.items);
         } while (d.more && folders.length < 2000);
-        at = { id: d.folder.id, name: d.folder.name, path: d.path };
-        const crumbs = [{ id: 'root', name: 'My Drive' }, ...d.path];
+        at = { id: d.folder.id, name: d.folder.id ? d.folder.name : rootName(), path: d.path };
+        const crumbs = [{ id: 'root', name: rootName() }, ...d.path];
         where.replaceChildren(...crumbs.flatMap((c, i) => [
           i ? ni('chevron', 'crumb-sep') : null,
           i === crumbs.length - 1 ? el('b', { text: c.name }) : el('button', { type: 'button', class: 'link-btn mono', text: c.name, onclick: () => open(c.id) }),
@@ -641,7 +673,7 @@
 
   function download(items) {
     const one = items.length === 1 && items[0].kind === 'file';
-    const a = el('a', { href: one ? `/api/nest/files/${items[0].id}` : `/api/nest/zip?ids=${items.map((i) => i.id).join(',')}`, download: '' });
+    const a = el('a', { href: sp(one ? `/api/nest/files/${items[0].id}` : `/api/nest/zip?ids=${items.map((i) => i.id).join(',')}`), download: '' });
     document.body.append(a);
     a.click();
     a.remove();
@@ -651,7 +683,7 @@
     const name = await ask({ title: 'New folder', value: 'Untitled folder', ok: 'Create' });
     if (!name) return;
     try {
-      await api('POST', '/api/nest/folders', { parent: N.folderId, name });
+      await api('POST', sp('/api/nest/folders'), { parent: N.folderId, name });
       await load(N.items.length + 1);
     } catch (err) { toast(err.message); }
   }
@@ -661,24 +693,26 @@
     if (!name || name === it.name) return;
     try {
       const old = it.name;
-      const { item } = await api('PATCH', `/api/nest/items/${it.id}`, { name });
+      const space = N.space;
+      const { item } = await api('PATCH', sp(`/api/nest/items/${it.id}`), { name });
       await load(N.items.length);
       toast(`Renamed to “${item.name}”`, async () => {
-        await api('PATCH', `/api/nest/items/${it.id}`, { name: old });
+        await api('PATCH', sp(`/api/nest/items/${it.id}`, space), { name: old });
         await load(N.items.length);
       });
     } catch (err) { toast(err.message); }
   }
 
   async function move(items, parent, parentName) {
+    const space = N.space;
     try {
-      const { moved } = await api('POST', '/api/nest/move', { ids: items.map((i) => i.id), parent });
+      const { moved } = await api('POST', sp('/api/nest/move'), { ids: items.map((i) => i.id), parent });
       if (!moved.length) return;
       if (parent !== N.folderId) removeLocal(moved.map((m) => m.id)); else load(N.items.length);
       toast(`Moved ${label(moved)} to ${parentName}`, async () => {
         const back = new Map();
         for (const m of moved) back.set(m.from, [...(back.get(m.from) || []), m.id]);
-        for (const [from, ids] of back) await api('POST', '/api/nest/move', { ids, parent: from });
+        for (const [from, ids] of back) await api('POST', sp('/api/nest/move', space), { ids, parent: from });
         await load(N.items.length);
       });
     } catch (err) { toast(err.message); }
@@ -686,7 +720,7 @@
 
   async function copy(items) {
     try {
-      const { items: made } = await api('POST', '/api/nest/copy', { ids: items.map((i) => i.id) });
+      const { items: made } = await api('POST', sp('/api/nest/copy'), { ids: items.map((i) => i.id) });
       await load(N.items.length + made.length);
       toast(made.length === 1 ? `Made “${made[0].name}”` : `Made ${made.length} copies`);
     } catch (err) { toast(err.message); }
@@ -694,11 +728,12 @@
 
   async function trash(items) {
     const ids = items.map((i) => i.id);
+    const space = N.space;
     try {
-      await api('POST', '/api/nest/trash', { ids });
+      await api('POST', sp('/api/nest/trash'), { ids });
       removeLocal(ids);
       toast(`${label(items)} moved to trash`, async () => {
-        await api('POST', '/api/nest/restore', { ids });
+        await api('POST', sp('/api/nest/restore', space), { ids });
         await load(N.items.length + ids.length);
       });
     } catch (err) { toast(err.message); }
@@ -706,7 +741,7 @@
 
   async function restore(items) {
     try {
-      const { restored } = await api('POST', '/api/nest/restore', { ids: items.map((i) => i.id) });
+      const { restored } = await api('POST', sp('/api/nest/restore'), { ids: items.map((i) => i.id) });
       removeLocal(restored.map((r) => r.id));
       toast(restored.length === 1 ? `Restored “${restored[0].name}”` : `Restored ${restored.length} items`);
     } catch (err) { toast(err.message); }
@@ -721,7 +756,7 @@
     });
     if (!ok) return;
     try {
-      const d = await api('POST', '/api/nest/trash/delete', { ids: items.map((i) => i.id) });
+      const d = await api('POST', sp('/api/nest/trash/delete'), { ids: items.map((i) => i.id) });
       N.storage = d.storage;
       removeLocal(d.deleted);
     } catch (err) { toast(err.message); }
@@ -736,7 +771,7 @@
     });
     if (!ok) return;
     try {
-      const d = await api('POST', '/api/nest/trash/delete', { all: true });
+      const d = await api('POST', sp('/api/nest/trash/delete'), { all: true });
       N.storage = d.storage;
       removeLocal(d.deleted);
     } catch (err) { toast(err.message); }
@@ -877,14 +912,15 @@
   document.body.append(panel);
 
   async function queueUploads(files, parent, parentName, dirs = []) {
+    const space = N.space;
     // Empty folders in a dropped folder still get made.
     const withFiles = new Set(files.flatMap((f) => f.path.split('/').map((_, i, a) => a.slice(0, i + 1).join('/'))));
     for (const d of dirs.filter((d) => !withFiles.has(d))) {
-      await api('POST', '/api/nest/folders', { parent, path: d }).catch(() => {});
+      await api('POST', sp('/api/nest/folders', space), { parent, path: d }).catch(() => {});
     }
     if (!files.length) { if (dirs.length) reloadSoon(); return; }
     for (const { file, path } of files) {
-      UP.tasks.push({ file, path, parent, parentName, name: file.name, size: file.size, sent: 0, live: 0, state: 'queued' });
+      UP.tasks.push({ file, path, parent, parentName, space, name: file.name, size: file.size, sent: 0, live: 0, state: 'queued' });
     }
     UP.collapsed = false;
     renderPanel();
@@ -918,7 +954,7 @@
     paintTask(t);
     try {
       if (!t.id) {
-        const s = await api('POST', '/api/nest/uploads', { parent: t.parent, name: t.name, size: t.size, type: t.file.type, path: t.path });
+        const s = await api('POST', sp('/api/nest/uploads', t.space), { parent: t.parent, name: t.name, size: t.size, type: t.file.type, path: t.path });
         if (s.done) return finish(t);
         Object.assign(t, { id: s.id, chunk: s.chunkSize, sent: s.received });
       }
@@ -941,14 +977,14 @@
   function finish(t) {
     t.state = 'done';
     t.sent = t.live = t.size;
-    if (N.mode === 'drive') reloadSoon();
+    if (N.mode === 'drive' && N.space === t.space) reloadSoon();
   }
 
   function sendChunk(t, blob) {
     return new Promise((resolve, reject) => {
       const x = new XMLHttpRequest();
       t.xhr = x;
-      x.open('PUT', `/api/nest/uploads/${t.id}?offset=${t.sent}`);
+      x.open('PUT', sp(`/api/nest/uploads/${t.id}?offset=${t.sent}`, t.space));
       x.setRequestHeader('Content-Type', 'application/octet-stream');
       x.upload.onprogress = (e) => { t.live = t.sent + e.loaded; paintTask(t); };
       x.onload = () => {
@@ -985,7 +1021,7 @@
     const was = t.state;
     t.state = 'cancelled';
     if (t.xhr) t.xhr.abort();
-    if (t.id && was === 'uploading') setTimeout(() => api('DELETE', `/api/nest/uploads/${t.id}`).catch(() => {}), 300);
+    if (t.id && was === 'uploading') setTimeout(() => api('DELETE', sp(`/api/nest/uploads/${t.id}`, t.space)).catch(() => {}), 300);
     UP.tasks = UP.tasks.filter((x) => x !== t);
     renderPanel();
   }
