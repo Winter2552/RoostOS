@@ -148,6 +148,15 @@
         <a class="more-link mono member-only" href="#/status">Server status →</a>
         <a class="more-link mono setup-nudge hidden" id="setup-nudge" href="#/admin"></a>
       </div>
+      <!-- One search box across the apps (public/search.js) -->
+      <div class="search hidden" id="search" role="search">
+        <label class="search-field">
+          <span class="search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/></svg></span>
+          <input type="search" id="search-input" placeholder="Search Roost" aria-label="Search Roost" aria-controls="search-results" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
+          <kbd class="search-key mono" aria-hidden="true">/</kbd>
+        </label>
+        <div class="search-results hidden" id="search-results" aria-live="polite"></div>
+      </div>
       <div class="section">
         <div class="section-head">
           <h2>Your apps</h2>
@@ -498,5 +507,6 @@
   <script src="/app.js"></script>
   <script src="/nest.js"></script>
   <script src="/glint.js"></script>
+  <script src="/search.js"></script>
 </body>
 </html>
