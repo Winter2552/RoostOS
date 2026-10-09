@@ -386,7 +386,7 @@ label.field, div.field { display: flex; flex-direction: column; gap: 6px; }
 
 .field > span { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
 
-input[type='text'], input[type='password'], input[type='url'], input[type='email'], input[type='number'], input[type='date'], select {
+input[type='text'], input[type='password'], input[type='url'], input[type='email'], input[type='number'], input[type='date'], input[type='time'], select {
   background: var(--bg);
   border: 1.5px solid var(--line);
   border-radius: 12px;
@@ -993,4 +993,36 @@ a.backup-line[href]:hover { color: var(--ink); }
 @media (max-width: 600px) {
   .uptime-bars { gap: 1px; height: 20px; }
   .uptime-detail { white-space: normal; }
+}
+
+/* ---------- backups (Admin) ---------- */
+
+.backup-drive { margin: 0 0 22px; display: flex; flex-direction: column; gap: 8px; }
+.backup-drive .meter { margin: 0; }
+#backup-history { margin-top: 24px; }
+#backup-history:empty { display: none; }
+#backup-history .activity-detail { text-transform: none; letter-spacing: 0; }
+.activity-row.cancelled .activity-what { color: var(--muted); }
+/* The clock and calendar icons are dark by default; the page is dark. */
+input[type='time']::-webkit-calendar-picker-indicator, input[type='date']::-webkit-calendar-picker-indicator { filter: invert(1); opacity: 0.7; cursor: pointer; }
+
+/* ---------- get files back (Admin) ---------- */
+
+.restore-path { display: flex; flex-wrap: wrap; gap: 4px 8px; margin: 22px 0 8px; font-size: 13px; text-transform: none; letter-spacing: 0; }
+.restore-path button { background: none; border: 0; padding: 4px 0; color: var(--muted); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; min-height: 32px; }
+.restore-path button:hover { color: var(--ink); }
+.restore-path span { color: var(--ink); padding: 4px 0; }
+.restore-list { list-style: none; margin: 0 0 18px; padding: 0; }
+.restore-row { display: flex; align-items: center; gap: 12px; justify-content: space-between; border-top: 1px solid var(--line); padding: 12px 0; }
+.restore-row:first-child { border-top: 0; }
+.restore-name { min-width: 0; background: none; border: 0; padding: 0; text-align: left; overflow-wrap: anywhere; }
+button.restore-name { cursor: pointer; font-weight: 500; }
+button.restore-name:hover { text-decoration: underline; text-underline-offset: 3px; }
+.restore-name small { display: block; margin-top: 3px; font-size: 12px; font-weight: 400; color: var(--muted); }
+.restore-actions { display: flex; flex: none; gap: 8px; }
+.restore-actions .btn, .restore-actions a.btn { min-height: 44px; display: inline-flex; align-items: center; text-decoration: none; }
+.restore-list .empty { margin: 0; }
+.restore-job { margin: 16px 0 0; text-transform: none; letter-spacing: 0; font-size: 13px; line-height: 1.5; }
+@media (max-width: 600px) {
+  .restore-row { flex-direction: column; align-items: flex-start; gap: 8px; }
 }

@@ -217,3 +217,95 @@ test('next run is the coming 3:00', () => {
   assert.equal(service.nextAt('03:00', from).getTime(), new Date(2026, 9, 8, 3, 0).getTime());
   assert.equal(service.nextAt('03:00', new Date(2026, 9, 8, 3, 0)).getTime(), new Date(2026, 9, 9, 3, 0).getTime());
 });
+
+test('settings fall back to the defaults and are checked strictly', () => {
+  assert.deepEqual(backup.config(undefined), { time: '03:00', keepDaily: 7, keepWeekly: 4, capGb: null });
+  assert.deepEqual(backup.config({ time: '25:99', keepDaily: 0, keepWeekly: 'x', capGb: 3 }), { time: '03:00', keepDaily: 7, keepWeekly: 4, capGb: null });
+  assert.deepEqual(backup.cleanConfig({ time: '04:30', keepDaily: '10', keepWeekly: '0', capGb: '' }), { time: '04:30', keepDaily: 10, keepWeekly: 0, capGb: null });
+  assert.equal(backup.cleanConfig({ time: '04:30', keepDaily: 7, keepWeekly: 4, capGb: '500' }).capGb, 500);
+  for (const bad of [
+    { time: '', keepDaily: 7, keepWeekly: 4 },
+    { time: '3am', keepDaily: 7, keepWeekly: 4 },
+    { time: '03:00', keepDaily: 0, keepWeekly: 4 },
+    { time: '03:00', keepDaily: 7, keepWeekly: 13 },
+    { time: '03:00', keepDaily: 7.5, keepWeekly: 4 },
+    { time: '03:00', keepDaily: 7, keepWeekly: 4, capGb: 5 },
+  ]) assert.throws(() => backup.cleanConfig(bad), bad.time + JSON.stringify(bad));
+});
+
+test('requests for the backup service are picked up once', () => {
+  const { root } = world();
+  assert.equal(backup.takeRequest(root), null);
+  backup.writeRequest(root, 'run');
+  assert.equal(backup.hasRequest(root), true);
+  assert.equal(backup.takeRequest(root), 'run');
+  assert.equal(backup.hasRequest(root), false);
+  fs.writeFileSync(path.join(root, 'backup-request.json'), '{"action":"format-the-drive"}');
+  assert.equal(backup.takeRequest(root), null);
+  assert.equal(backup.hasRequest(root), false);
+  fs.writeFileSync(path.join(root, 'backup-request.json'), 'not json');
+  assert.equal(backup.takeRequest(root), null);
+});
+
+test('a cancelled backup leaves no partial copy and the earlier backup untouched', async () => {
+  const { src, dest } = world();
+  write(path.join(src, 'a.jpg'), Buffer.alloc(30000, 1));
+  const first = await backup.runBackup({ dest, sources: [{ label: 'S', dir: src }], now: at('2026-10-08T03:00') });
+  write(path.join(src, 'b.jpg'), Buffer.alloc(30000, 2));
+  const stop = new AbortController();
+  stop.abort();
+  await assert.rejects(
+    backup.runBackup({ dest, sources: [{ label: 'S', dir: src }], signal: stop.signal, now: at('2026-10-09T03:00') }),
+    (err) => err.code === 'CANCELLED',
+  );
+  assert.deepEqual(fs.readdirSync(path.join(dest, backup.ROOT)).filter((n) => !n.startsWith('.tmp-')), [first.snapshot]);
+  assert.deepEqual(backup.listSnapshots(dest).map((s) => s.name), [first.snapshot]);
+  assert.equal(fs.readFileSync(snap(dest, first.snapshot, 'S', 'a.jpg')).length, 30000);
+});
+
+// The service needs a drive that is not the one the data is on; /dev/shm is one on Linux.
+const shm = fs.existsSync('/dev/shm') && fs.statSync('/dev/shm').dev !== fs.statSync(os.tmpdir()).dev;
+
+test('the service backs up on request, remembers the run and honours its settings', { skip: !shm && 'needs a second filesystem' }, async () => {
+  const { root } = world();
+  const dataDir = path.join(root, 'data');
+  const nestDir = path.join(root, 'nest');
+  const dest = fs.mkdtempSync('/dev/shm/roost-backup-test-');
+  try {
+    write(path.join(nestDir, 'raven_1', 'files', 'a.txt'), 'hello '.repeat(2000));
+    write(path.join(dataDir, 'roost.json'), JSON.stringify({ settings: { backup: { time: '04:15', keepDaily: 2, keepWeekly: 1, capGb: null } } }));
+    const svc = service.start({ dataDir, dest, nestDir, appDataDir: '' });
+    clearInterval(svc.timer);
+    // The first start catches up shortly; the saved time decides the usual run.
+    assert.ok(Date.parse(svc.status.next) - Date.now() <= 6 * 60 * 1000);
+    backup.writeRequest(dataDir, 'reload');
+    await svc.tick();
+    assert.equal(svc.status.drive.ok, true);
+
+    backup.writeRequest(dataDir, 'run');
+    await svc.tick();
+    assert.equal(svc.status.running, false);
+    assert.equal(svc.status.last.ok, true);
+    assert.equal(svc.status.history.length, 1);
+    assert.equal(svc.status.history[0].manual, true);
+    assert.equal(backup.hasRequest(dataDir), false);
+    // The next run follows the saved time of day.
+    assert.equal(new Date(svc.status.next).getHours(), 4);
+    assert.equal(new Date(svc.status.next).getMinutes(), 15);
+    // What Roost reads back from disk matches.
+    const onDisk = backup.readStatus(dataDir);
+    assert.equal(onDisk.history[0].snapshot, svc.status.last.snapshot);
+    assert.equal(backup.summarize(onDisk).state, 'ok');
+
+    // A drive that goes away is reported, not backed up onto the system drive.
+    fs.rmSync(dest, { recursive: true, force: true });
+    backup.writeRequest(dataDir, 'run');
+    await svc.tick();
+    assert.equal(svc.status.last.ok, false);
+    assert.match(svc.status.last.error, /not found/);
+    assert.equal(svc.status.history.length, 2);
+    assert.equal(backup.summarize(backup.readStatus(dataDir)).state, 'drive');
+  } finally {
+    fs.rmSync(dest, { recursive: true, force: true });
+  }
+});
