@@ -1486,6 +1486,11 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       const body = await readJson(req);
       const before = db().settings.remote || {};
       const next = remoteAccess.clean(body);
+      // Turning this on rewrites the domain's live record (orange cloud on), which
+      // changes how the domain behaves, so it needs an explicit yes, never a default.
+      if (next.ddns && !before.ddns && body.confirmProxy !== true) {
+        throw new HttpError(400, 'Confirm that Roost may change the domain’s Cloudflare record');
+      }
       db().settings.remote = { ...before, ...next };
       store.save();
       const changes = [];

@@ -1783,6 +1783,7 @@ async function loadAdmin() {
   renderInvites(invites);
   $('#new-user-apps').replaceChildren(...appChecks(null));
   loadTls();
+  loadRemote();
 }
 
 // ---------- Jellyfin sign-in ----------
@@ -2276,7 +2277,10 @@ function ago(ms) {
   return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
 }
 
+let remoteState = {};
+
 function renderRemote(r) {
+  remoteState = r;
   const f = $('#remote-form');
   const reach = r.reach;
   const [kind, headline] = !r.domain || !r.tokenSaved ? ['', 'Set up Secure connection first']
@@ -2304,8 +2308,13 @@ async function loadRemote() {
 $('#remote-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = e.target;
+  const turningOn = f.ddns.checked && !remoteState.ddns;
+  if (turningOn && !confirm(`Roost will change the Cloudflare record for ${remoteState.domain || 'your domain'}: it will point at this connection with the orange cloud on, so Cloudflare sits in front of it. If the record is grey today, the domain behaves differently from now on. Continue?`)) {
+    f.ddns.checked = false;
+    return;
+  }
   try {
-    renderRemote(await api('PUT', '/api/admin/remote', { ddns: f.ddns.checked, cloudflareOnly: f.cloudflareOnly.checked }));
+    renderRemote(await api('PUT', '/api/admin/remote', { ddns: f.ddns.checked, cloudflareOnly: f.cloudflareOnly.checked, confirmProxy: turningOn }));
     flash(f, 'Saved');
   } catch (err) { flash(f, err.message, false); }
 });

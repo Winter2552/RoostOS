@@ -194,7 +194,10 @@ test('an admin saves the settings, checks the route, and the checklist follows',
   const tls = await call('PUT', '/api/admin/tls', { domain: 'roostos.network', token: 'secret-token', renew: false }, cookie);
   assert.equal(tls.status, 200);
 
-  const saved = await call('PUT', '/api/admin/remote', { ddns: true, cloudflareOnly: false }, cookie);
+  // Rewriting the live record needs an explicit yes.
+  assert.equal((await call('PUT', '/api/admin/remote', { ddns: true, cloudflareOnly: false }, cookie)).status, 400);
+  assert.equal(server.remote.settings().ddns, undefined);
+  const saved = await call('PUT', '/api/admin/remote', { ddns: true, cloudflareOnly: false, confirmProxy: true }, cookie);
   assert.equal(saved.status, 200);
   assert.equal(saved.body.ddns, true);
 
