@@ -1787,6 +1787,7 @@ $('#family-form').addEventListener('submit', async (e) => {
     renderFamily(family);
     state.user.family = family.members.includes(state.user.id);
     if (window.nestFamily) window.nestFamily();
+    if (window.glintFamily) window.glintFamily();
     flash(e.target, 'Family saved');
   } catch (err) { flash(e.target, err.message, false); }
 });

@@ -1078,3 +1078,8 @@ body.gview-open { overflow: hidden; }
 @media (pointer: coarse) {
   .gtile-tick { width: 32px; height: 32px; }
 }
+
+/* Glint: switch between your photos and the Family's */
+.glint-spaces { display: flex; gap: 4px; padding: 4px; margin: 4px 0 12px; border: 1px solid var(--line); border-radius: 999px; }
+.glint-spaces a { flex: 1; text-align: center; text-decoration: none; color: var(--muted); padding: 7px 10px; border-radius: 999px; font-size: 12px; }
+.glint-spaces a.active { color: var(--bg); background: var(--ink); }

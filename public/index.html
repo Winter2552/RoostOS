@@ -205,6 +205,10 @@
     <section id="view-glint" class="nest glint hidden">
       <aside class="nest-side">
         <button class="btn nest-new" type="button" id="glint-upload"><span aria-hidden="true">+</span> Upload</button>
+        <div class="glint-spaces mono hidden" id="glint-spaces" role="group" aria-label="Whose photos">
+          <a href="#/glint" data-space="">Mine</a>
+          <a href="#/glint/family" data-space="family">Family</a>
+        </div>
         <nav class="nest-places mono" aria-label="Glint">
           <a href="#/glint" data-place="photos">Photos</a>
           <a href="#/glint/favourites" data-place="favourites">Favourites</a>
@@ -377,7 +381,7 @@
       </div>
 
       <form class="card panel" id="family-form">
-        <h3>Family</h3><span class="mono muted">A shared Family space in Nest. Members can all open, add, rename and remove what's in it. Its files count against the family's own limit, not anyone's personal space.</span>
+        <h3>Family</h3><span class="mono muted">A shared Family space in Nest and Glint. Members can all open, add, rename and remove what's in it, and share Family albums. Its files and photos count against the family's own limit, not anyone's personal space.</span>
         <div class="checks family-members" id="family-members"></div>
         <div class="row user-storage">
           <span class="mono muted" id="family-used"></span>
