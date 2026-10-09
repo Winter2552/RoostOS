@@ -421,7 +421,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   // Settings for the admin page. The mail password never leaves the server.
   function settingsView() {
     const { mail: _mail, ...rest } = db().settings;
-    return { ...rest, publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()) };
+    return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()) };
   }
 
   // The admin's notice on the dashboard. Expired notices are simply not
@@ -1086,6 +1086,42 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       });
     },
 
+    // Admin → Backups: everything the card shows, in one call.
+    'GET /api/admin/backup': (req, res) => {
+      requireAdmin(req);
+      const status = backup.readStatus(dataDir);
+      const snapshots = status && status.snapshots ? status.snapshots : [];
+      send(res, 200, {
+        ...backup.summarize(status),
+        config: backup.config(db().settings.backup),
+        drive: status && status.drive,
+        last: status && status.last,
+        history: status && status.history ? status.history : [],
+        snapshots: { count: snapshots.length, newest: snapshots[0] ? snapshots[0].at : null, oldest: snapshots.length ? snapshots[snapshots.length - 1].at : null },
+        requested: backup.hasRequest(dataDir),
+      });
+    },
+
+    // "Back up now" and "Cancel" leave a request for the backup service.
+    'POST /api/admin/backup/run': (req, res) => {
+      const admin = requireAdmin(req);
+      const { state, message } = backup.summarize(backup.readStatus(dataDir));
+      if (state === 'off' || state === 'stopped') throw new HttpError(409, 'The backup service isn’t running. Check that roost-backup is started.');
+      if (state === 'running') throw new HttpError(409, 'A backup is already running');
+      if (state === 'drive') throw new HttpError(409, message || 'Backup drive not found');
+      backup.writeRequest(dataDir, 'run');
+      record(req, 'settings-changed', { actor: admin.username, detail: 'backup started by hand' });
+      send(res, 202, { ok: true });
+    },
+
+    'POST /api/admin/backup/cancel': (req, res) => {
+      const admin = requireAdmin(req);
+      if (backup.summarize(backup.readStatus(dataDir)).state !== 'running') throw new HttpError(409, 'No backup is running');
+      backup.writeRequest(dataDir, 'cancel');
+      record(req, 'settings-changed', { actor: admin.username, detail: 'backup cancelled' });
+      send(res, 202, { ok: true });
+    },
+
     // ---------- setup checklist ----------
 
     'GET /api/admin/setup': async (req, res) => {
@@ -1252,7 +1288,23 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         db().settings.mail = cleanMail(body.mail, mailSettings());
         changes.push(`email ${db().settings.mail ? `via ${db().settings.mail.host}` : 'turned off'}`);
       }
+      let tellBackups = false;
+      if (body.backup !== undefined) {
+        let next;
+        try {
+          next = backup.cleanConfig(body.backup);
+        } catch (err) {
+          throw new HttpError(400, err.message);
+        }
+        if (JSON.stringify(next) !== JSON.stringify(backup.config(db().settings.backup))) {
+          changes.push(`backups ${next.time}, keep ${next.keepDaily} nightly + ${next.keepWeekly} weekly${next.capGb ? `, up to ${next.capGb} GB` : ''}`);
+          tellBackups = true;
+        }
+        db().settings.backup = next;
+      }
       store.save();
+      // The backup service picks the new settings up within a few seconds.
+      if (tellBackups) backup.writeRequest(dataDir, 'reload');
       if (changes.length) record(req, 'settings-changed', { actor: admin.username, detail: changes.join(', ') });
       send(res, 200, { settings: settingsView() });
     },

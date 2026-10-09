@@ -102,7 +102,10 @@ function settingsOf(dataDir) {
   }
 }
 
-function start({ dataDir, dest, nestDir, appDataDir, time = '03:00' }) {
+const TICK = 5 * 1000; // how often to look for a request from the web app
+const HISTORY = 14;
+
+function start({ dataDir, dest, nestDir, appDataDir }) {
   const saved = backup.readStatus(dataDir) || {};
   const status = {
     running: false,
@@ -110,16 +113,18 @@ function start({ dataDir, dest, nestDir, appDataDir, time = '03:00' }) {
     drive: null,
     last: saved.last || null,
     lastOk: saved.lastOk || null,
+    history: saved.history || [],
     next: null,
     snapshots: [],
   };
   const guard = [dataDir, nestDir, appDataDir].filter(Boolean);
   const save = () => backup.writeStatus(dataDir, status);
+  // Admin → Backups sets these; without any, 3:00 with 7 nightly and 4 weekly.
   const config = () => {
-    const s = settingsOf(dataDir);
+    const s = backup.config(settingsOf(dataDir));
     return {
-      time: s.time || time,
-      keep: { daily: s.keepDaily || backup.DEFAULT_KEEP.daily, weekly: s.keepWeekly || backup.DEFAULT_KEEP.weekly },
+      time: s.time,
+      keep: { daily: s.keepDaily, weekly: s.keepWeekly },
       capBytes: s.capGb ? s.capGb * 1000 ** 3 : 0,
     };
   };
@@ -127,74 +132,105 @@ function start({ dataDir, dest, nestDir, appDataDir, time = '03:00' }) {
     status.drive = backup.checkDrive(dest, { sameDriveAs: guard });
     status.snapshots = status.drive.ok ? backup.listSnapshots(dest).map((s) => ({ name: s.name, at: s.at.toISOString() })) : [];
   };
+  const remember = (entry) => {
+    status.history.unshift(entry);
+    status.history.length = Math.min(status.history.length, HISTORY);
+  };
+  const behind = () => !status.lastOk || Date.now() - Date.parse(status.lastOk) > DAY;
 
   let next = nextAt(config().time);
   refreshDrive();
   // Missed last night (the server was off, or this is the first start)?
   // Catch up shortly, rather than waiting for tomorrow night.
-  if (status.drive.ok && (!status.lastOk || Date.now() - Date.parse(status.lastOk) > DAY)) {
-    next = new Date(Date.now() + CATCH_UP_DELAY);
-  }
+  let catchUp = status.drive.ok && behind();
+  if (catchUp) next = new Date(Date.now() + CATCH_UP_DELAY);
   status.next = next.toISOString();
   save();
 
-  async function runNow() {
-    status.running = true;
-    status.progress = { startedAt: new Date().toISOString() };
-    refreshDrive();
+  let abort = null;
+
+  async function runNow({ manual = false } = {}) {
     const startedAt = new Date().toISOString();
+    refreshDrive();
     if (!status.drive.ok) {
       status.last = { ok: false, startedAt, finishedAt: startedAt, error: status.drive.message };
+      remember({ ...status.last, manual });
       console.log(`Backup skipped: ${status.drive.message}`);
-    } else {
       save();
-      const { keep, capBytes } = config();
-      try {
-        const result = await backup.runBackup({
-          dest,
-          sources: sources({ dataDir, nestDir, appDataDir }),
-          extras: nestDatabase(dataDir),
-          keep,
-          capBytes,
-          onProgress: (p) => {
-            status.progress = { startedAt, ...p };
-            save();
-          },
-        });
-        status.last = { ok: true, startedAt, finishedAt: new Date().toISOString(), ...result };
-        status.lastOk = status.last.finishedAt;
-        console.log(`Backup ${result.snapshot}: ${result.files} files, ${result.written} bytes written, ${result.linked} unchanged, ${result.skipped} skipped`);
-      } catch (err) {
+      return;
+    }
+    status.running = true;
+    status.progress = { startedAt };
+    save();
+    const { keep, capBytes } = config();
+    abort = new AbortController();
+    try {
+      const result = await backup.runBackup({
+        dest,
+        sources: sources({ dataDir, nestDir, appDataDir }),
+        extras: nestDatabase(dataDir),
+        keep,
+        capBytes,
+        signal: abort.signal,
+        onProgress: (p) => {
+          status.progress = { startedAt, ...p };
+          save();
+        },
+      });
+      status.last = { ok: true, startedAt, finishedAt: new Date().toISOString(), ...result };
+      status.lastOk = status.last.finishedAt;
+      remember({ ...status.last, manual });
+      console.log(`Backup ${result.snapshot}: ${result.files} files, ${result.written} bytes written, ${result.linked} unchanged, ${result.skipped} skipped`);
+    } catch (err) {
+      if (err.code === 'CANCELLED') {
+        // Stopped by hand: not a failure, so the dashboard keeps showing the last real result.
+        remember({ ok: false, cancelled: true, startedAt, finishedAt: new Date().toISOString(), manual });
+        console.log('Backup cancelled');
+      } else {
         const full = err.code === 'ENOSPC';
         status.last = { ok: false, startedAt, finishedAt: new Date().toISOString(), error: full ? 'The backup drive is full' : `Backup failed: ${err.message}` };
+        remember({ ...status.last, manual });
         console.error('Backup failed:', err);
       }
-      refreshDrive();
     }
+    abort = null;
+    refreshDrive();
     status.running = false;
     status.progress = null;
     save();
   }
 
-  let minutes = 0;
-  const timer = setInterval(async () => {
-    minutes++;
+  let lastCheck = Date.now();
+  async function tick() {
+    const request = backup.takeRequest(dataDir);
+    if (request === 'cancel' && abort) abort.abort();
     if (status.running) return;
-    if (Date.now() >= next.getTime()) {
-      await runNow();
+    if (request === 'run' || Date.now() >= next.getTime()) {
+      await runNow({ manual: request === 'run' });
       next = nextAt(config().time);
+      catchUp = false;
       status.next = next.toISOString();
       save();
-    } else if (minutes % DRIVE_CHECK_EVERY === 0) {
+      lastCheck = Date.now();
+    } else if (request === 'reload' || Date.now() - lastCheck >= DRIVE_CHECK_EVERY * MINUTE) {
+      lastCheck = Date.now();
       // Also picks up a changed backup time.
-      const planned = nextAt(config().time);
-      if (planned < next || next.getTime() - Date.now() > DAY) next = planned;
-      status.next = next.toISOString();
+      const wasThere = status.drive && status.drive.ok;
       refreshDrive();
+      // A drive plugged in after a missed night: back up soon, not at the next 3:00.
+      if (!wasThere && status.drive.ok && behind()) {
+        catchUp = true;
+        next = new Date(Date.now() + CATCH_UP_DELAY);
+      } else if (!catchUp) {
+        next = nextAt(config().time);
+      }
+      status.next = next.toISOString();
       save();
     }
-  }, MINUTE);
-  return { timer, runNow, status };
+  }
+
+  const timer = setInterval(() => tick().catch((err) => console.error('Backup service:', err)), TICK);
+  return { timer, runNow, tick, status };
 }
 
 if (require.main === module) {
@@ -211,9 +247,8 @@ if (require.main === module) {
     dest,
     nestDir: process.env.NEST_DIR || '',
     appDataDir: process.env.APPDATA_DIR || '',
-    time: process.env.BACKUP_TIME || '03:00',
   });
-  console.log(`Roost backups: to ${dest}, nightly at ${process.env.BACKUP_TIME || '03:00'} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`);
+  console.log(`Roost backups: to ${dest}, time zone ${Intl.DateTimeFormat().resolvedOptions().timeZone}`);
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => process.exit(0));
 }
 

@@ -981,16 +981,6 @@ async function loadSystem() {
 
 // ---------- backup line ----------
 
-function backupWhen(iso) {
-  const d = new Date(iso);
-  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-  const days = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(iso).setHours(0, 0, 0, 0)) / 86400000);
-  if (days === 0) return `today ${time}`;
-  if (days === 1) return `yesterday ${time}`;
-  if (days < 7) return `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`;
-  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-}
-
 // One quiet line under the stats: when the last backup finished, or what is
 // wrong. Hidden until backups are set up.
 async function loadBackup() {
@@ -1618,6 +1608,7 @@ async function loadAdmin() {
   renderInvites(invites);
   $('#new-user-apps').replaceChildren(...appChecks(null));
   loadTls();
+  loadBackupAdmin();
 }
 
 function appChecks(selected) {
@@ -2084,6 +2075,137 @@ $('#tls-off').addEventListener('click', async () => {
   const f = $('#tls-form');
   if (!confirm('Turn off HTTPS? Roost forgets the Cloudflare token and the certificate. Links using your domain will stop working securely.')) return;
   try { renderTls(await api('DELETE', '/api/admin/tls')); flash(f, 'HTTPS turned off'); } catch (err) { flash(f, err.message, false); }
+});
+
+// ---------- backups (Admin) ----------
+
+let backupTimer = null;
+
+// When something happened or will happen: "today 3:04 AM", "tomorrow 3:00 AM", "Tue 3:00 AM".
+function backupWhen(iso) {
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const days = Math.round((new Date(iso).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86400000);
+  if (days === 0) return `today ${time}`;
+  if (days === 1) return `tomorrow ${time}`;
+  if (days === -1) return `yesterday ${time}`;
+  if (Math.abs(days) < 7) return `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`;
+  return `${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${time}`;
+}
+
+const runTime = (ms) => (ms < 60000 ? `${Math.max(1, Math.round(ms / 1000))}s` : duration(ms / 1000));
+
+function backupRow(h) {
+  const when = backupWhen(h.startedAt).replace(/^./, (c) => c.toUpperCase());
+  const lines = [];
+  let result = 'OK';
+  if (h.cancelled) {
+    result = 'Cancelled';
+  } else if (!h.ok) {
+    result = 'Failed';
+    lines.push(h.error);
+  } else {
+    lines.push(`${h.files.toLocaleString()} files · ${(h.files - h.linked).toLocaleString()} new or changed · ${bytes(h.written)} written`);
+    if (h.skipped) lines.push(`${h.skipped} couldn’t be read`);
+  }
+  if (h.finishedAt && !(!h.ok && !h.cancelled && h.finishedAt === h.startedAt)) lines.push(`took ${runTime(Date.parse(h.finishedAt) - Date.parse(h.startedAt))}`);
+  return el('li', { class: `activity-row${h.ok ? '' : h.cancelled ? ' cancelled' : ' failed'}` },
+    el('div', { class: 'activity-main' },
+      el('div', { class: 'activity-what', text: `${when}${h.manual ? ' · by hand' : ''}` }),
+      el('div', { class: 'activity-detail mono muted', text: lines.join(' · ') })),
+    el('span', { class: 'mono muted activity-time', text: result }));
+}
+
+function renderBackup(b) {
+  const f = $('#backup-form');
+  const running = b.state === 'running';
+  const [dot, headline] = {
+    ok: ['online', `Last backup ${b.lastOk ? backupWhen(b.lastOk) : ''}`],
+    late: ['starting', `Last backup ${b.lastOk ? backupWhen(b.lastOk) : ''}: it has missed a night`],
+    none: ['', 'No backup yet'],
+    running: ['starting', 'Backing up now'],
+    failed: ['offline', 'The last backup failed'],
+    drive: ['offline', 'Backup drive not found'],
+    stopped: ['offline', 'The backup service isn’t running'],
+    off: ['', 'Backups aren’t set up yet'],
+  }[b.state] || ['', b.state];
+  $('#backup-state').replaceChildren(el('span', { class: `dot ${dot}` }), el('span', { text: headline }));
+
+  const lines = [];
+  if (running && b.progress && b.progress.files !== undefined) lines.push(`${b.progress.files.toLocaleString()} files checked · ${bytes(b.progress.written)} written so far`);
+  if (b.state === 'failed') lines.push(b.message);
+  if (b.state === 'stopped') lines.push('Check that the roost-backup container is started in ZimaOS, then reload this page.');
+  if (b.state === 'off') lines.push('Finish the “Plug in the backup drive” step in Setup above.');
+  if (!running && b.next && ['ok', 'late', 'none', 'failed', 'drive'].includes(b.state)) lines.push(`Next backup ${backupWhen(b.next)}`);
+  if (b.snapshots && b.snapshots.count) lines.push(`${b.snapshots.count} ${b.snapshots.count === 1 ? 'backup' : 'backups'} kept, back to ${shortDate(b.snapshots.oldest)}`);
+  $('#backup-detail').textContent = lines.filter(Boolean).join(' · ');
+
+  const d = b.drive;
+  $('#backup-drive').classList.toggle('hidden', !(d && d.ok && d.total));
+  if (d && d.ok && d.total) {
+    const used = d.total - d.free;
+    const percent = pct(used, d.total);
+    const m = $('#backup-meter');
+    m.className = `meter${percent >= FULL_AT ? ' high' : ''}`;
+    m.setAttribute('aria-valuenow', percent);
+    m.firstElementChild.style.width = `${Math.min(100, percent)}%`;
+    $('#backup-drive-text').textContent = `${bytes(d.free)} free of ${bytes(d.total)}`;
+  }
+
+  // Don't overwrite what someone is typing.
+  const c = b.config;
+  const values = { time: c.time, keepDaily: c.keepDaily, keepWeekly: c.keepWeekly, capGb: c.capGb || '' };
+  for (const [name, v] of Object.entries(values)) {
+    if (document.activeElement !== f[name]) f[name].value = v;
+  }
+  const canRun = !running && !b.requested && d && d.ok && !['stopped', 'off'].includes(b.state);
+  $('#backup-run').disabled = !canRun;
+  $('#backup-run').textContent = b.requested && !running ? 'Starting…' : 'Back up now';
+  $('#backup-cancel').classList.toggle('hidden', !running);
+  $('#backup-history').replaceChildren(...(b.history || []).map(backupRow));
+
+  // Follow a running backup closely; otherwise just keep the page honest.
+  clearTimeout(backupTimer);
+  backupTimer = setTimeout(loadBackupAdmin, running || b.requested ? 3000 : 30000);
+}
+
+async function loadBackupAdmin() {
+  clearTimeout(backupTimer);
+  if ($('#view-admin').classList.contains('hidden') || document.hidden || conn.lost) {
+    // Look again soon in case the tab comes back, but cheaply.
+    if (!$('#view-admin').classList.contains('hidden')) backupTimer = setTimeout(loadBackupAdmin, 30000);
+    return;
+  }
+  try { renderBackup(await api('GET', '/api/admin/backup')); } catch { /* the rest of Admin still works */ }
+}
+
+$('#backup-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    await api('PATCH', '/api/admin/settings', { backup: { time: f.time.value, keepDaily: f.keepDaily.value, keepWeekly: f.keepWeekly.value, capGb: f.capGb.value } });
+    flash(f, 'Saved');
+    loadBackupAdmin();
+  } catch (err) { flash(f, err.message, false); }
+});
+
+$('#backup-run').addEventListener('click', async () => {
+  const f = $('#backup-form');
+  try {
+    await api('POST', '/api/admin/backup/run');
+    flash(f, 'Starting the backup…');
+    loadBackupAdmin();
+  } catch (err) { flash(f, err.message, false); }
+});
+
+$('#backup-cancel').addEventListener('click', async () => {
+  const f = $('#backup-form');
+  if (!confirm('Cancel this backup? What it copied so far is thrown away; the earlier backups are untouched.')) return;
+  try {
+    await api('POST', '/api/admin/backup/cancel');
+    flash(f, 'Cancelling…');
+    loadBackupAdmin();
+  } catch (err) { flash(f, err.message, false); }
 });
 
 // ---------- boot ----------

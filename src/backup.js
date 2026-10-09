@@ -222,7 +222,7 @@ function compressible(name, size) {
 // Copies one file to `to`, gzipping it if asked, and returns its checksum.
 // The checksum is of the original content, so a gzipped and a plain copy of
 // the same file match.
-async function copyFile(from, to, gz) {
+async function copyFile(from, to, gz, signal) {
   const hash = crypto.createHash('sha256');
   let size = 0;
   const tap = new Transform({
@@ -235,7 +235,7 @@ async function copyFile(from, to, gz) {
   const steps = [fs.createReadStream(from, { highWaterMark: 1 << 20 }), tap];
   if (gz) steps.push(zlib.createGzip());
   steps.push(fs.createWriteStream(to, { flags: 'wx' }));
-  await pipeline(steps);
+  await pipeline(steps, signal ? { signal } : {});
   return { hash: hash.digest('base64url'), size };
 }
 
@@ -247,8 +247,9 @@ function driveError(err, dest) {
 }
 
 class Run {
-  constructor({ dest, prev, prevDir, onProgress }) {
+  constructor({ dest, prev, prevDir, onProgress, signal }) {
     this.dest = dest;
+    this.signal = signal;
     this.prevDir = prevDir;
     this.prev = new Map((prev ? prev.files : []).map((f) => [f[0], f]));
     // Checksum → a stored copy to link to, starting with last run's files.
@@ -277,7 +278,16 @@ class Run {
     }
   }
 
+  stopIfCancelled() {
+    if (this.signal && this.signal.aborted) {
+      const err = new Error('Backup cancelled');
+      err.code = 'CANCELLED';
+      throw err;
+    }
+  }
+
   async walk(srcDir, rel, depth, source, outDir) {
+    this.stopIfCancelled();
     await fsp.mkdir(outDir, { recursive: true });
     let entries;
     try {
@@ -304,6 +314,7 @@ class Run {
   }
 
   async file(abs, rel, gzTaken) {
+    this.stopIfCancelled();
     let st;
     try {
       st = await fsp.stat(abs);
@@ -334,7 +345,7 @@ class Run {
     let copied;
     for (let tries = 1; ; tries++) {
       try {
-        copied = await copyFile(abs, tmp, gz);
+        copied = await copyFile(abs, tmp, gz, this.signal);
       } catch (err) {
         await fsp.rm(tmp, { force: true });
         if (driveError(err, this.tmpDir)) throw err;
@@ -372,7 +383,7 @@ class Run {
       // Kept gzipped only if that is actually smaller.
       if ((await fsp.stat(tmp)).size >= copied.size) {
         await fsp.rm(tmp, { force: true });
-        await copyFile(abs, tmp, false);
+        await copyFile(abs, tmp, false, this.signal);
         stored = false;
       } else {
         this.stats.compressed++;
@@ -390,7 +401,7 @@ class Run {
 // One backup. sources: [{ label, dir, skip?(name, depth, isDir), skipDir?(absDir) }].
 // extras: async (tmpDir) => [{ rel, file }] for files made just for the backup
 // (like a safe copy of a live database), which are deleted afterwards.
-async function runBackup({ dest, sources, extras, keep = DEFAULT_KEEP, capBytes = 0, onProgress, now = new Date() }) {
+async function runBackup({ dest, sources, extras, keep = DEFAULT_KEEP, capBytes = 0, onProgress, signal, now = new Date() }) {
   const root = path.join(dest, ROOT);
   await fsp.mkdir(root, { recursive: true });
   // Clear what a run cut short left behind.
@@ -411,7 +422,7 @@ async function runBackup({ dest, sources, extras, keep = DEFAULT_KEEP, capBytes 
   await fsp.mkdir(work);
   await fsp.mkdir(tmpDir);
 
-  const run = new Run({ dest: work, prev, prevDir, onProgress });
+  const run = new Run({ dest: work, prev, prevDir, onProgress, signal });
   run.tmpDir = tmpDir;
   try {
     for (const source of sources) {
@@ -432,6 +443,11 @@ async function runBackup({ dest, sources, extras, keep = DEFAULT_KEEP, capBytes 
     await fsp.rename(work, path.join(root, name));
   } catch (err) {
     await fsp.rm(work, { recursive: true, force: true });
+    if (signal && signal.aborted && err.code !== 'CANCELLED') {
+      const cancelled = new Error('Backup cancelled');
+      cancelled.code = 'CANCELLED';
+      throw cancelled;
+    }
     throw err;
   } finally {
     await fsp.rm(tmpDir, { recursive: true, force: true });
@@ -459,6 +475,77 @@ function writeStatus(dataDir, status) {
   fs.renameSync(tmp, file);
 }
 
+// ---------- settings ----------
+
+// What the admin can change, with the limits the form shows. Anything missing
+// or out of range falls back to the default, so a bad value never stops a backup.
+const LIMITS = { keepDaily: [1, 30], keepWeekly: [0, 12], capGb: [10, 100000] };
+const DEFAULT_TIME = '03:00';
+const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function config(saved) {
+  const s = saved || {};
+  const whole = (v, [min, max], fallback) => (Number.isInteger(v) && v >= min && v <= max ? v : fallback);
+  return {
+    time: TIME.test(s.time) ? s.time : DEFAULT_TIME,
+    keepDaily: whole(s.keepDaily, LIMITS.keepDaily, DEFAULT_KEEP.daily),
+    keepWeekly: whole(s.keepWeekly, LIMITS.keepWeekly, DEFAULT_KEEP.weekly),
+    capGb: whole(s.capGb, LIMITS.capGb, null),
+  };
+}
+
+// The form's input, checked strictly: throws a message for the admin.
+function cleanConfig(input) {
+  const i = input || {};
+  const num = (v) => (v === '' || v === null || v === undefined ? null : Number(v));
+  const out = {
+    time: typeof i.time === 'string' ? i.time.trim() : DEFAULT_TIME,
+    keepDaily: num(i.keepDaily),
+    keepWeekly: num(i.keepWeekly),
+    capGb: num(i.capGb),
+  };
+  if (!TIME.test(out.time)) throw new Error('Pick a time of day for the backup');
+  for (const [key, label] of [['keepDaily', 'Nightly backups to keep'], ['keepWeekly', 'Weekly backups to keep']]) {
+    const [min, max] = LIMITS[key];
+    if (!Number.isInteger(out[key]) || out[key] < min || out[key] > max) throw new Error(`${label} must be a whole number from ${min} to ${max}`);
+  }
+  if (out.capGb !== null && (!Number.isInteger(out.capGb) || out.capGb < LIMITS.capGb[0] || out.capGb > LIMITS.capGb[1])) {
+    throw new Error(`The size limit must be a whole number of GB from ${LIMITS.capGb[0]}, or blank for none`);
+  }
+  return out;
+}
+
+// ---------- requests ----------
+
+// Roost (the web app) asks the backup service for something by leaving a small
+// file in the data folder: 'run' (back up now), 'cancel', or 'reload' (settings
+// changed). The service looks for it every few seconds and deletes it.
+const REQUEST_FILE = 'backup-request.json';
+const ACTIONS = new Set(['run', 'cancel', 'reload']);
+
+function writeRequest(dataDir, action) {
+  const file = path.join(dataDir, REQUEST_FILE);
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ action, at: new Date().toISOString() }));
+  fs.renameSync(tmp, file);
+}
+
+function hasRequest(dataDir) {
+  return fs.existsSync(path.join(dataDir, REQUEST_FILE));
+}
+
+function takeRequest(dataDir) {
+  const file = path.join(dataDir, REQUEST_FILE);
+  let action = null;
+  try {
+    action = JSON.parse(fs.readFileSync(file, 'utf8')).action;
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+  }
+  fs.rmSync(file, { force: true });
+  return ACTIONS.has(action) ? action : null;
+}
+
 const HOUR = 60 * 60 * 1000;
 const LATE_AFTER = 50 * HOUR; // two missed nights
 const STOPPED_AFTER = 30 * 60 * 1000; // the service checks in every 10 minutes
@@ -480,4 +567,5 @@ module.exports = {
   ROOT, MANIFEST, STATUS_FILE, REBUILDABLE, DEFAULT_KEEP,
   checkDrive, listSnapshots, toPrune, prune, readManifest, runBackup,
   readStatus, writeStatus, summarize, snapshotName,
+  config, cleanConfig, LIMITS, writeRequest, takeRequest, hasRequest,
 };

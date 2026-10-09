@@ -117,10 +117,11 @@ Recovery codes and trusted devices are stored only as hashes. The authenticator 
 
 ## Backups
 
-Every night at 3:00, a second container (`roost-backup`, built from the same image) backs up Nest, every app's settings and Roost's own data to a USB SSD plugged into the server. Films and shows aren't backed up. The setup checklist walks through plugging the drive in.
+Every night (at 3:00 unless you change it), a second container (`roost-backup`, built from the same image) backs up Nest, every app's settings and Roost's own data to a USB SSD plugged into the server. Films and shows aren't backed up. The setup checklist walks through plugging the drive in.
 
 - Each night is a dated folder on the drive (`Roost Backups/2026-10-08 0300/`) that looks like a full copy. Unchanged files are hard links to the night before, so they take no space and no time; identical files are stored once; documents, settings and databases are stored gzipped (`.gz` added to the name).
-- It keeps the newest backup of each of the last 7 days and of each of the last 4 weeks.
+- By default it keeps the newest backup of each of the last 7 days and of each of the last 4 weeks.
+- **Admin → Backups** sets the time of day, how many nightly and weekly backups to keep and an optional drive size limit (the oldest backups go first). It also shows the drive's space, the last 14 runs, and has **Back up now** and **Cancel**. Roost passes these to the backup container through a small request file in its data folder.
 - Nest's database is copied with SQLite's `VACUUM INTO`, so the copy is consistent while Nest is running. Other files that change mid-copy are read again.
 - Roost never backs up onto the drive the data is on: if the SSD is unplugged, backups wait and the dashboard says "Backup drive not found".
 - The drive must be a Linux format (ext4) for hard links. ZimaOS Storage can format it.

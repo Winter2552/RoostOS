@@ -61,8 +61,8 @@ services:
       BACKUP_DIR: /backup
       NEST_DIR: /source/nest
       APPDATA_DIR: /source/appdata
-      BACKUP_TIME: "03:00"
-      # Your time zone, so 03:00 is your 03:00, e.g. Europe/London.
+      # Your time zone, so backups run at your time of day (set the time in
+      # Admin → Backups), e.g. Europe/London.
       TZ: "Etc/UTC"
     volumes:
       # Roost's data: backed up too, and where this service reports to Roost.
