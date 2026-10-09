@@ -434,6 +434,19 @@
         <ol class="activity" id="backup-history"></ol>
       </form>
 
+      <div class="card panel hidden" id="restore-panel">
+        <h3>Get files back</h3><span class="mono muted">Browse any backup like a folder. Nothing is overwritten: files come back as a download, or as a new folder in the person's Nest.</span>
+        <p class="mono muted tls-help hidden" id="restore-hint"></p>
+        <div id="restore-browser">
+          <div class="form-grid"><label class="field"><span>Backup</span><select id="restore-night"></select></label></div>
+          <nav class="restore-path mono" id="restore-path" aria-label="Where you are in the backup"></nav>
+          <ul class="restore-list" id="restore-list"></ul>
+          <div class="row"><button class="btn small hidden" type="button" id="restore-here"></button></div>
+        </div>
+        <div class="msg" role="status"></div>
+        <p class="mono muted restore-job hidden" id="restore-job" role="status"></p>
+      </div>
+
       <div class="card panel" id="activity-panel">
         <h3>Activity</h3><span class="mono muted">Sign-ins and changes, newest first. Tap a time for the exact date.</span>
         <div class="chips" id="activity-filters" role="group" aria-label="Show">

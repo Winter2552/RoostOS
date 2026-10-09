@@ -1609,6 +1609,8 @@ async function loadAdmin() {
   $('#new-user-apps').replaceChildren(...appChecks(null));
   loadTls();
   loadBackupAdmin();
+  restoreView.night = '';
+  browseBackup('');
 }
 
 function appChecks(selected) {
@@ -2207,6 +2209,111 @@ $('#backup-cancel').addEventListener('click', async () => {
     loadBackupAdmin();
   } catch (err) { flash(f, err.message, false); }
 });
+
+// ---------- get files back (Admin) ----------
+
+const restoreView = { night: '', path: '', timer: null };
+
+const restoreUrl = (kind, path = restoreView.path) => `/api/admin/backup/${kind}?${new URLSearchParams({ snapshot: restoreView.night, path })}`;
+
+function restoreAction(label, props) {
+  return el(props.href ? 'a' : 'button', { class: 'btn ghost small', type: props.href ? undefined : 'button', ...props, text: label });
+}
+
+async function askRestore(item, fullPath, person) {
+  const night = $('#restore-night').selectedOptions[0].textContent;
+  if (!confirm(`Put “${item}” from the ${night} backup into ${person}’s Nest, in a new folder called “Restored from backup ${restoreView.night}”?\n\nNothing already in their Nest is changed.`)) return;
+  try {
+    await api('POST', '/api/admin/backup/restore', { snapshot: restoreView.night, path: fullPath });
+    flash($('#restore-panel'), 'Restoring…');
+    followRestore();
+  } catch (err) { flash($('#restore-panel'), err.message, false); }
+}
+
+function renderRestoreJob(job) {
+  const line = $('#restore-job');
+  line.classList.toggle('hidden', !job);
+  if (!job) return;
+  if (job.running) line.textContent = `Restoring ${job.person}’s files: ${job.files.toLocaleString()} of ${job.total.toLocaleString()} files · ${bytes(job.bytes)} of ${bytes(job.totalBytes)}`;
+  else if (job.error) line.textContent = `The restore for ${job.person} stopped after ${job.files.toLocaleString()} files: ${job.error}`;
+  else line.textContent = `Done: ${job.files.toLocaleString()} files (${bytes(job.bytes)}) are in ${job.person}’s Nest, in “${job.folder}”.`;
+}
+
+async function followRestore() {
+  clearTimeout(restoreView.timer);
+  if ($('#view-admin').classList.contains('hidden')) return;
+  try {
+    const { job } = await api('GET', '/api/admin/backup/restore');
+    renderRestoreJob(job);
+    if (job && job.running) restoreView.timer = setTimeout(followRestore, 2000);
+  } catch { /* try again next time Admin opens */ }
+}
+
+function renderRestore(r) {
+  const panel = $('#restore-panel');
+  panel.classList.toggle('hidden', !r.available && r.reason !== 'not-mounted');
+  const hint = $('#restore-hint');
+  hint.classList.toggle('hidden', r.available);
+  $('#restore-browser').classList.toggle('hidden', !r.available);
+  if (!r.available) {
+    hint.textContent = 'Roost can’t see the backup drive yet. In the compose file, point the roost service’s /backup:ro line at the same folder as the roost-backup service, then redeploy.';
+    return;
+  }
+  restoreView.night = r.snapshot.name;
+  const select = $('#restore-night');
+  select.replaceChildren(...r.nights.map((n) => el('option', { value: n.name, selected: n.name === r.snapshot.name }, `${backupWhen(n.at).replace(/^./, (c) => c.toUpperCase())}`)));
+  select.value = r.snapshot.name;
+
+  const crumbs = [el('button', { type: 'button', text: 'Backup', onclick: () => browseBackup('') })];
+  r.path.forEach((seg, i) => {
+    const there = r.path.slice(0, i + 1).map((s) => s.name).join('/');
+    crumbs.push(el('span', { text: '›', 'aria-hidden': 'true' }));
+    const name = seg.label || seg.name;
+    crumbs.push(i === r.path.length - 1 ? el('span', { text: name }) : el('button', { type: 'button', text: name, onclick: () => browseBackup(there) }));
+  });
+  $('#restore-path').replaceChildren(...crumbs);
+
+  const at = (name) => (restoreView.path ? `${restoreView.path}/${name}` : name);
+  const rows = [];
+  for (const f of r.folders) {
+    rows.push(el('li', { class: 'restore-row' },
+      el('button', { class: 'restore-name', type: 'button', onclick: () => browseBackup(at(f.name)) },
+        f.label || f.name, el('small', { text: `${f.files.toLocaleString()} ${f.files === 1 ? 'file' : 'files'} · ${bytes(f.bytes)}` })),
+      el('div', { class: 'restore-actions' },
+        f.restoreFor ? restoreAction('Restore to Nest', { onclick: () => askRestore(f.name, at(f.name), f.restoreFor) }) : null,
+        restoreAction('Download .zip', { href: restoreUrl('download', at(f.name)) }))));
+  }
+  for (const f of r.files) {
+    rows.push(el('li', { class: 'restore-row' },
+      el('div', { class: 'restore-name' }, f.name, el('small', { text: `${bytes(f.size)} · ${new Date(f.mtime).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}` })),
+      el('div', { class: 'restore-actions' },
+        f.restoreFor ? restoreAction('Restore to Nest', { onclick: () => askRestore(f.name, at(f.name), f.restoreFor) }) : null,
+        restoreAction('Download', { href: restoreUrl('download', at(f.name)) }))));
+  }
+  $('#restore-list').replaceChildren(...(rows.length ? rows : [el('li', { class: 'empty mono', text: 'Nothing in this folder' })]));
+  restoreView.restoreTo = r.restoreTo;
+  const here = $('#restore-here');
+  here.classList.toggle('hidden', !r.restoreTo || !r.path.length);
+  if (r.restoreTo) {
+    const name = r.path[r.path.length - 1].name;
+    here.textContent = r.path.length === 3 ? `Restore all of ${r.restoreTo.name}’s files to Nest` : `Restore “${name}” to Nest`;
+    here.onclick = () => askRestore(r.path.length === 3 ? `all of ${r.restoreTo.name}’s files` : name, restoreView.path, r.restoreTo.name);
+  }
+  renderRestoreJob(r.job);
+  if (r.job && r.job.running) { clearTimeout(restoreView.timer); restoreView.timer = setTimeout(followRestore, 2000); }
+}
+
+async function browseBackup(path, night = restoreView.night) {
+  restoreView.path = path;
+  try {
+    renderRestore(await api('GET', `/api/admin/backup/browse?${new URLSearchParams({ snapshot: night, path })}`));
+  } catch (err) {
+    flash($('#restore-panel'), err.message, false);
+    if (path) browseBackup('', night);
+  }
+}
+
+$('#restore-night').addEventListener('change', (e) => browseBackup('', e.target.value));
 
 // ---------- boot ----------
 
