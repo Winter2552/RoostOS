@@ -157,6 +157,10 @@
         </div>
         <div class="apps" id="apps"></div>
       </div>
+      <div class="section watching hidden" id="watching">
+        <div class="section-head"><h2>Continue watching</h2></div>
+        <div class="watch-row" id="watch-row"></div>
+      </div>
     </section>
 
     <!-- Nest: My Drive and Trash (public/nest.js) -->
@@ -223,6 +227,17 @@
 
       <h3 class="status-group mono muted">Drives</h3>
       <div class="status-grid" id="status-disks"></div>
+
+      <div id="status-outside-wrap" class="hidden">
+        <h3 class="status-group mono muted">Outside services</h3>
+        <div class="card container-list outside-list" id="status-outside"></div>
+      </div>
+
+      <div id="status-health-wrap" class="hidden">
+        <h3 class="status-group mono muted">Drive health</h3>
+        <p class="mono muted status-note hidden" id="status-health-note"></p>
+        <div class="status-grid" id="status-health"></div>
+      </div>
     </section>
 
     <!-- Profile view -->
@@ -272,6 +287,12 @@
           <div class="row" id="two-step-devices"></div>
           <div class="msg" role="status"></div>
         </form>
+      </div>
+      <div class="card panel" id="devices-panel">
+        <h3>Signed-in devices</h3><span class="mono muted">Where your Roost account is signed in</span>
+        <div id="devices-list"></div>
+        <div class="row hidden" id="devices-others"><button class="btn ghost small" type="button" id="sign-out-others">Sign out everywhere else</button></div>
+        <div class="msg" role="status"></div>
       </div>
       <form class="card panel" id="password-form">
         <h3>Password</h3><span class="mono muted">At least 8 characters</span>
@@ -361,6 +382,18 @@
         <div class="msg" role="status"></div>
         <div id="invite-result"></div>
         <div id="invites"></div>
+      </form>
+
+      <form class="card panel" id="jellyfin-form">
+        <h3>Jellyfin sign-in</h3><span class="mono muted">Same username and password in Jellyfin, which opens already signed in</span>
+        <p class="two-step-state"><span class="dot" id="jellyfin-dot"></span><span id="jellyfin-text">Checking…</span></p>
+        <div class="form-grid">
+          <label class="field"><span>Jellyfin address, as Roost reaches it</span><input type="text" name="url" placeholder="http://192.168.1.20:8096" spellcheck="false"></label>
+          <label class="field"><span>API key</span><input type="password" name="apiKey" autocomplete="off" spellcheck="false"></label>
+        </div>
+        <p class="mono muted panel-note">Make a key in Jellyfin under Dashboard → API Keys. Accounts are matched by username; Jellyfin admin accounts are never changed.</p>
+        <div class="row"><button class="btn" type="submit" id="jellyfin-save">Connect</button><button class="btn ghost small hidden" type="button" id="jellyfin-off">Turn off</button></div>
+        <div class="msg" role="status"></div>
       </form>
 
       <form class="card panel" id="settings-form">

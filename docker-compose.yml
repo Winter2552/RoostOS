@@ -33,6 +33,8 @@ services:
       # Container status comes from the docker-proxy service below, which only lets
       # Roost read the container list. Remove both to fall back to web checks.
       DOCKER_HOST: tcp://docker-proxy:2375
+      # Drive health readings from the roost-smart service below (the read-only mount).
+      SMART_DIR: /smart
     depends_on:
       - docker-proxy
     volumes:
@@ -50,6 +52,7 @@ services:
       # and the status page lists a single drive.
       - /DATA:/hostfs/system:ro
       - /DATA:/hostfs/data:ro
+      - smart:/smart:ro
 
   # Nightly backups (Roost Snapshots) to a drive plugged into the server. Same
   # image as Roost, different start command. It reads Nest and the apps'
@@ -101,3 +104,26 @@ services:
       POST: "0"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  # Drive health: once an hour, reads each drive's SMART data (temperature,
+  # errors, wear) with smartctl and leaves it in the smart volume for Roost.
+  # It has no network at all. Drives that are asleep are left asleep.
+  roost-smart:
+    build: ./smart
+    container_name: roost-smart
+    restart: unless-stopped
+    network_mode: none
+    # smartctl needs raw access to read SMART; this is all it is given.
+    cap_add:
+      - SYS_RAWIO
+    devices:
+      # The system SSD. ZimaOS shows each drive's name under Storage.
+      - /dev/sda:/dev/sda
+      # The 3 TB data drive: remove the # once it is installed. A line for a
+      # drive that isn't there stops this service from starting.
+      # - /dev/sdb:/dev/sdb
+    volumes:
+      - smart:/out
+
+volumes:
+  smart:

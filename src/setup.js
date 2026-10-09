@@ -59,6 +59,26 @@ const STEPS = [
     check: (ctx) => ctx.drives.filter((d) => !d.missing).length >= 2,
   },
   {
+    id: 'drive-health',
+    group: 'Server',
+    title: 'Watch your drives\' health',
+    covers: ['SMART_DIR'],
+    why: 'Hear early when a drive runs hot, wears out or starts to fail, before files are lost.',
+    how: [
+      'Keep the roost-smart service, its devices and the smart volume from the compose file in the README.',
+      'Once the 3 TB drive is in, remove the # in front of its /dev/sdb line under roost-smart.',
+      'Redeploy Roost, wait a minute, and check Drive health on the status page lists every drive.',
+    ],
+    action: { label: 'Open status', view: 'status' },
+    // Done when every drive the status page knows about has a health reading.
+    check: (ctx) => {
+      const h = ctx.driveHealth;
+      if (!h || h.missing) return false;
+      const read = h.drives.filter((d) => d.verdict !== 'unknown').length;
+      return read >= Math.max(1, ctx.drives.filter((d) => !d.missing).length);
+    },
+  },
+  {
     id: 'docker',
     group: 'Server',
     title: 'Let Roost see your containers',
@@ -107,6 +127,22 @@ const STEPS = [
     ],
     action: { label: 'Edit apps', view: 'admin', focus: 'apps-form' },
     check: (ctx) => ctx.db.apps.every((a) => a.url),
+  },
+  {
+    id: 'jellyfin-sign-in',
+    group: 'Server',
+    title: 'Connect Jellyfin sign-in',
+    why: 'Everyone uses their Roost username and password in Jellyfin, and the Jellyfin card opens it already signed in. The dashboard also shows what each person was part way through watching.',
+    how: [
+      'In Jellyfin, open Dashboard → API Keys, press +, name it Roost and copy the key.',
+      'Under Admin → Jellyfin sign-in, enter Jellyfin\'s address as Roost reaches it (e.g. http://192.168.1.20:8096) and paste the key.',
+      'Press Connect. Each person is linked the next time they sign in to Roost.',
+    ],
+    action: { label: 'Connect Jellyfin', view: 'admin', focus: 'jellyfin-form', field: 'url' },
+    covers: ['jellyfin'],
+    // Saving only works once Roost has reached Jellyfin with the key, so a
+    // saved link means it worked; no call to Jellyfin when this list opens.
+    check: (ctx) => Boolean(ctx.db.settings.jellyfin && ctx.db.settings.jellyfin.url && ctx.db.settings.jellyfin.apiKey),
   },
 
   // ---------- reaching Roost from anywhere ----------
