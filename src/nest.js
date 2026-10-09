@@ -160,6 +160,7 @@ class Nest {
       staleUploads: q('SELECT id, owner FROM uploads WHERE created < ?'),
     };
     this.pages = new Map();
+    this.finds = new Map();
   }
 
   close() {
@@ -269,6 +270,31 @@ class Nest {
     };
   }
 
+  // ---------- search ----------
+
+  // Items (not in the trash) whose names hold every word typed, in any case.
+  // Names starting with the first word come first, then the newest.
+  search(user, q, limit = 20) {
+    const words = String(q).split(/\s+/).filter(Boolean).slice(0, 6);
+    if (!words.length) return { items: [], more: false };
+    if (!this.finds.has(words.length)) {
+      this.finds.set(words.length, this.db.prepare(`SELECT * FROM nodes WHERE owner = ? AND trash_root IS NULL
+        ${words.map(() => "AND name LIKE ? ESCAPE '\\'").join(' ')}
+        ORDER BY name LIKE ? ESCAPE '\\' DESC, modified DESC LIMIT ?`));
+    }
+    const like = (w) => w.replace(/[\\%_]/g, (c) => `\\${c}`);
+    const rows = this.finds.get(words.length).all(user.id, ...words.map((w) => `%${like(w)}%`), `${like(words[0])}%`, limit + 1);
+    const places = new Map();
+    const where = (parent) => {
+      if (!places.has(parent)) places.set(parent, ['My Drive', ...(parent ? this.q.chain.all(parent).map((c) => c.name) : [])].join(' / '));
+      return places.get(parent);
+    };
+    return {
+      items: rows.slice(0, limit).map((n) => ({ ...item(n), parent: n.parent || 'root', where: where(n.parent) })),
+      more: rows.length > limit,
+    };
+  }
+
   createFolder(user, parentId, rawName) {
     const parent = this.folder(user, parentId);
     const name = cleanName(rawName);
@@ -290,6 +316,42 @@ class Nest {
       parent = found ? found.id : this.createFolder(user, parent, part).id;
     }
     return parent;
+  }
+
+  // Puts files that come from outside Nest (a backup) into a new folder at the
+  // top of the user's drive. Nothing already in Nest is touched: the folder
+  // gets a free name, and everything goes inside it.
+  //   files: [{ rel: 'a/b.txt', size, mtime, open() }], open() returns a stream.
+  // Stops before starting if it wouldn't fit the user's limit or the drive.
+  async importFolder(user, folderName, files, { onFile } = {}) {
+    this.checkSpace(user, files.reduce((a, f) => a + f.size, 0));
+    const top = this.createFolder(user, '', folderName);
+    let restored = 0;
+    for (const f of files) {
+      const slash = f.rel.lastIndexOf('/');
+      const parent = slash < 0 ? top.id : this.ensurePath(user, top.id, f.rel.slice(0, slash));
+      const name = this.uniqueName(user, parent, cleanName(f.rel.slice(slash + 1)) || 'file');
+      const dir = this.diskPath(user, parent);
+      const temp = this.uploadPath(user, `restore-${newId()}`);
+      fs.mkdirSync(path.dirname(temp), { recursive: true });
+      try {
+        await pipeline(f.open(), fs.createWriteStream(temp, { flags: 'wx' }));
+        const size = fs.statSync(temp).size;
+        const when = new Date(f.mtime);
+        fs.utimesSync(temp, when, when);
+        fs.renameSync(temp, path.join(dir, name));
+        const id = newId();
+        this.q.insert.run(id, user.id, parent, name, 'file', size, '', Date.now(), f.mtime);
+      } catch (err) {
+        fs.rmSync(temp, { force: true });
+        this.changed(user);
+        throw err;
+      }
+      restored++;
+      if (onFile) onFile(f, restored);
+    }
+    this.changed(user);
+    return top;
   }
 
   rename(user, id, rawName) {
@@ -507,7 +569,9 @@ class Nest {
 
   // ---------- downloads ----------
 
-  async download(user, id, req, res) {
+  // inline: a photo or video type to show in the page instead of downloading
+  // (Glint passes it only for types a browser can't run as a page).
+  async download(user, id, req, res, { inline = '' } = {}) {
     const n = this.node(user, id, 'file');
     const file = this.diskPath(user, n.id);
     let stat;
@@ -516,14 +580,26 @@ class Nest {
     } catch {
       throw new HttpError(404, 'That file is missing from the drive');
     }
+    // A device that already has this exact file gets a tiny "not changed"
+    // instead of the whole file again: saves home upload when you're away.
+    const etag = `"${n.id}-${stat.size}-${Math.floor(stat.mtimeMs)}"`;
     const headers = {
-      'Content-Type': 'application/octet-stream',
-      'Content-Disposition': disposition(n.name),
+      'Content-Type': inline || 'application/octet-stream',
+      'Content-Disposition': inline ? 'inline' : disposition(n.name),
       'Accept-Ranges': 'bytes',
       'Cache-Control': 'private, no-cache',
+      ETag: etag,
+      'Last-Modified': new Date(stat.mtimeMs).toUTCString(),
     };
+    if (inline) headers['Content-Security-Policy'] = "default-src 'none'; sandbox";
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, headers);
+      return res.end();
+    }
     // One byte range, so interrupted downloads can carry on.
-    const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+    // A resumed download of a file that has since changed starts over.
+    const ifRange = req.headers['if-range'];
+    const range = ifRange && ifRange !== etag ? null : /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
     let start = 0;
     let end = stat.size - 1;
     let status = 200;
@@ -650,4 +726,4 @@ function gbText(bytes) {
   return gb >= 10 ? `${Math.round(gb)} GB` : gb >= 1 ? `${gb.toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
 }
 
-module.exports = { Nest, cleanName, CHUNK, PAGE, TRASH_DAYS };
+module.exports = { Nest, cleanName, disposition, CHUNK, PAGE, TRASH_DAYS };

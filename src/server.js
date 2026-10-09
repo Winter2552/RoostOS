@@ -7,21 +7,32 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Store } = require('./store');
-const { hashPassword, verifyPassword, Sessions, RateLimiter, SESSION_TTL_MS } = require('./auth');
+const { hashPassword, verifyPassword, Sessions, RateLimiter, deviceName, SESSION_TTL_MS } = require('./auth');
 const storage = require('./storage');
 const links = require('./links');
 const mail = require('./mail');
 const setup = require('./setup');
+const backup = require('./backup');
 const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
-const { listContainers, containersFor } = require('./docker');
+const { listContainers, containersFor, restartContainer } = require('./docker');
+const { DriveHealth } = require('./smart');
+const { OutsideServices } = require('./outside');
 const templates = require('./templates');
+const { cleanSchedule, isDue } = require('./schedule');
 const { CertManager, validDomain } = require('./tls');
 const twoStep = require('./twostep');
 const { qrSvg } = require('./qr');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
 const { HttpError, send, readJson, str } = require('./http');
-const { Nest } = require('./nest');
+const { Nest, disposition } = require('./nest');
 const family = require('./family');
+const zip = require('./zip');
+const restore = require('./restore');
+const { Glint } = require('./glint');
+const { Assets } = require('./assets');
+const { TrafficMeter } = require('./traffic');
+const { createSearch, nestSource } = require('./search');
+const { Jellyfin, PREFIX: JELLYFIN_PREFIX, OPENER_HTML } = require('./jellyfin');
 const { UptimeLog, watchDockerEvents } = require('./uptime');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -34,17 +45,6 @@ const MAX_TRUSTED = 20;
 const CODE_WAIT_MS = 5 * 60 * 1000;
 const CODE_TRIES = 5;
 const ICONS = ['play', 'orbit', 'folder', 'spark', 'grid', 'cloud', 'music', 'home'];
-
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-  '.json': 'application/json',
-  '.webmanifest': 'application/manifest+json',
-};
 
 // ---------- helpers ----------
 
@@ -196,27 +196,44 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, tls: tlsOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000 } = {}) {
+function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000 } = {}) {
   const store = new Store(dataDir);
   const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
+  // The few outside services Roost leans on, for the admin's status page.
+  const outside = new OutsideServices({ tokenOf: () => (store.db.settings.tls || {}).token || '', ...outsideOptions });
   const activity = new ActivityLog(dataDir, { saveDelayMs: activitySaveDelayMs });
-  // Nest used to be an outside app with no link; it is built in now.
-  const nestApp = store.db.apps.find((a) => a.id === 'nest');
-  if (nestApp && !nestApp.url) {
-    nestApp.url = '#/nest';
-    store.save();
+  const traffic = new TrafficMeter(dataDir);
+  const assets = new Assets(PUBLIC_DIR);
+  // Nest and Glint used to be outside apps with no link; they are built in now.
+  let linked = false;
+  for (const [id, url] of [['nest', '#/nest'], ['glint', '#/glint']]) {
+    const app = store.db.apps.find((a) => a.id === id);
+    if (app && !app.url) {
+      app.url = url;
+      linked = true;
+    }
   }
-  const sessions = new Sessions();
+  if (linked) store.save();
+  const jellyfin = new Jellyfin(() => store.db.settings.jellyfin);
+  // Jellyfin sign-ins still being made for a Roost sign-in, by its id.
+  const jellyfinLinks = new Map();
+  const sessions = new Sessions(path.join(dataDir, 'sessions.json'), (s) => {
+    if (s.jf) jellyfin.logout(s.jf.token).catch(() => {});
+  });
   const limiter = new RateLimiter(maxFailedSignIns);
   // Sign-ins waiting for a code, and authenticator secrets waiting to be
   // confirmed. Both are short-lived, so they stay in memory.
   const pendingCodes = new Map();
   const pendingSetups = new Map();
   const cpu = new CpuMeter();
+  // When each app was last restarted from the status page, to stop double taps.
+  const restartedAt = new Map();
   // Drives shown on the status page. Without a list, show the system drive and
   // the drive Roost keeps its data on (the same drive is only listed once).
   const diskList = disks && disks.length ? disks : [{ label: 'System', path: '/' }, { label: 'Data', path: dataDir }];
   const db = () => store.db;
+  // SMART readings the roost-smart helper leaves behind; null when it isn't set up.
+  const driveHealth = new DriveHealth(smartDir);
 
   // The family space is stored in Nest like one more user (see src/family.js).
   family.familyOf(db());
@@ -233,11 +250,29 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       store.saveSoon();
     },
   });
+  // The backup drive, read-only: for browsing and restoring from backups.
+  const backups = new restore.Backups(backupDir);
+  // The one restore into Nest that may be running, and how it is going.
+  let restoreJob = null;
+  // The Roost user whose Nest files a backed-up path is in: Nest/<username>_<id>/files/...
+  // With `inside`, the path must be at or under the files folder, not above it.
+  function nestOwner(segs, inside = false) {
+    if (segs[0] !== 'Nest' || segs.length < 2 || (inside && (segs.length < 3 || segs[2] !== 'files'))) return null;
+    return db().users.find((u) => `${u.username}_${u.id}` === segs[1]) || null;
+  }
   nest.syncUsage();
-  const sweep = () => nest.sweep().catch((err) => console.error('Nest clean-up failed:', err));
+  const glint = new Glint({ nest });
+  const search = createSearch({ sources: [nestSource(nest)], visibleApps: (user) => visibleApps(db(), user) });
+  const sweep = () => nest.sweep().then(() => glint.sweep()).catch((err) => console.error('Nest clean-up failed:', err));
   sweep();
   const sweepTimer = setInterval(sweep, 6 * 60 * 60 * 1000);
   sweepTimer.unref();
+  // Browsers send the session cookie; phone apps send their device key as a
+  // Bearer token.
+  function tokenOf(req) {
+    const auth = String(req.headers.authorization || '');
+    return auth.startsWith('Bearer ') ? auth.slice(7).trim() : parseCookies(req)[COOKIE];
+  }
 
   // Uptime history: containers are re-read when Docker reports a change, and
   // apps without one get a web check every few minutes (see src/uptime.js).
@@ -291,8 +326,54 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   uptimeSaveTimer.unref();
   runUptime({ web: true });
 
+  // Restarts an app's containers that the Docker helper lists. Turned away with
+  // an HttpError when it can't (no Docker, not on the list, restarted less than
+  // minGapMs ago); a restart Docker itself fails carries restartFailed.
+  async function restartApp(app, minGapMs) {
+    const docker = await listContainers(dockerHost, probeTimeoutMs);
+    if (docker.error) throw new HttpError(503, 'Docker is not connected');
+    const allowed = new Set(docker.restartable);
+    const names = containersFor(app, docker.containers)
+      .map((c) => c.name)
+      .filter((n) => allowed.has(n) && n !== roostContainer);
+    if (!names.length) throw new HttpError(403, `${app.name} can't be restarted from Roost`);
+    if (Date.now() - (restartedAt.get(app.id) || 0) < minGapMs) throw new HttpError(429, `${app.name} was just restarted. Give it a moment.`);
+    restartedAt.set(app.id, Date.now());
+    try {
+      await Promise.all(names.map((n) => restartContainer(dockerHost, n)));
+    } catch (cause) {
+      restartedAt.delete(app.id);
+      throw Object.assign(new Error('restart failed'), { restartFailed: true, cause });
+    }
+    return names;
+  }
+
+  // Scheduled restarts. One cheap check every 20 seconds (no Docker call unless
+  // an app is due); each schedule fires once in its minute, skips an app that
+  // was restarted in the last 10 minutes, and a restart missed because Roost
+  // was off is not made up later.
+  const scheduledMinute = new Map();
+  const runSchedules = () => {
+    const now = new Date();
+    const minute = Math.floor(now.getTime() / 60000);
+    for (const app of db().apps) {
+      if (!isDue(app.restartSchedule, now) || scheduledMinute.get(app.id) === minute) continue;
+      scheduledMinute.set(app.id, minute);
+      restartApp(app, 10 * 60 * 1000).then(
+        (names) => activity.add('app-restarted', { actor: 'schedule', detail: `${app.name} (${names.join(', ')})` }),
+        (err) => {
+          if (err.status === 429) return; // Someone just restarted it by hand.
+          const why = err.restartFailed ? err.cause.message : err.message;
+          activity.add('app-restart-failed', { actor: 'schedule', detail: `${app.name}: ${why}` });
+        },
+      );
+    }
+  };
+  const scheduleTimer = setInterval(runSchedules, scheduleCheckMs);
+  scheduleTimer.unref();
+
   function currentUser(req) {
-    const s = sessions.get(parseCookies(req)[COOKIE]);
+    const s = sessions.get(tokenOf(req));
     const user = s ? db().users.find((u) => u.id === s.userId) || null : null;
     if (user && guestEnded(user)) {
       sessions.destroyUser(user.id);
@@ -331,10 +412,71 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   // Cookies are marked Secure whenever this request came over HTTPS.
   const secure = (req) => secureCookies || isSecure(req, trustProxy);
 
-  function login(req, res, user, status = 200, cookies = []) {
+  // A sign-in that names a device (an app on a phone) gets a long-lived device
+  // key in the reply instead of a cookie.
+  function login(req, res, user, { status = 200, cookies = [], device = '', password = null } = {}) {
     if (guestEnded(user)) throw new HttpError(403, 'Your guest pass has ended. Ask whoever invited you for more time.');
-    const token = sessions.create(user.id);
+    if (device) {
+      const key = sessions.create(user.id, { kind: 'app', name: device });
+      return send(res, status, { user: publicUser(db(), user), key });
+    }
+    const token = sessions.create(user.id, { name: deviceName(req.headers['user-agent']) });
+    if (password !== null) linkJellyfin(sessions.get(token), user, password);
     send(res, status, { user: publicUser(db(), user) }, { 'Set-Cookie': [sessionCookie(token, secure(req)), ...cookies] });
+  }
+
+  // ---------- Jellyfin ----------
+
+  function canUseJellyfin(user) {
+    return visibleApps(db(), user).some((a) => a.id === 'jellyfin');
+  }
+
+  function jellyfinFailed(err) {
+    console.error(`Jellyfin: ${err.message}`);
+  }
+
+  // Roost only knows a password at the moment it's typed, so that's when the
+  // Jellyfin account gets the same one.
+  function syncJellyfinPassword(user, password) {
+    if (!jellyfin.enabled() || !canUseJellyfin(user)) return Promise.resolve(null);
+    return jellyfin.ensureAccount(user.username, password).catch((err) => { jellyfinFailed(err); return null; });
+  }
+
+  // Signs this browser in to Jellyfin as well, in the background. The token is
+  // kept with the Roost sign-in and ends with it.
+  function linkJellyfin(session, user, password) {
+    if (!session || !jellyfin.enabled() || !canUseJellyfin(user)) return;
+    const work = syncJellyfinPassword(user, password)
+      .then(() => jellyfin.signIn(user.username, password, { device: session.name || 'Roost', deviceId: `roost-${session.id}` }))
+      .then((jf) => {
+        if (sessions.list(user.id).includes(session)) {
+          session.jf = jf;
+          sessions.save();
+        } else {
+          jellyfin.logout(jf.token).catch(() => {});
+        }
+      })
+      .catch(jellyfinFailed)
+      .finally(() => jellyfinLinks.delete(session.id));
+    jellyfinLinks.set(session.id, work);
+  }
+
+  function jellyfinAccessChanged(user) {
+    if (!jellyfin.enabled()) return;
+    if (canUseJellyfin(user)) {
+      jellyfin.enable(user.username).catch(jellyfinFailed);
+      return;
+    }
+    for (const s of sessions.list(user.id)) {
+      if (s.jf) jellyfin.logout(s.jf.token).catch(() => {});
+      delete s.jf;
+    }
+    sessions.save();
+    jellyfin.disable(user.username).catch(jellyfinFailed);
+  }
+
+  function deviceView(s, current) {
+    return { id: s.id, kind: s.kind, name: s.name, created: new Date(s.created).toISOString(), lastSeen: new Date(s.lastSeen).toISOString(), current };
   }
 
   function forget(map) {
@@ -372,6 +514,16 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     };
   }
 
+  async function jellyfinView() {
+    const c = db().settings.jellyfin;
+    if (!c || !c.url) return { url: '', keySaved: false, connected: false };
+    try {
+      return { url: c.url, keySaved: Boolean(c.apiKey), connected: true, ...(await jellyfin.check()) };
+    } catch (err) {
+      return { url: c.url, keySaved: Boolean(c.apiKey), connected: false, error: err.status === 401 ? 'the API key was refused' : err.message };
+    }
+  }
+
   function cleanApps(input) {
     if (!Array.isArray(input) || input.length > 48) throw new HttpError(400, 'Apps must be a list');
     const seen = new Set();
@@ -385,12 +537,22 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         container: str(a.container, 200),
         icon: ICONS.includes(a.icon) ? a.icon : 'grid',
       };
+      const schedule = cleanSchedule(a.restartSchedule);
+      if (schedule instanceof Error) throw new HttpError(400, `${app.name || 'App'}: ${schedule.message}`);
+      if (schedule) app.restartSchedule = schedule;
       if (!app.name) throw new HttpError(400, 'Every app needs a name');
       if (!/^[a-z0-9-]+$/i.test(app.id) || seen.has(app.id)) throw new HttpError(400, 'Bad app id');
       if (!validAppUrl(app.url)) throw new HttpError(400, `${app.name}: link must start with http:// or https://`);
       seen.add(app.id);
       return app;
     });
+  }
+
+  // ?space=family works in the family space instead of the person's own files.
+  function spaceOwner(user, params) {
+    if (params.get('space') !== 'family') return user;
+    if (!family.isMember(db(), user)) throw new HttpError(403, 'You’re not in the family space');
+    return family.familyOf(db());
   }
 
   function familyView() {
@@ -429,8 +591,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
 
   // Settings for the admin page. The mail password never leaves the server.
   function settingsView() {
-    const { mail: _mail, ...rest } = db().settings;
-    return { ...rest, publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()) };
+    const { mail: _mail, jellyfin: _jellyfin, ...rest } = db().settings;
+    return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()) };
   }
 
   // The admin's notice on the dashboard. Expired notices are simply not
@@ -625,7 +787,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       db().users.push(user);
       store.save();
       record(req, 'setup', { actor: user.username });
-      login(req, res, user, 201);
+      login(req, res, user, { status: 201, password: body.password });
     },
 
     'POST /api/login': async (req, res) => {
@@ -639,14 +801,17 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         record(req, 'sign-in-failed', { target: username || null, detail: user ? 'wrong password' : 'no such user' });
         throw new HttpError(401, 'Wrong username or password');
       }
+      const device = str(body.device, 60);
       if (guestEnded(user)) record(req, 'sign-in-failed', { target: user.username, detail: 'guest pass ended' });
       if (!user.twoStep || isTrusted(req, user)) {
         record(req, 'sign-in', { actor: user.username, detail: user.twoStep ? 'trusted device' : '' });
-        return login(req, res, user);
+        return login(req, res, user, { device, password: body.password });
       }
       forget(pendingCodes);
       const ticket = crypto.randomBytes(24).toString('hex');
-      pendingCodes.set(ticket, { userId: user.id, expires: Date.now() + CODE_WAIT_MS, tries: 0 });
+      // The password is only held in memory until the code arrives, so the
+      // Jellyfin sign-in can happen then too.
+      pendingCodes.set(ticket, { userId: user.id, device, password: body.password, expires: Date.now() + CODE_WAIT_MS, tries: 0 });
       send(res, 200, { twoStep: true, ticket });
     },
 
@@ -684,15 +849,15 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       }
       pendingCodes.delete(body.ticket);
       record(req, 'sign-in', { actor: user.username, detail: /^\d/.test(code) ? 'with code' : 'with recovery code' });
-      const cookies = body.trust === true ? [trustDevice(req, user)] : [];
+      const cookies = body.trust === true && !pending.device ? [trustDevice(req, user)] : [];
       store.save();
-      login(req, res, user, 200, cookies);
+      login(req, res, user, { cookies, device: pending.device, password: pending.password });
     },
 
     'POST /api/logout': (req, res) => {
       const user = currentUser(req);
       if (user) record(req, 'sign-out', { actor: user.username });
-      sessions.destroy(parseCookies(req)[COOKIE]);
+      sessions.destroy(tokenOf(req));
       send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie('', secure(req)) });
     },
 
@@ -712,6 +877,9 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         }
         if (!validPassword(body.newPassword)) throw new HttpError(400, 'Password must be at least 8 characters');
         user.password = hashPassword(body.newPassword);
+        // Anyone who knew the old password is signed out; this device stays in.
+        sessions.destroyUser(user.id, tokenOf(req));
+        syncJellyfinPassword(user, body.newPassword);
         record(req, 'password-changed', { actor: user.username, target: user.username });
       }
       store.save();
@@ -793,9 +961,100 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       send(res, 200, { user: publicUser(db(), user) });
     },
 
+    // ---------- signed-in devices ----------
+
+    'GET /api/me/devices': (req, res) => {
+      const user = requireUser(req);
+      const current = sessions.get(tokenOf(req));
+      send(res, 200, { devices: sessions.list(user.id).map((s) => deviceView(s, s === current)) });
+    },
+
+    'DELETE /api/me/devices/:id': (req, res, id) => {
+      const user = requireUser(req);
+      if (!sessions.destroyId(user.id, id)) throw new HttpError(404, 'That device is already signed out');
+      send(res, 200, { ok: true });
+    },
+
+    'POST /api/me/devices/sign-out-others': (req, res) => {
+      const user = requireUser(req);
+      sessions.destroyUser(user.id, tokenOf(req));
+      send(res, 200, { ok: true });
+    },
+
+    // One sign-in for the apps Roost serves: Nest, Glint and anything behind a
+    // proxy ask here who is signed in and whether they may use the app.
+    'GET /api/auth/check': (req, res) => {
+      const user = requireUser(req);
+      const app = new URL(req.url, 'http://roost').searchParams.get('app');
+      if (app && !visibleApps(db(), user).some((a) => a.id === app)) throw new HttpError(403, "You don't have access to this app");
+      if (twoStepNeeded(db(), user)) throw new HttpError(403, 'Set up two-step sign-in first');
+      send(res, 200, { user: { id: user.id, username: user.username, displayName: user.displayName, role: user.role } });
+    },
+
     'GET /api/apps': (req, res) => {
       const user = requireUser(req);
-      send(res, 200, { apps: visibleApps(db(), user) });
+      // With the Jellyfin link on, the card opens Jellyfin through Roost,
+      // already signed in.
+      const apps = visibleApps(db(), user).map((a) => (a.id === 'jellyfin' && jellyfin.enabled() ? { ...a, openUrl: `${JELLYFIN_PREFIX}/` } : a));
+      send(res, 200, { apps, searchable: search.apps(user) });
+    },
+
+    // One search box: asks every app this user can search, results grouped by app.
+    'GET /api/search': async (req, res) => {
+      const user = requireUser(req);
+      send(res, 200, await search.run(user, new URL(req.url, 'http://roost').searchParams.get('q')));
+    },
+
+    // The opener page asks for this browser's Jellyfin sign-in.
+    'GET /api/jellyfin/session': async (req, res) => {
+      const user = requireUser(req);
+      if (!canUseJellyfin(user)) throw new HttpError(403, "You don't have access to Jellyfin");
+      const session = sessions.get(tokenOf(req));
+      const pending = session && jellyfinLinks.get(session.id);
+      if (pending) await Promise.race([pending, new Promise((r) => setTimeout(r, 4000))]);
+      const jf = session && session.jf;
+      send(res, 200, jf ? { token: jf.token, userId: jf.userId, serverId: jf.serverId } : {});
+    },
+
+    // The dashboard's Continue watching row. Empty, never an error, when
+    // Jellyfin isn't linked, isn't answering or there's nothing to resume.
+    'GET /api/jellyfin/resume': async (req, res) => {
+      const user = requireUser(req);
+      let items = [];
+      if (jellyfin.enabled() && canUseJellyfin(user)) {
+        items = await jellyfin.resume(user.username).catch((err) => { jellyfinFailed(err); return []; });
+      }
+      send(res, 200, { items });
+    },
+
+    'GET /api/admin/jellyfin': async (req, res) => {
+      requireAdmin(req);
+      send(res, 200, await jellyfinView());
+    },
+
+    'PUT /api/admin/jellyfin': async (req, res) => {
+      requireAdmin(req);
+      const body = await readJson(req);
+      const url = str(body.url, 300).replace(/\/+$/, '');
+      if (!url) {
+        delete db().settings.jellyfin;
+        store.save();
+        return send(res, 200, await jellyfinView());
+      }
+      if (!/^https?:\/\/[^\s/]+/.test(url)) throw new HttpError(400, 'Address must start with http:// or https://');
+      const old = db().settings.jellyfin || {};
+      const apiKey = str(body.apiKey, 100) || old.apiKey;
+      if (!apiKey) throw new HttpError(400, 'Paste an API key from Jellyfin');
+      db().settings.jellyfin = { url, apiKey };
+      jellyfin.cache = null;
+      const view = await jellyfinView();
+      if (!view.connected) {
+        if (old.url) db().settings.jellyfin = old;
+        else delete db().settings.jellyfin;
+        throw new HttpError(400, `Couldn't reach Jellyfin with that address and key: ${view.error}`);
+      }
+      store.save();
+      send(res, 200, view);
     },
 
     'GET /api/apps/status': async (req, res) => {
@@ -838,6 +1097,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         Promise.all(visibleApps(db(), user).map((a) => appProbe(a, host, probeTimeoutMs))),
       ]);
       const all = docker.containers || [];
+      const canRestart = new Set(user.role === 'admin' ? docker.restartable || [] : []);
       const claimed = new Set();
       const claim = (list) => { list.forEach((c) => claimed.add(c.id)); return list; };
       const apps = [
@@ -850,26 +1110,54 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
           uptime: process.uptime(),
           containers: claim(containersFor({ id: 'roost', container: roostContainer }, all)),
         },
-        ...visibleApps(db(), user).map((a, i) => ({
-          id: a.id,
-          name: a.name,
-          tagline: a.tagline,
-          icon: a.icon,
-          web: web[i],
-          containers: claim(containersFor(a, all)),
-        })),
+        ...visibleApps(db(), user).map((a, i) => {
+          const containers = claim(containersFor(a, all));
+          return {
+            id: a.id,
+            name: a.name,
+            tagline: a.tagline,
+            icon: a.icon,
+            web: web[i],
+            containers,
+            // Admins get a Restart button when the Docker helper lists this app's containers.
+            restartSchedule: user.role === 'admin' ? a.restartSchedule || null : undefined,
+            restartable: containers.some((c) => canRestart.has(c.name) && c.name !== roostContainer),
+          };
+        }),
       ];
       send(res, 200, {
         ...health,
         docker: docker.error ? { ok: false, error: docker.error } : { ok: true },
+        driveHealth: driveHealth.read(),
         apps,
         // Everything else Docker runs, for admins only.
         otherContainers: user.role === 'admin' ? all.filter((c) => !claimed.has(c.id)) : [],
+        // What left the house, for admins only.
+        traffic: user.role === 'admin' ? traffic.summary() : null,
         // Certificate health, for admins once HTTPS is set up.
         certificate: user.role === 'admin' ? certSummary() : null,
+        // Cloudflare, Let's Encrypt and Docker Hub at a glance, for admins only.
+        outside: user.role === 'admin' ? outside.view({ containers: docker.error ? null : all, cert: certs.status() }) : null,
         history: uptime.history(visibleApps(db(), user).map((a) => a.id)),
         checkedAt: new Date().toISOString(),
       });
+    },
+
+    // Restarts the app's containers that Roost's Docker helper allows. Roost
+    // itself is never restarted from here: the page would lose its answer.
+    'POST /api/admin/apps/:id/restart': async (req, res, id) => {
+      const admin = requireAdmin(req);
+      const app = db().apps.find((a) => a.id === id);
+      if (!app) throw new HttpError(404, 'No such app');
+      try {
+        const names = await restartApp(app, 30 * 1000);
+        record(req, 'app-restarted', { actor: admin.username, detail: `${app.name} (${names.join(', ')})` });
+      } catch (err) {
+        if (!err.restartFailed) throw err;
+        record(req, 'app-restart-failed', { actor: admin.username, detail: `${app.name}: ${err.cause.message}` });
+        throw new HttpError(502, `${app.name} didn't restart (${err.cause.message})`);
+      }
+      send(res, 200, { ok: true });
     },
 
     'GET /api/admin/users': (req, res) => {
@@ -897,6 +1185,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       if (user.role === 'guest') user.guestUntil = cleanGuestUntil(body.guestUntil);
       db().users.push(user);
       store.save();
+      syncJellyfinPassword(user, body.password);
       record(req, 'user-added', { actor: admin.username, target: user.username, detail: `${user.role}, ${gbText(user.limitGb)}` });
       send(res, 201, { user: adminView(user) });
     },
@@ -944,6 +1233,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         user.password = hashPassword(body.password);
         user.trusted = [];
         sessions.destroyUser(user.id);
+        syncJellyfinPassword(user, body.password);
         changes.push('password reset');
       }
       // For someone who lost their phone and their recovery codes: they sign
@@ -953,6 +1243,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         user.trusted = [];
         changes.push('two-step reset');
       }
+      if (body.apps !== undefined || body.role !== undefined) jellyfinAccessChanged(user);
       store.save();
       if (changes.length) record(req, 'user-changed', { actor: admin.username, target: user.username, detail: changes.join(', ') });
       send(res, 200, { user: adminView(user) });
@@ -965,6 +1256,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       if (!gone) throw new HttpError(404, 'No such user');
       db().users = db().users.filter((u) => u.id !== id);
       sessions.destroyUser(id);
+      if (jellyfin.enabled()) jellyfin.disable(gone.username).catch(jellyfinFailed);
       db().links = (db().links || []).filter((l) => l.userId !== id);
       db().storageRequests = storage.requestsOf(db()).filter((r) => r.userId !== id);
       const fam = family.familyOf(db());
@@ -1098,6 +1390,26 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       deliver(user.email, ...resetEmail(user, token, '1 hour')).catch((err) => console.error(`Reset email to @${user.username} failed: ${err.message}`));
     },
 
+    // ---------- backups ----------
+
+    // The dashboard line. Everyone sees how backups are doing; only admins
+    // see why one failed and what the drive holds.
+    'GET /api/backup': (req, res) => {
+      const user = requireMember(req);
+      const status = backup.readStatus(dataDir);
+      const out = backup.summarize(status);
+      if (user.role !== 'admin') {
+        send(res, 200, { state: out.state, lastOk: out.lastOk || null });
+        return;
+      }
+      send(res, 200, {
+        ...out,
+        drive: status && status.drive,
+        last: status && status.last,
+        snapshots: status ? status.snapshots : [],
+      });
+    },
+
     // Admin → Apps → Add app. Docker is only asked when the picker opens.
     'GET /api/admin/app-templates': async (req, res) => {
       requireAdmin(req);
@@ -1107,6 +1419,164 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         running: templates.suggestions(db().apps, docker.containers || [], roostContainer),
         templates: templates.templates(),
       });
+    },
+
+    // Admin → Backups: everything the card shows, in one call.
+    'GET /api/admin/backup': (req, res) => {
+      requireAdmin(req);
+      const status = backup.readStatus(dataDir);
+      const snapshots = status && status.snapshots ? status.snapshots : [];
+      send(res, 200, {
+        ...backup.summarize(status),
+        config: backup.config(db().settings.backup),
+        drive: status && status.drive,
+        last: status && status.last,
+        history: status && status.history ? status.history : [],
+        snapshots: { count: snapshots.length, newest: snapshots[0] ? snapshots[0].at : null, oldest: snapshots.length ? snapshots[snapshots.length - 1].at : null },
+        requested: backup.hasRequest(dataDir),
+      });
+    },
+
+    // "Back up now" and "Cancel" leave a request for the backup service.
+    'POST /api/admin/backup/run': (req, res) => {
+      const admin = requireAdmin(req);
+      const { state, message } = backup.summarize(backup.readStatus(dataDir));
+      if (state === 'off' || state === 'stopped') throw new HttpError(409, 'The backup service isn’t running. Check that roost-backup is started.');
+      if (state === 'running') throw new HttpError(409, 'A backup is already running');
+      if (state === 'drive') throw new HttpError(409, message || 'Backup drive not found');
+      backup.writeRequest(dataDir, 'run');
+      record(req, 'settings-changed', { actor: admin.username, detail: 'backup started by hand' });
+      send(res, 202, { ok: true });
+    },
+
+    'POST /api/admin/backup/cancel': (req, res) => {
+      const admin = requireAdmin(req);
+      if (backup.summarize(backup.readStatus(dataDir)).state !== 'running') throw new HttpError(409, 'No backup is running');
+      backup.writeRequest(dataDir, 'cancel');
+      record(req, 'settings-changed', { actor: admin.username, detail: 'backup cancelled' });
+      send(res, 202, { ok: true });
+    },
+
+    // ---------- restoring from a backup ----------
+    // Everything here is admin-only and read-only on the backup drive. Getting
+    // files back never overwrites anything: it is a download, or a new folder
+    // in the person's Nest.
+
+    // Browse a night like a folder tree.
+    'GET /api/admin/backup/browse': async (req, res) => {
+      requireAdmin(req);
+      const q = new URL(req.url, 'http://roost').searchParams;
+      const nights = backups.nights();
+      if (!backupDir || !nights.length) {
+        send(res, 200, { available: false, reason: !backupDir ? 'not-mounted' : 'no-backups', nights: [] });
+        return;
+      }
+      const night = await backups.night(q.get('snapshot') || nights[0].name);
+      const p = restore.cleanPath(q.get('path'));
+      if (!night || p === null || night.kind(p) !== 'folder') throw new HttpError(404, 'That folder isn’t in this backup');
+      const listing = night.list(p);
+      const here = restore.parts(p);
+      // Whose Nest an item would be restored into, when it is in someone's files.
+      const personOf = (segs) => {
+        const o = nestOwner(segs, true);
+        return o ? o.displayName || o.username : null;
+      };
+      const label = (segs) => {
+        // Nest/<username>_<id> shows as the person's name.
+        if (segs[0] === 'Nest' && segs.length === 2) {
+          const owner = nestOwner(segs);
+          return owner ? owner.displayName || owner.username : null;
+        }
+        return null;
+      };
+      send(res, 200, {
+        available: true,
+        nights: nights.map((n) => ({ name: n.name, at: n.at.toISOString() })),
+        snapshot: { name: night.name, files: night.count, bytes: night.bytes },
+        path: here.map((name, i) => ({ name, label: label(here.slice(0, i + 1)) })),
+        folders: listing.folders.map((f) => ({ ...f, label: label([...here, f.name]), restoreFor: personOf([...here, f.name]) })),
+        files: listing.files.map((f) => ({ ...f, restoreFor: personOf([...here, f.name]) })),
+        restoreTo: personOf(here) ? { name: personOf(here) } : null,
+        job: restoreJob,
+      });
+    },
+
+    // A file as it was, or a folder as a zip.
+    'GET /api/admin/backup/download': async (req, res) => {
+      requireAdmin(req);
+      const q = new URL(req.url, 'http://roost').searchParams;
+      const night = await backups.night(q.get('snapshot') || '');
+      const p = restore.cleanPath(q.get('path'));
+      const kind = night && p ? night.kind(p) : null;
+      if (!kind) throw new HttpError(404, 'That isn’t in this backup');
+      const last = p.slice(p.lastIndexOf('/') + 1);
+      if (kind === 'file') {
+        const entry = night.under(p)[0];
+        // gzipped files are stored smaller than they are, so no Content-Length for them
+        const name = last;
+        const headers = { 'Content-Type': 'application/octet-stream', 'Content-Disposition': disposition(name), 'Cache-Control': 'no-store' };
+        if (!entry[4]) headers['Content-Length'] = entry[1];
+        res.writeHead(200, headers);
+        try {
+          await require('stream/promises').pipeline(night.open(entry), res);
+        } catch (err) {
+          console.error('Backup download stopped:', err.message);
+          res.destroy();
+        }
+        return;
+      }
+      const base = p.includes('/') ? p.slice(0, p.lastIndexOf('/') + 1) : '';
+      const files = night.under(p);
+      const plan = zip.plan(files.map((f) => ({ name: f[0].slice(base.length), open: () => night.open(f), size: f[1], mtime: f[2] })));
+      res.writeHead(200, {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': disposition(`${last || 'Roost backup'} (backup ${night.name}).zip`),
+        'Content-Length': plan.total,
+        'Cache-Control': 'no-store',
+      });
+      try {
+        await zip.streamZip(res, plan);
+      } catch (err) {
+        console.error('Backup zip stopped:', err.message);
+        res.destroy();
+      }
+    },
+
+    // Puts a person's files from a backup into a new folder in their Nest.
+    'POST /api/admin/backup/restore': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      if (restoreJob && restoreJob.running) throw new HttpError(409, 'A restore is already running');
+      const night = await backups.night(str(body.snapshot, 40));
+      const p = restore.cleanPath(body.path);
+      const segs = restore.parts(p);
+      const owner = night && p ? nestOwner(segs, true) : null;
+      if (!night || !p || !night.kind(p)) throw new HttpError(404, 'That isn’t in this backup');
+      if (!owner) throw new HttpError(400, 'Only a person’s Nest files can be restored here. Download the rest instead.');
+      // Everything under what was picked, named from the picked item on down;
+      // the whole "files" folder restores its contents straight into the new folder.
+      const entries = night.under(p);
+      const cut = segs.length === 3 ? p.length + 1 : p.length - segs[segs.length - 1].length;
+      const files = entries.map((f) => ({ rel: f[0].slice(cut), size: f[1], mtime: f[2], open: () => night.open(f) }));
+      const folderName = `Restored from backup ${night.name}`;
+      const total = files.reduce((a, f) => a + f.size, 0);
+      // Space is checked before anything is made, so a refusal leaves no trace.
+      nest.checkSpace(owner, total);
+      const job = { running: true, snapshot: night.name, path: p, person: owner.displayName || owner.username, files: 0, total: files.length, bytes: 0, totalBytes: total, folder: null, error: null, startedAt: new Date().toISOString() };
+      restoreJob = job;
+      record(req, 'settings-changed', { actor: admin.username, target: owner.username, detail: `restored ${segs[segs.length - 1]} from backup ${night.name} into ${owner.username}'s Nest` });
+      nest.importFolder(owner, folderName, files, {
+        onFile: (f, n) => { job.files = n; job.bytes += f.size; },
+      }).then((top) => { job.folder = top.name; }).catch((err) => {
+        job.error = err.status ? err.message : `Stopped: ${err.message}`;
+        console.error('Restore from backup failed:', err);
+      }).finally(() => { job.running = false; job.finishedAt = new Date().toISOString(); });
+      send(res, 202, { job });
+    },
+
+    'GET /api/admin/backup/restore': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, { job: restoreJob });
     },
 
     // ---------- setup checklist ----------
@@ -1119,11 +1589,15 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         admin,
         nestDir: nestDir || path.join(dataDir, 'nest'),
         drives: readDisks(diskList),
+        driveHealth: driveHealth.read(),
         dockerOk: !docker.error,
+        restartable: docker.restartable || [],
         secureCookies,
         trustProxy,
+        awayBytes: Object.values(traffic.summary().apps).reduce((n, a) => n + a.week, 0),
         tls: certs.status(),
         ticked: db().settings.setupTicked || [],
+        backup: backup.readStatus(dataDir),
       }));
     },
 
@@ -1195,7 +1669,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         links.remove(db(), link);
         store.save();
         record(req, 'password-reset', { actor: user.username, target: user.username, detail: 'reset link' });
-        return login(req, res, user);
+        return login(req, res, user, { password: body.password });
       }
       if (link.role === 'guest' && !(Date.parse(link.guestUntil) > Date.now())) throw new HttpError(410, 'This guest pass has already ended');
       const username = str(body.username, 32).toLowerCase();
@@ -1219,14 +1693,24 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       store.save();
       const inviter = db().users.find((u) => u.id === link.createdBy);
       record(req, 'user-joined', { actor: user.username, detail: inviter ? `invited by ${inviter.username}` : 'invite link' });
-      login(req, res, user, 201);
+      login(req, res, user, { status: 201, password: body.password });
     },
 
     'PUT /api/admin/apps': async (req, res) => {
       const admin = requireAdmin(req);
       const body = await readJson(req);
       const before = new Map(db().apps.map((a) => [a.id, a]));
-      db().apps = cleanApps(body.apps);
+      const apps = cleanApps(body.apps);
+      // A schedule for an app Roost can't restart would only fail every night.
+      const docker = apps.some((a) => a.restartSchedule) ? await listContainers(dockerHost, probeTimeoutMs) : { error: 'skipped' };
+      if (!docker.error) {
+        for (const a of apps) {
+          const same = JSON.stringify(a.restartSchedule) === JSON.stringify((before.get(a.id) || {}).restartSchedule);
+          const ok = containersFor(a, docker.containers).some((c) => docker.restartable.includes(c.name) && c.name !== roostContainer);
+          if (a.restartSchedule && !same && !ok) throw new HttpError(400, `${a.name} isn't on the restart list, so it can't restart on a schedule (see Admin → Setup)`);
+        }
+      }
+      db().apps = apps;
       const after = new Set(db().apps.map((a) => a.id));
       const changes = [
         ...db().apps.filter((a) => !before.has(a.id)).map((a) => `added ${a.name}`),
@@ -1237,6 +1721,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       const ids = new Set(db().apps.map((a) => a.id));
       for (const u of db().users) if (Array.isArray(u.apps)) u.apps = u.apps.filter((a) => ids.has(a));
       store.save();
+      for (const u of db().users) jellyfinAccessChanged(u);
       send(res, 200, { apps: db().apps });
     },
 
@@ -1274,7 +1759,23 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         db().settings.mail = cleanMail(body.mail, mailSettings());
         changes.push(`email ${db().settings.mail ? `via ${db().settings.mail.host}` : 'turned off'}`);
       }
+      let tellBackups = false;
+      if (body.backup !== undefined) {
+        let next;
+        try {
+          next = backup.cleanConfig(body.backup);
+        } catch (err) {
+          throw new HttpError(400, err.message);
+        }
+        if (JSON.stringify(next) !== JSON.stringify(backup.config(db().settings.backup))) {
+          changes.push(`backups ${next.time}, keep ${next.keepDaily} nightly + ${next.keepWeekly} weekly${next.capGb ? `, up to ${next.capGb} GB` : ''}`);
+          tellBackups = true;
+        }
+        db().settings.backup = next;
+      }
       store.save();
+      // The backup service picks the new settings up within a few seconds.
+      if (tellBackups) backup.writeRequest(dataDir, 'reload');
       if (changes.length) record(req, 'settings-changed', { actor: admin.username, detail: changes.join(', ') });
       send(res, 200, { settings: settingsView() });
     },
@@ -1323,6 +1824,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       db().settings.tls = { domain, token, email };
       store.save();
       certs.lastError = null;
+      // A new token deserves a fresh look, not yesterday's answer.
+      if (token !== current.token) { outside.forgetCloudflare(); outside.check(); }
       if (body.renew !== false) certs.renew();
       send(res, 200, tlsView(req));
     },
@@ -1340,6 +1843,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       delete db().settings.tls;
       store.save();
       certs.clear();
+      outside.forgetCloudflare();
       send(res, 200, tlsView(req));
     },
 
@@ -1447,7 +1951,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/invites|admin\/storage-requests|admin\/setup|storage\/users|links))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/setup|storage\/users|links|me\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }
@@ -1470,24 +1974,40 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         { src: '/icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
       ],
     });
-    res.writeHead(200, { 'Content-Type': MIME['.webmanifest'], 'Cache-Control': 'no-cache' });
+    res.writeHead(200, { 'Content-Type': 'application/manifest+json', 'Cache-Control': 'no-cache' });
     res.end(req.method === 'HEAD' ? undefined : body);
   }
 
-  function serveStatic(req, res, pathname) {
-    let rel = decodeURIComponent(pathname);
-    if (rel === '/' || !path.extname(rel)) rel = '/index.html';
-    const file = path.normalize(path.join(PUBLIC_DIR, rel));
-    if (!file.startsWith(PUBLIC_DIR + path.sep)) return send(res, 404, { error: 'Not found' });
-    fs.readFile(file, (err, data) => {
-      if (err) return send(res, 404, { error: 'Not found' });
-      res.writeHead(200, {
-        'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-        // App icons rarely change; everything else is checked on every load.
-        'Cache-Control': rel.startsWith('/icons/') ? 'public, max-age=604800' : 'no-cache',
-      });
-      res.end(req.method === 'HEAD' ? undefined : data);
-    });
+  // Jellyfin is only reachable through Roost by people Roost lets in to it.
+  function jellyfinAllowed(req) {
+    const user = currentUser(req);
+    return Boolean(user && jellyfin.enabled() && canUseJellyfin(user));
+  }
+
+  function serveJellyfin(req, res, pathname) {
+    if (!jellyfinAllowed(req)) {
+      if (req.method === 'GET') {
+        res.writeHead(302, { Location: '/', 'Cache-Control': 'no-store' });
+        return res.end();
+      }
+      throw new HttpError(currentUser(req) ? 403 : 401, 'Sign in to Roost first');
+    }
+    if (pathname === JELLYFIN_PREFIX) {
+      res.writeHead(302, { Location: `${JELLYFIN_PREFIX}/` });
+      return res.end();
+    }
+    if (pathname === `${JELLYFIN_PREFIX}/` && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(OPENER_HTML);
+    }
+    jellyfin.proxy(req, res);
+  }
+
+  // Which app a request counts against on the upload meter.
+  function trafficApp(pathname) {
+    if (pathname === JELLYFIN_PREFIX || pathname.startsWith(`${JELLYFIN_PREFIX}/`)) return 'jellyfin';
+    if (pathname.startsWith('/api/nest/')) return 'nest';
+    return pathname.startsWith('/api/glint/') ? 'glint' : 'roost';
   }
 
   async function handle(req, res) {
@@ -1495,18 +2015,18 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     res.setHeader('Referrer-Policy', 'same-origin');
     res.setHeader('X-Frame-Options', 'DENY');
     try {
-      const { pathname } = new URL(req.url, 'http://roost');
-      if (pathname.startsWith('/api/nest/')) {
+      const { pathname, searchParams } = new URL(req.url, 'http://roost');
+      traffic.track(req, res, trafficApp(pathname), clientIp(req, trustProxy));
+      if (pathname === JELLYFIN_PREFIX || pathname.startsWith(`${JELLYFIN_PREFIX}/`)) {
+        serveJellyfin(req, res, pathname);
+      } else if (pathname.startsWith('/api/nest/')) {
         const user = requireUser(req);
         if (!visibleApps(db(), user).some((a) => a.id === 'nest')) throw new HttpError(403, 'You don’t have access to Nest');
-        const params = new URL(req.url, 'http://roost').searchParams;
-        // ?space=family works in the family space instead of the person's own drive.
-        let owner = user;
-        if (params.get('space') === 'family') {
-          if (!family.isMember(db(), user)) throw new HttpError(403, 'You’re not in the family space');
-          owner = family.familyOf(db());
-        }
-        await nest.handle(req, res, owner, pathname, params);
+        await nest.handle(req, res, spaceOwner(user, searchParams), pathname, searchParams);
+      } else if (pathname.startsWith('/api/glint/')) {
+        const user = requireUser(req);
+        if (!visibleApps(db(), user).some((a) => a.id === 'glint')) throw new HttpError(403, 'You don’t have access to Glint');
+        await glint.handle(req, res, spaceOwner(user, searchParams), pathname, searchParams);
       } else if (pathname.startsWith('/api/')) {
         const found = route(req.method, pathname);
         if (!found) throw new HttpError(404, 'Not found');
@@ -1514,7 +2034,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       } else if (pathname === '/manifest.webmanifest' && (req.method === 'GET' || req.method === 'HEAD')) {
         serveManifest(req, res);
       } else if (req.method === 'GET' || req.method === 'HEAD') {
-        serveStatic(req, res, pathname);
+        if (!assets.serve(req, res, pathname, searchParams.get('v'))) send(res, 404, { error: 'Not found' });
       } else {
         throw new HttpError(405, 'Method not allowed');
       }
@@ -1525,31 +2045,52 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     }
   }
 
+  // Live updates from Jellyfin (a WebSocket) pass through on both the HTTP and
+  // HTTPS side.
+  function onUpgrade(req, socket, head) {
+    const { pathname } = new URL(req.url, 'http://roost');
+    if (pathname.startsWith(`${JELLYFIN_PREFIX}/`) && jellyfinAllowed(req)) return jellyfin.proxyUpgrade(req, socket, head);
+    socket.destroy();
+  }
+
   const server = http.createServer(handle);
+  server.on('upgrade', onUpgrade);
   server.certs = certs;
+  server.outside = outside;
   // The HTTPS side shares every route; the certificate is looked up per
   // connection, so a renewal takes effect without a restart.
   // Browsers opening Roost by IP address send no name and get no certificate,
   // which is right: the certificate is only valid for the domain.
-  server.createHttpsServer = () => https.createServer({ SNICallback: (name, cb) => cb(null, certs.context) }, handle);
+  server.createHttpsServer = () => {
+    const secureServer = https.createServer({ SNICallback: (name, cb) => cb(null, certs.context) }, handle);
+    secureServer.on('upgrade', onUpgrade);
+    return secureServer;
+  };
   server.on('close', () => {
     certs.stop();
+    outside.stop();
     clearInterval(sweepTimer);
     clearInterval(uptimeTimer);
     clearInterval(uptimeSaveTimer);
+    clearInterval(scheduleTimer);
     clearTimeout(uptimeSoon);
     events.stop();
     uptime.save();
     store.flush();
     activity.flush();
+    traffic.flush();
+    sessions.flush();
     nest.close();
   });
   server.nest = nest;
+  server.glint = glint;
   // Save anything still waiting, e.g. when the container is stopped.
   server.flushAll = () => {
     uptime.save();
     store.flush();
     activity.flush();
+    traffic.flush();
+    sessions.flush();
   };
   return server;
 }
@@ -1564,13 +2105,15 @@ if (require.main === module) {
   const roostContainer = process.env.ROOST_CONTAINER || 'roost';
   const nestDir = process.env.NEST_DIR || path.join(dataDir, 'nest');
   const trustProxy = process.env.BEHIND_PROXY === 'true';
+  const smartDir = process.env.SMART_DIR || '';
   const httpsPort = Number(process.env.HTTPS_PORT) || 8443;
   const staging = process.env.ROOST_ACME_STAGING === 'true';
-  const server = createServer({ dataDir, nestDir, secureCookies, disks, dockerHost, roostContainer, appToken, trustProxy, tls: { staging } });
+  const server = createServer({ dataDir, nestDir, backupDir: process.env.BACKUP_DIR || '', secureCookies, disks, dockerHost, roostContainer, smartDir, appToken, trustProxy, tls: { staging } });
   server.listen(port, () => {
     console.log(`Roost is running on http://localhost:${port} (data in ${dataDir})`);
   });
   server.certs.start();
+  server.outside.start();
   server.createHttpsServer().listen(httpsPort, () => {
     console.log(`HTTPS is listening on port ${httpsPort}${server.certs.cert ? '' : ' (no certificate yet; set one up under Admin)'}`);
   });
