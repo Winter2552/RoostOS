@@ -233,7 +233,7 @@ class Nest {
     if (limitBytes !== null) {
       const left = limitBytes - otherBytes - this.usage(user) - reserved.total;
       if (bytes > left) {
-        throw new HttpError(413, `Not enough space: ${gbText(Math.max(0, left))} left of your ${gbText(limitBytes)}. Ask an admin for more on your Profile.`);
+        throw new HttpError(413, `Not enough space: ${gbText(Math.max(0, left))} left of your ${gbText(limitBytes)}`, 'over-limit');
       }
     }
     try {
