@@ -117,6 +117,20 @@ const STEPS = [
     check: (ctx) => Boolean(ctx.backup && ctx.backup.lastOk),
   },
   {
+    id: 'self-update',
+    group: 'Server',
+    title: 'Update Roost from inside Roost',
+    why: 'Admin → Updates shows what is new on GitHub and updates Roost with one button, putting the old version back if the new one fails.',
+    how: [
+      'Keep the roost-updater service from the compose file, and point its /src line at the folder holding Roost\'s files (the one you run docker compose from), e.g. /DATA/AppData/roost-src. That folder must be a git copy: git clone https://github.com/Winter2552/RoostOS.',
+      'Redeploy Roost. This ticks off once the updater has looked at GitHub.',
+      'Keep your own compose edits (drive folders, time zone) in docker-compose.override.yml next to it, so updates never collide with them.',
+    ],
+    action: { label: 'Open Updates', view: 'admin', focus: 'update-form' },
+    optional: true,
+    check: (ctx) => Boolean(ctx.update && ['current', 'available', 'applying', 'checking'].includes(ctx.update.state)),
+  },
+  {
     id: 'app-links',
     group: 'Server',
     title: 'Link every app',

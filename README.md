@@ -192,6 +192,18 @@ Connect Jellyfin under **Admin → Jellyfin sign-in**: its address as Roost reac
 - **Jellyfin's own apps** (TV, phone) sign in with the same username and password once per device.
 - If Jellyfin is down or the link is off, Roost works as before and the card opens Jellyfin's own address.
 
+## Updating Roost
+
+**Admin → Updates** shows what's new on GitHub and updates Roost with one button. Nothing updates by itself: Roost looks at GitHub when the updater starts and every 12 hours (one small `git fetch`), or when you press **Check now**, and lists the changes waiting. **Update Roost** asks first, then:
+
+1. brings in the new code (a fast-forward only, so it never overwrites anything),
+2. builds the new version while the old one keeps running (a version that won't build changes nothing),
+3. restarts Roost and its backup service, and waits for Roost to report healthy.
+
+If the new version doesn't start, the previous image and code are put back and the card says why (with the last lines of Roost's log under "Technical details"). Updates are written to Admin → Activity. An update is refused while a backup is running, and when the server's copy of the code has changes of its own that the update also changes: keep your own compose edits (drive folders, time zone) in `docker-compose.override.yml` next to `docker-compose.yml`, which Docker merges in and git never touches.
+
+It's done by the `roost-updater` service (`updater/`, built from this repo, no outside image apart from Node and Alpine's `git` and `docker` packages). It has no web port: the Roost web app leaves a small request file in the data folder and reads the updater's report from another, so Roost itself never touches Docker or git. The updater does hold the Docker socket, so it only runs the fixed steps in `updater/update-service.js`, and only fetches this project's own repository. Point its `/src` line at the folder holding Roost's files; that folder must be a git copy (`git clone https://github.com/Winter2552/RoostOS`), and Roost must have been started from it with `docker compose up -d --build`, not imported by ZimaOS under another name (the updater says so if it was). When an update changes the compose file or the updater itself, the card says so: Roost and its backups are updated, and the rest needs one `docker compose up -d --build` in that folder.
+
 ## Stack
 
 Plain Node.js (22.13+) with no npm dependencies, and a vanilla HTML/CSS/JS front end with no build step. Accounts and the app list live in one JSON file (`/data/roost.json`); Nest's folder details live in SQLite (`/data/nest.db`, using Node's built-in `node:sqlite`). Passwords are hashed with scrypt; sessions are HttpOnly, SameSite=Strict cookies held in memory, so a restart signs everyone out.

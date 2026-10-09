@@ -125,5 +125,26 @@ services:
     volumes:
       - smart:/out
 
+  # Updating Roost from Admin → Updates. It looks at GitHub for new versions
+  # and, when an admin presses Update, rebuilds and restarts Roost and its backup
+  # service, putting the old version back if the new one doesn't start. It has
+  # no web port: Roost leaves it requests as a small file in the data folder.
+  # It holds the Docker socket, but only ever runs the fixed steps in
+  # updater/update-service.js, and Roost itself never gets the socket.
+  roost-updater:
+    build: ./updater
+    container_name: roost-updater
+    restart: unless-stopped
+    environment:
+      DATA_DIR: /data
+      SRC_DIR: /src
+    volumes:
+      # The same data folder as Roost's, for requests and reports.
+      - /DATA/AppData/roost:/data
+      # The folder holding these Roost files (a git copy: git clone
+      # https://github.com/Winter2552/RoostOS). Point the left side at it.
+      - /DATA/AppData/roost-src:/src
+      - /var/run/docker.sock:/var/run/docker.sock
+
 volumes:
   smart:
