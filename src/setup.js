@@ -92,6 +92,31 @@ const STEPS = [
     check: (ctx) => ctx.dockerOk,
   },
   {
+    id: 'backup-drive',
+    group: 'Server',
+    title: 'Plug in the backup drive',
+    why: 'Every night Roost backs up Nest, the apps\' settings and its own data to it. Films and shows are left out.',
+    how: [
+      'Plug a USB SSD (1 TB is plenty) into the server. In ZimaOS Storage, format it as ext4 if asked; this wipes it.',
+      'Note the drive\'s mount folder in ZimaOS Storage, e.g. /media/Backup.',
+      'In Roost\'s compose file, point the roost-backup service\'s /backup line at it, e.g. /media/Backup:/backup, and the roost service\'s /backup:ro line at the same folder (so Admin → Backups can get files back). Set TZ to your time zone so backups run at your time of day.',
+      'Redeploy Roost. This ticks off once Roost has found the drive.',
+    ],
+    covers: ['BACKUP_DIR', 'APPDATA_DIR', 'backup'],
+    check: (ctx) => Boolean(ctx.backup && ctx.backup.drive && ctx.backup.drive.ok),
+  },
+  {
+    id: 'first-backup',
+    group: 'Server',
+    title: 'Finish the first backup',
+    why: 'Starts by itself a few minutes after Roost finds the drive. The first one copies everything, so it takes longest.',
+    how: [
+      'Leave the server on with the drive plugged in.',
+      'The dashboard shows "Last backup" once it has finished.',
+    ],
+    check: (ctx) => Boolean(ctx.backup && ctx.backup.lastOk),
+  },
+  {
     id: 'app-links',
     group: 'Server',
     title: 'Link every app',
