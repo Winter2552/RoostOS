@@ -816,6 +816,7 @@ async function loadApps() {
   state.apps = apps;
   renderAppBar();
   renderApps();
+  loadWatching(true);
   api('GET', '/api/apps/status').then(({ status }) => { state.status = status; renderApps(); }).catch(() => {});
 }
 
@@ -890,6 +891,50 @@ function renderApps() {
       : el('div', { class: 'card app-card disabled' }, children);
   }));
 }
+
+// ---------- continue watching ----------
+
+// Shown under the apps so it never pushes them around as it loads. Checked
+// again when someone comes back to the tab, at most once a minute.
+const WATCH_REFRESH_MS = 60 * 1000;
+let watchedAt = 0;
+
+function minutesLeft(m) {
+  if (!m) return '';
+  return m < 60 ? `${m} min left` : `${Math.floor(m / 60)} h ${m % 60} min left`;
+}
+
+async function loadWatching(force) {
+  const linked = state.apps.some((a) => a.id === 'jellyfin' && a.openUrl);
+  if (!linked) return $('#watching').classList.add('hidden');
+  if (!force && Date.now() - watchedAt < WATCH_REFRESH_MS) return;
+  watchedAt = Date.now();
+  let items = [];
+  try {
+    ({ items } = await api('GET', '/api/jellyfin/resume'));
+  } catch {
+    // Leave the row as it was.
+    return;
+  }
+  $('#watching').classList.toggle('hidden', !items.length);
+  $('#watch-row').replaceChildren(...items.map((it) => {
+    const hash = `#/details?id=${it.id}${it.serverId ? `&serverId=${it.serverId}` : ''}`;
+    const sub = [it.where, minutesLeft(it.minutesLeft)].filter(Boolean).join(' · ');
+    return el('a', { class: 'card watch-card', href: `/jellyfin/${hash}`, target: '_blank', rel: 'noopener', title: it.subtitle ? `${it.title}: ${it.subtitle}` : it.title },
+      el('div', { class: 'watch-pic' },
+        it.image ? el('img', { src: it.image, alt: '', loading: 'lazy', decoding: 'async', width: 480, height: 270 }) : icon('play'),
+        el('div', { class: 'watch-bar', role: 'meter', 'aria-label': 'Watched', 'aria-valuenow': it.percent, 'aria-valuemin': 0, 'aria-valuemax': 100 },
+          el('i', { style: `width:${it.percent}%` }))),
+      el('div', { class: 'watch-text' },
+        el('div', { class: 'watch-title', text: it.title }),
+        it.subtitle ? el('div', { class: 'watch-sub muted', text: it.subtitle }) : null,
+        sub ? el('div', { class: 'mono muted watch-meta', text: sub }) : null));
+  }));
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.user) loadWatching(false);
+});
 
 // ---------- arranging apps ----------
 

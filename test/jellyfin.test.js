@@ -18,7 +18,7 @@ let jfUrl;
 let server;
 let base;
 let dataDir;
-const jf = { users: [], tokens: new Map(), seen: [] };
+const jf = { users: [], tokens: new Map(), seen: [], resume: {}, oldResume: false };
 
 function fakeJellyfin() {
   let n = 0;
@@ -55,6 +55,13 @@ function fakeJellyfin() {
     if (req.url === '/Sessions/Logout') {
       jf.tokens.delete(token);
       return json(204);
+    }
+    m = req.url.match(/^(?:\/UserItems\/Resume\?userId=(\w+)|\/Users\/(\w+)\/Items\/Resume\?)/);
+    if (m) {
+      if (!isKey) return json(401);
+      if (m[1] && jf.oldResume) return json(404);
+      const items = jf.resume[m[1] || m[2]] || [];
+      return items === 'fail' ? json(500) : json(200, { Items: items });
     }
     if (req.url === '/redirect-me') {
       res.writeHead(302, { Location: '/web/' });
@@ -252,6 +259,56 @@ test('two-step sign-in links Jellyfin once the code is in', async () => {
   assert.equal(done.status, 200);
   const s = await call('GET', '/api/jellyfin/session', null, done.cookie);
   assert.ok(jf.tokens.has(s.body.token));
+});
+
+test('the dashboard shows what you were part way through', async () => {
+  jf.resume.old1 = [
+    { Id: 'ep1', ServerId: 'server1', Type: 'Episode', Name: 'Pilot', SeriesName: 'Show', ParentIndexNumber: 1, IndexNumber: 2,
+      RunTimeTicks: 30 * 600000000, UserData: { PlaybackPositionTicks: 6 * 600000000, PlayedPercentage: 20 }, ImageTags: { Primary: 'tagA' } },
+    { Id: 'film1', ServerId: 'server1', Type: 'Movie', Name: 'Film', RunTimeTicks: 100 * 600000000,
+      UserData: { PlaybackPositionTicks: 25 * 600000000, PlayedPercentage: 25.4 }, ImageTags: { Primary: 'tagP' }, BackdropImageTags: ['tagB'] },
+    { Id: 'bad"id', Type: 'Movie', Name: 'Skipped' },
+  ];
+  const sam = (await call('POST', '/api/login', { username: 'sam', password: 'sam new pass 1' })).cookie;
+  const before = jf.seen.length;
+  const res = await call('GET', '/api/jellyfin/resume', null, sam);
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.items, [
+    { id: 'ep1', serverId: 'server1', title: 'Show', subtitle: 'Pilot', where: 'S1 E2', minutesLeft: 24, percent: 20,
+      image: '/jellyfin/Items/ep1/Images/Primary?fillWidth=480&quality=80&tag=tagA' },
+    { id: 'film1', serverId: 'server1', title: 'Film', subtitle: '', where: null, minutesLeft: 75, percent: 25,
+      image: '/jellyfin/Items/film1/Images/Backdrop/0?fillWidth=480&quality=80&tag=tagB' },
+  ]);
+  assert.equal(jf.seen.slice(before).find((r) => r.url.includes('Resume')).token, KEY);
+  // A second look within the cache time doesn't ask Jellyfin again.
+  const asked = jf.seen.length;
+  await call('GET', '/api/jellyfin/resume', null, sam);
+  assert.equal(jf.seen.length, asked);
+  // The opener takes you straight to that item's page.
+  const opener = await call('GET', '/jellyfin/', null, sam);
+  assert.match(opener.body, /details/);
+});
+
+test('Continue watching is empty for people without Jellyfin, and works on older Jellyfin', async () => {
+  const nofilms = (await call('POST', '/api/login', { username: 'nofilms', password: 'no films 12' })).cookie;
+  assert.deepEqual((await call('GET', '/api/jellyfin/resume', null, nofilms)).body, { items: [] });
+  assert.equal((await call('GET', '/api/jellyfin/resume', null, null)).status, 401);
+  await call('POST', '/api/admin/users', { username: 'lee', password: 'lee pass 123', apps: ['jellyfin'] }, admin);
+  await call('POST', '/api/admin/users', { username: 'ana', password: 'ana pass 123', apps: ['jellyfin'] }, admin);
+  await settle();
+  jf.oldResume = true;
+  jf.resume[jfUser('lee').Id] = [{ Id: 'film2', Type: 'Movie', Name: 'Old', UserData: { PlayedPercentage: 50 } }];
+  const lee = (await call('POST', '/api/login', { username: 'lee', password: 'lee pass 123' })).cookie;
+  const res = await call('GET', '/api/jellyfin/resume', null, lee);
+  assert.equal(res.body.items[0].id, 'film2');
+  assert.equal(res.body.items[0].image, null);
+  jf.oldResume = false;
+  // A Jellyfin error just means an empty row.
+  jf.resume[jfUser('ana').Id] = 'fail';
+  const ana = (await call('POST', '/api/login', { username: 'ana', password: 'ana pass 123' })).cookie;
+  const failed = await call('GET', '/api/jellyfin/resume', null, ana);
+  assert.equal(failed.status, 200);
+  assert.deepEqual(failed.body, { items: [] });
 });
 
 test('a Jellyfin that is down never blocks Roost', async () => {

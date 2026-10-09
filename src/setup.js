@@ -107,7 +107,7 @@ const STEPS = [
     id: 'jellyfin-sign-in',
     group: 'Server',
     title: 'Connect Jellyfin sign-in',
-    why: 'Everyone uses their Roost username and password in Jellyfin, and the Jellyfin card opens it already signed in.',
+    why: 'Everyone uses their Roost username and password in Jellyfin, and the Jellyfin card opens it already signed in. The dashboard also shows what each person was part way through watching.',
     how: [
       'In Jellyfin, open Dashboard → API Keys, press +, name it Roost and copy the key.',
       'Under Admin → Jellyfin sign-in, enter Jellyfin\'s address as Roost reaches it (e.g. http://192.168.1.20:8096) and paste the key.',

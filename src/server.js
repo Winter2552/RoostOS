@@ -927,6 +927,17 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       send(res, 200, jf ? { token: jf.token, userId: jf.userId, serverId: jf.serverId } : {});
     },
 
+    // The dashboard's Continue watching row. Empty, never an error, when
+    // Jellyfin isn't linked, isn't answering or there's nothing to resume.
+    'GET /api/jellyfin/resume': async (req, res) => {
+      const user = requireUser(req);
+      let items = [];
+      if (jellyfin.enabled() && canUseJellyfin(user)) {
+        items = await jellyfin.resume(user.username).catch((err) => { jellyfinFailed(err); return []; });
+      }
+      send(res, 200, { items });
+    },
+
     'GET /api/admin/jellyfin': async (req, res) => {
       requireAdmin(req);
       send(res, 200, await jellyfinView());
