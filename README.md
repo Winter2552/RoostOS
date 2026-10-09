@@ -21,7 +21,7 @@ The steps live in `src/setup.js`, which is the single tally of what setting up R
 
 - **First run** creates the admin account.
 - **Dashboard**: greeting, live server stats (uptime, memory, load, free space on the data drive) and a card for every app you have access to, each showing whether the app is reachable.
-- **Status**: refreshes every 5 seconds. First, each app (and Roost itself) with its container state from Docker: running, stopped, restarting, unhealthy, how long it has been up and how often it restarted, plus whether it answers on its link. Admins also see every other container. Below that, server health: uptime, CPU, memory and free space on each drive. Each app also shows a 30-day uptime strip, one bar per day (tap a day to see when it was down). Roost keeps this itself in `uptime.json` next to its data, starting from the day it is installed; days Roost was off show as no data. Problems are listed at the top.
+- **Status**: refreshes every 5 seconds. First, each app (and Roost itself) with its container state from Docker: running, stopped, restarting, unhealthy, how long it has been up and how often it restarted, plus whether it answers on its link. Admins also see every other container, and a **Restart** button on apps they're allowed to restart (it asks first, then waits until the app is back up). Below that, server health: uptime, CPU, memory and free space on each drive. Each app also shows a 30-day uptime strip, one bar per day (tap a day to see when it was down). Roost keeps this itself in `uptime.json` next to its data, starting from the day it is installed; days Roost was off show as no data. Problems are listed at the top.
 - **Profile**: change your display name and password, turn two-step sign-in on or off, see where you're signed in and sign other devices out, see your storage use and limit, and ask an admin for more space.
 - **Admin**: edit the app list and links, invite or remove users, make password reset links, choose which apps each user sees and how much storage they get, approve or decline storage requests, connect Jellyfin sign-in, rename the server, and set up HTTPS.
 
@@ -215,6 +215,27 @@ Connect Jellyfin under **Admin → Jellyfin sign-in**: its address as Roost reac
 - **Jellyfin's own apps** (TV, phone) sign in with the same username and password once per device.
 - If Jellyfin is down or the link is off, Roost works as before and the card opens Jellyfin's own address.
 
+## Updating Roost
+
+**Admin → Updates** shows what's new on GitHub and updates Roost with one button. Nothing updates by itself: Roost looks at GitHub when the updater starts and every 12 hours (one small `git fetch`), or when you press **Check now**, and lists the changes waiting. **Update Roost** asks first, then:
+
+1. brings in the new code (a fast-forward only, so it never overwrites anything),
+2. builds the new version while the old one keeps running (a version that won't build changes nothing),
+3. restarts Roost and its backup service, and waits for Roost to report healthy.
+
+If the new version doesn't start, the previous image and code are put back and the card says why (with the last lines of Roost's log under "Technical details"). Updates are written to Admin → Activity. An update is refused while a backup is running, and when the server's copy of the code has changes of its own that the update also changes: keep your own compose edits (drive folders, time zone) in `docker-compose.override.yml` next to `docker-compose.yml`, which Docker merges in and git never touches.
+
+**From SSH** (the first time, or whenever Roost itself is down), `scripts/update-roost.sh` does the same job by hand:
+
+```
+curl -fsSL https://raw.githubusercontent.com/Winter2552/RoostOS/main/scripts/update-roost.sh -o update-roost.sh
+bash update-roost.sh              # lists what's new, asks, then updates (-y skips the question, --check only looks)
+```
+
+It finds Docker and Roost's folder (cloning it first if it isn't there), fast-forwards the code while keeping any edits you made by hand (a copy is saved next to the folder), rebuilds and restarts with `docker compose`, waits for Roost to report healthy, and puts the old version back if it doesn't. It also starts the `roost-updater` service the first time, so Admin → Updates works afterwards. Your accounts and files live outside the folder and aren't touched.
+
+It's done by the `roost-updater` service (`updater/`, built from this repo, no outside image apart from Node and Alpine's `git` and `docker` packages). It has no web port: the Roost web app leaves a small request file in the data folder and reads the updater's report from another, so Roost itself never touches Docker or git. The updater does hold the Docker socket, so it only runs the fixed steps in `updater/update-service.js`, and only fetches this project's own repository. Point its `/src` line at the folder holding Roost's files; that folder must be a git copy (`git clone https://github.com/Winter2552/RoostOS`), and Roost must have been started from it with `docker compose up -d --build`, not imported by ZimaOS under another name (the updater says so if it was). When an update changes the compose file or the updater itself, the card says so: Roost and its backups are updated, and the rest needs one `docker compose up -d --build` in that folder.
+
 ## Stack
 
 Plain Node.js (22.13+) with no npm dependencies, and a vanilla HTML/CSS/JS front end with no build step. Accounts and the app list live in one JSON file (`/data/roost.json`); Nest's folder details live in SQLite (`/data/nest.db`, using Node's built-in `node:sqlite`). Passwords are hashed with scrypt; sessions are HttpOnly, SameSite=Strict cookies held in memory, so a restart signs everyone out.
@@ -228,7 +249,7 @@ Plain Node.js (22.13+) with no npm dependencies, and a vanilla HTML/CSS/JS front
 
 Data is kept in `/DATA/AppData/roost` on the host, and Nest's files in `/DATA/roost-nest`. Before storing real files, change that `/DATA/roost-nest` mount in `docker-compose.yml` to a folder on the 3 TB data drive. For the status page to show the data drive, change the second `/DATA` mount in `docker-compose.yml` to the folder ZimaOS mounted the 3 TB drive on; `ROOST_DISKS` sets the labels.
 
-Container status comes through the `docker-proxy` service in the compose file, which only lets Roost read the container list (it can't start, stop or change anything). Apps are matched to containers by name; if a container is named differently, put its name in the app's **Container** field under Admin. Without Docker access the status page falls back to checking each app's link and says so.
+Container status comes through `roost-docker`, Roost's own small Docker helper (`src/docker-helper.js`, built from the same image). It lets Roost read the container list and restart only the containers named in its `ROOST_RESTARTABLE` setting; it refuses starting, stopping, removing, exec and everything else, and has no port open outside. Roost never restarts itself. Each restart shows up under Admin → Activity → Apps. An app on the list can also restart itself to stay fresh: under Admin → Apps, set **Auto-restart** to every day or every week at a time on your clock (daylight saving is handled). A schedule is refused for an app that isn't on the list, skips an app restarted in the last 10 minutes, and isn't made up if Roost was off at that time; scheduled restarts appear in the activity log as "schedule". Apps are matched to containers by name; if a container is named differently, put its name in the app's **Container** field under Admin. Without Docker access the status page falls back to checking each app's link and says so. Set `SECURE_COOKIES=true` only when Roost is served over HTTPS.
 
 Drive health (temperature, bad sectors, SSD wear) comes from the small `roost-smart` service, built from `smart/`. Once an hour it reads each drive's SMART data with `smartctl` and leaves it in a shared volume for Roost; it has no network, and it leaves sleeping drives asleep. It is given only the drives listed under its `devices:` (the SSD to start with). When the 3 TB drive is in, remove the `#` in front of its `/dev/sdb` line and redeploy. ZimaOS shows each drive's name under Storage.
 

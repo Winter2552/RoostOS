@@ -13,20 +13,23 @@ const links = require('./links');
 const mail = require('./mail');
 const setup = require('./setup');
 const backup = require('./backup');
+const selfUpdate = require('./self-update');
 const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
-const { listContainers, containersFor } = require('./docker');
+const { listContainers, containersFor, restartContainer } = require('./docker');
 const { DriveHealth } = require('./smart');
 const { OutsideServices } = require('./outside');
 const remoteAccess = require('./remote');
 const { Coffee, validSecret, newSecret } = require('./coffee');
 const wireguard = require('./wireguard');
 const templates = require('./templates');
+const { cleanSchedule, isDue } = require('./schedule');
 const { CertManager, validDomain } = require('./tls');
 const twoStep = require('./twostep');
 const { qrSvg } = require('./qr');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
 const { HttpError, send, readJson, str } = require('./http');
 const { Nest, disposition } = require('./nest');
+const family = require('./family');
 const zip = require('./zip');
 const restore = require('./restore');
 const { Glint } = require('./glint');
@@ -121,6 +124,7 @@ function publicUser(db, u) {
     ...(u.role === 'guest' ? { guestUntil: u.guestUntil } : {}),
     email: u.email || '',
     createdAt: u.createdAt,
+    family: family.isMember(db, u),
     twoStep: {
       on: Boolean(u.twoStep),
       required,
@@ -198,7 +202,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, coffeeOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000 } = {}) {
+function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, coffeeOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000 } = {}) {
   const store = new Store(dataDir);
   const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
   // The few outside services Roost leans on, for the admin's status page.
@@ -248,6 +252,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   const pendingCodes = new Map();
   const pendingSetups = new Map();
   const cpu = new CpuMeter();
+  // When each app was last restarted from the status page, to stop double taps.
+  const restartedAt = new Map();
   // Drives shown on the status page. Without a list, show the system drive and
   // the drive Roost keeps its data on (the same drive is only listed once).
   const diskList = disks && disks.length ? disks : [{ label: 'System', path: '/' }, { label: 'Data', path: dataDir }];
@@ -255,10 +261,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // SMART readings the roost-smart helper leaves behind; null when it isn't set up.
   const driveHealth = new DriveHealth(smartDir);
 
+  // The family space is stored in Nest like one more user (see src/family.js).
+  family.familyOf(db());
   const nest = new Nest({
     dir: nestDir || path.join(dataDir, 'nest'),
     dbFile: path.join(dataDir, 'nest.db'),
-    users: (id) => db().users.find((u) => u.id === id) || null,
+    users: (id) => (id === family.FAMILY_ID ? family.familyOf(db()) : db().users.find((u) => u.id === id) || null),
     limitOf: (user) => {
       const s = storage.storageOf(db(), user);
       return { limitBytes: s.limitBytes, otherBytes: s.usedBytes - (s.usage.nest || 0) };
@@ -343,6 +351,52 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   const uptimeSaveTimer = setInterval(() => uptime.save(), 60 * 60 * 1000);
   uptimeSaveTimer.unref();
   runUptime({ web: true });
+
+  // Restarts an app's containers that the Docker helper lists. Turned away with
+  // an HttpError when it can't (no Docker, not on the list, restarted less than
+  // minGapMs ago); a restart Docker itself fails carries restartFailed.
+  async function restartApp(app, minGapMs) {
+    const docker = await listContainers(dockerHost, probeTimeoutMs);
+    if (docker.error) throw new HttpError(503, 'Docker is not connected');
+    const allowed = new Set(docker.restartable);
+    const names = containersFor(app, docker.containers)
+      .map((c) => c.name)
+      .filter((n) => allowed.has(n) && n !== roostContainer);
+    if (!names.length) throw new HttpError(403, `${app.name} can't be restarted from Roost`);
+    if (Date.now() - (restartedAt.get(app.id) || 0) < minGapMs) throw new HttpError(429, `${app.name} was just restarted. Give it a moment.`);
+    restartedAt.set(app.id, Date.now());
+    try {
+      await Promise.all(names.map((n) => restartContainer(dockerHost, n)));
+    } catch (cause) {
+      restartedAt.delete(app.id);
+      throw Object.assign(new Error('restart failed'), { restartFailed: true, cause });
+    }
+    return names;
+  }
+
+  // Scheduled restarts. One cheap check every 20 seconds (no Docker call unless
+  // an app is due); each schedule fires once in its minute, skips an app that
+  // was restarted in the last 10 minutes, and a restart missed because Roost
+  // was off is not made up later.
+  const scheduledMinute = new Map();
+  const runSchedules = () => {
+    const now = new Date();
+    const minute = Math.floor(now.getTime() / 60000);
+    for (const app of db().apps) {
+      if (!isDue(app.restartSchedule, now) || scheduledMinute.get(app.id) === minute) continue;
+      scheduledMinute.set(app.id, minute);
+      restartApp(app, 10 * 60 * 1000).then(
+        (names) => activity.add('app-restarted', { actor: 'schedule', detail: `${app.name} (${names.join(', ')})` }),
+        (err) => {
+          if (err.status === 429) return; // Someone just restarted it by hand.
+          const why = err.restartFailed ? err.cause.message : err.message;
+          activity.add('app-restart-failed', { actor: 'schedule', detail: `${app.name}: ${why}` });
+        },
+      );
+    }
+  };
+  const scheduleTimer = setInterval(runSchedules, scheduleCheckMs);
+  scheduleTimer.unref();
 
   function currentUser(req) {
     const s = sessions.get(tokenOf(req));
@@ -517,12 +571,28 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         container: str(a.container, 200),
         icon: ICONS.includes(a.icon) ? a.icon : 'grid',
       };
+      const schedule = cleanSchedule(a.restartSchedule);
+      if (schedule instanceof Error) throw new HttpError(400, `${app.name || 'App'}: ${schedule.message}`);
+      if (schedule) app.restartSchedule = schedule;
       if (!app.name) throw new HttpError(400, 'Every app needs a name');
       if (!/^[a-z0-9-]+$/i.test(app.id) || seen.has(app.id)) throw new HttpError(400, 'Bad app id');
       if (!validAppUrl(app.url)) throw new HttpError(400, `${app.name}: link must start with http:// or https://`);
       seen.add(app.id);
       return app;
     });
+  }
+
+  // ?space=family works in the family space instead of the person's own files.
+  function spaceOwner(user, params) {
+    if (params.get('space') !== 'family') return user;
+    if (!family.isMember(db(), user)) throw new HttpError(403, 'You’re not in the family space');
+    return family.familyOf(db());
+  }
+
+  function familyView() {
+    const fam = family.familyOf(db());
+    const s = storage.storageOf(db(), fam);
+    return { members: fam.members, limitGb: s.limitGb, usedBytes: s.usedBytes };
   }
 
   // When a guest pass ends: a date or time after now, up to a year ahead.
@@ -1062,6 +1132,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         Promise.all(visibleApps(db(), user).map((a) => appProbe(a, host, probeTimeoutMs))),
       ]);
       const all = docker.containers || [];
+      const canRestart = new Set(user.role === 'admin' ? docker.restartable || [] : []);
       const claimed = new Set();
       const claim = (list) => { list.forEach((c) => claimed.add(c.id)); return list; };
       const apps = [
@@ -1074,14 +1145,20 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
           uptime: process.uptime(),
           containers: claim(containersFor({ id: 'roost', container: roostContainer }, all)),
         },
-        ...visibleApps(db(), user).map((a, i) => ({
-          id: a.id,
-          name: a.name,
-          tagline: a.tagline,
-          icon: a.icon,
-          web: web[i],
-          containers: claim(containersFor(a, all)),
-        })),
+        ...visibleApps(db(), user).map((a, i) => {
+          const containers = claim(containersFor(a, all));
+          return {
+            id: a.id,
+            name: a.name,
+            tagline: a.tagline,
+            icon: a.icon,
+            web: web[i],
+            containers,
+            // Admins get a Restart button when the Docker helper lists this app's containers.
+            restartSchedule: user.role === 'admin' ? a.restartSchedule || null : undefined,
+            restartable: containers.some((c) => canRestart.has(c.name) && c.name !== roostContainer),
+          };
+        }),
       ];
       send(res, 200, {
         ...health,
@@ -1099,6 +1176,23 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         history: uptime.history(visibleApps(db(), user).map((a) => a.id)),
         checkedAt: new Date().toISOString(),
       });
+    },
+
+    // Restarts the app's containers that Roost's Docker helper allows. Roost
+    // itself is never restarted from here: the page would lose its answer.
+    'POST /api/admin/apps/:id/restart': async (req, res, id) => {
+      const admin = requireAdmin(req);
+      const app = db().apps.find((a) => a.id === id);
+      if (!app) throw new HttpError(404, 'No such app');
+      try {
+        const names = await restartApp(app, 30 * 1000);
+        record(req, 'app-restarted', { actor: admin.username, detail: `${app.name} (${names.join(', ')})` });
+      } catch (err) {
+        if (!err.restartFailed) throw err;
+        record(req, 'app-restart-failed', { actor: admin.username, detail: `${app.name}: ${err.cause.message}` });
+        throw new HttpError(502, `${app.name} didn't restart (${err.cause.message})`);
+      }
+      send(res, 200, { ok: true });
     },
 
     'GET /api/admin/users': (req, res) => {
@@ -1200,9 +1294,43 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (jellyfin.enabled()) jellyfin.disable(gone.username).catch(jellyfinFailed);
       db().links = (db().links || []).filter((l) => l.userId !== id);
       db().storageRequests = storage.requestsOf(db()).filter((r) => r.userId !== id);
+      const fam = family.familyOf(db());
+      fam.members = fam.members.filter((m) => m !== id);
       store.save();
       record(req, 'user-removed', { actor: admin.username, target: gone.username });
       send(res, 200, { ok: true });
+    },
+
+    // ---------- family ----------
+
+    'GET /api/admin/family': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, { family: familyView() });
+    },
+
+    'PUT /api/admin/family': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const fam = family.familyOf(db());
+      const changes = [];
+      if (body.members !== undefined) {
+        const members = family.cleanMembers(db(), body.members);
+        if (!members) throw new HttpError(400, 'Members must be a list of users');
+        const name = (id) => db().users.find((u) => u.id === id).username;
+        const added = members.filter((m) => !fam.members.includes(m)).map(name);
+        const removed = fam.members.filter((m) => !members.includes(m) && db().users.some((u) => u.id === m)).map(name);
+        if (added.length) changes.push(`added ${added.join(', ')}`);
+        if (removed.length) changes.push(`removed ${removed.join(', ')}`);
+        fam.members = members;
+      }
+      if (body.limitGb !== undefined) {
+        const limit = cleanLimit(body.limitGb);
+        if (limit !== fam.limitGb) changes.push(`limit ${gbText(fam.limitGb)} → ${gbText(limit)}`);
+        fam.limitGb = limit;
+      }
+      store.save();
+      if (changes.length) record(req, 'family-changed', { actor: admin.username, detail: changes.join(', ') });
+      send(res, 200, { family: familyView() });
     },
 
     // ---------- invite and reset links ----------
@@ -1364,6 +1492,51 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 202, { ok: true });
     },
 
+    // ---------- updating Roost ----------
+    // Admin → Updates. Roost only leaves requests for the roost-updater service
+    // and reads what it reports; it never runs git or Docker itself.
+
+    'GET /api/admin/update': (req, res) => {
+      requireAdmin(req);
+      const summary = selfUpdate.summarize(selfUpdate.readStatus(dataDir));
+      // Write an update's outcome to the activity log, once.
+      const last = summary.last;
+      if (last && last.finishedAt && selfUpdate.lastLogged(dataDir) !== last.finishedAt && !last.nothing) {
+        selfUpdate.markLogged(dataDir, last.finishedAt);
+        record(req, 'settings-changed', {
+          target: 'roost-updater',
+          detail: last.ok
+            ? `Roost updated to ${String(last.to).slice(0, 7)} (${last.count} ${last.count === 1 ? 'change' : 'changes'})`
+            : `Roost update ${last.rolledBack ? 'failed and was rolled back' : 'failed'}: ${last.error}`,
+        });
+      }
+      send(res, 200, { ...summary, requested: selfUpdate.hasRequest(dataDir) });
+    },
+
+    'POST /api/admin/update/check': (req, res) => {
+      requireAdmin(req);
+      const { state } = selfUpdate.summarize(selfUpdate.readStatus(dataDir));
+      if (state === 'off' || state === 'stopped') throw new HttpError(409, 'The updater isn’t running. Check that roost-updater is started.');
+      if (state === 'applying') throw new HttpError(409, 'Roost is being updated right now');
+      selfUpdate.writeRequest(dataDir, 'check');
+      send(res, 202, { ok: true });
+    },
+
+    'POST /api/admin/update/apply': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      // The button asks first; the server insists on the answer too.
+      if (body.confirm !== true) throw new HttpError(400, 'Confirm the update first');
+      const summary = selfUpdate.summarize(selfUpdate.readStatus(dataDir));
+      if (selfUpdate.hasRequest(dataDir) || summary.state === 'applying') throw new HttpError(409, 'An update is already on its way');
+      if (summary.state === 'off' || summary.state === 'stopped') throw new HttpError(409, 'The updater isn’t running. Check that roost-updater is started.');
+      if (summary.state !== 'available') throw new HttpError(409, 'There is nothing new to update to');
+      if (summary.conflicts.length) throw new HttpError(409, `You changed ${summary.conflicts.join(', ')} on the server, and this update changes it too. Move your own settings into docker-compose.override.yml first.`);
+      selfUpdate.writeRequest(dataDir, 'apply');
+      record(req, 'settings-changed', { actor: admin.username, detail: `Roost update started (${summary.behind} ${summary.behind === 1 ? 'change' : 'changes'})` });
+      send(res, 202, { ok: true });
+    },
+
     // ---------- restoring from a backup ----------
     // Everything here is admin-only and read-only on the backup drive. Getting
     // files back never overwrites anything: it is a download, or a new folder
@@ -1498,6 +1671,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         drives: readDisks(diskList),
         driveHealth: driveHealth.read(),
         dockerOk: !docker.error,
+        restartable: docker.restartable || [],
         secureCookies,
         trustProxy,
         awayBytes: Object.values(traffic.summary().apps).reduce((n, a) => n + a.week, 0),
@@ -1506,6 +1680,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         coffee: coffeeView(),
         ticked: db().settings.setupTicked || [],
         backup: backup.readStatus(dataDir),
+        update: selfUpdate.summarize(selfUpdate.readStatus(dataDir)),
       }));
     },
 
@@ -1608,7 +1783,17 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const admin = requireAdmin(req);
       const body = await readJson(req);
       const before = new Map(db().apps.map((a) => [a.id, a]));
-      db().apps = cleanApps(body.apps);
+      const apps = cleanApps(body.apps);
+      // A schedule for an app Roost can't restart would only fail every night.
+      const docker = apps.some((a) => a.restartSchedule) ? await listContainers(dockerHost, probeTimeoutMs) : { error: 'skipped' };
+      if (!docker.error) {
+        for (const a of apps) {
+          const same = JSON.stringify(a.restartSchedule) === JSON.stringify((before.get(a.id) || {}).restartSchedule);
+          const ok = containersFor(a, docker.containers).some((c) => docker.restartable.includes(c.name) && c.name !== roostContainer);
+          if (a.restartSchedule && !same && !ok) throw new HttpError(400, `${a.name} isn't on the restart list, so it can't restart on a schedule (see Admin → Setup)`);
+        }
+      }
+      db().apps = apps;
       const after = new Set(db().apps.map((a) => a.id));
       const changes = [
         ...db().apps.filter((a) => !before.has(a.id)).map((a) => `added ${a.name}`),
@@ -1943,7 +2128,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/invites|admin\/storage-requests|admin\/setup|storage\/users|links|me\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/setup|storage\/users|links|me\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }
@@ -2076,11 +2261,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       } else if (pathname.startsWith('/api/nest/')) {
         const user = requireUser(req);
         if (!visibleApps(db(), user).some((a) => a.id === 'nest')) throw new HttpError(403, 'You don’t have access to Nest');
-        await nest.handle(req, res, user, pathname, searchParams);
+        await nest.handle(req, res, spaceOwner(user, searchParams), pathname, searchParams);
       } else if (pathname.startsWith('/api/glint/')) {
         const user = requireUser(req);
         if (!visibleApps(db(), user).some((a) => a.id === 'glint')) throw new HttpError(403, 'You don’t have access to Glint');
-        await glint.handle(req, res, user, pathname, searchParams);
+        await glint.handle(req, res, spaceOwner(user, searchParams), pathname, searchParams);
       } else if (pathname.startsWith('/api/')) {
         const found = route(req.method, pathname);
         if (!found) throw new HttpError(404, 'Not found');
@@ -2129,6 +2314,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     clearInterval(sweepTimer);
     clearInterval(uptimeTimer);
     clearInterval(uptimeSaveTimer);
+    clearInterval(scheduleTimer);
     clearTimeout(uptimeSoon);
     events.stop();
     uptime.save();

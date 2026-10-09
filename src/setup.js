@@ -84,12 +84,29 @@ const STEPS = [
     title: 'Let Roost see your containers',
     why: 'The status page shows whether each app\'s container is running, crashing or stopped.',
     how: [
-      'Keep the docker-proxy service and DOCKER_HOST line from the compose file in the README.',
+      'Keep the roost-docker service and the DOCKER_HOST line from the compose file in the README.',
       'Redeploy Roost.',
     ],
     action: { label: 'Open status', view: 'status' },
     covers: ['DOCKER_HOST'],
     check: (ctx) => ctx.dockerOk,
+  },
+  {
+    id: 'restart',
+    group: 'Server',
+    title: 'Choose which apps admins can restart, and when',
+    why: 'A stuck app gets a Restart button on the status page, and apps can restart themselves on a schedule.',
+    how: [
+      'In ZimaOS, note the container name of each app (e.g. jellyfin).',
+      'In Roost\'s compose file, list them in ROOST_RESTARTABLE under roost-docker, e.g. "jellyfin,coffee-galaxy".',
+      'Under Admin → Apps, make sure each app\'s container name matches.',
+      'Optional: under Admin → Apps, set Auto-restart on an app (e.g. Jellyfin every day at 04:00) to keep it fresh.',
+      'Redeploy Roost. Only the containers listed can be restarted; Roost itself never is.',
+    ],
+    action: { label: 'Open status', view: 'status' },
+    optional: true,
+    covers: ['ROOST_RESTARTABLE'],
+    check: (ctx) => ctx.restartable.length > 0,
   },
   {
     id: 'backup-drive',
@@ -115,6 +132,20 @@ const STEPS = [
       'The dashboard shows "Last backup" once it has finished.',
     ],
     check: (ctx) => Boolean(ctx.backup && ctx.backup.lastOk),
+  },
+  {
+    id: 'self-update',
+    group: 'Server',
+    title: 'Update Roost from inside Roost',
+    why: 'Admin → Updates shows what is new on GitHub and updates Roost with one button, putting the old version back if the new one fails.',
+    how: [
+      'Keep the roost-updater service from the compose file, and point its /src line at the folder holding Roost\'s files (the one you run docker compose from), e.g. /DATA/AppData/roost-src. That folder must be a git copy: git clone https://github.com/Winter2552/RoostOS.',
+      'Redeploy Roost. This ticks off once the updater has looked at GitHub.',
+      'Keep your own compose edits (drive folders, time zone) in docker-compose.override.yml next to it, so updates never collide with them.',
+    ],
+    action: { label: 'Open Updates', view: 'admin', focus: 'update-form' },
+    optional: true,
+    check: (ctx) => Boolean(ctx.update && ['current', 'available', 'applying', 'checking'].includes(ctx.update.state)),
   },
   {
     id: 'app-links',
@@ -364,6 +395,22 @@ const STEPS = [
     // Happens on each device, so Roost can't see it; tick it off yourself.
     manual: true,
     check: (ctx) => ctx.ticked.includes('install-app'),
+  },
+  {
+    id: 'phone-photos',
+    group: 'People',
+    title: 'Send a phone\'s photos to Glint',
+    why: 'New photos and videos go to your own drive, so losing a phone doesn\'t lose them.',
+    how: [
+      'On the phone, open Roost (from the home screen icon) and sign in, then open Glint.',
+      'Tap + and choose the photos and videos; "select all" is fine. Glint skips any it already has, so repeat it whenever you like.',
+      'Keep Roost open until it says they are uploaded; the screen stays on while it sends, and a dropped connection carries on where it stopped.',
+      'Do it at home on Wi-Fi: videos pass over the home connection, and an outside address that goes through Cloudflare\'s free plan stops uploads over 100 MB.',
+    ],
+    optional: true,
+    // Happens on each phone, so Roost can't see it; tick it off yourself.
+    manual: true,
+    check: (ctx) => ctx.ticked.includes('phone-photos'),
   },
   {
     id: 'guest-pass',
