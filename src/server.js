@@ -12,6 +12,7 @@ const storage = require('./storage');
 const links = require('./links');
 const mail = require('./mail');
 const setup = require('./setup');
+const backup = require('./backup');
 const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
 const { DriveHealth } = require('./smart');
@@ -22,7 +23,9 @@ const twoStep = require('./twostep');
 const { qrSvg } = require('./qr');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
 const { HttpError, send, readJson, str } = require('./http');
-const { Nest } = require('./nest');
+const { Nest, disposition } = require('./nest');
+const zip = require('./zip');
+const restore = require('./restore');
 const { Glint } = require('./glint');
 const { Assets } = require('./assets');
 const { TrafficMeter } = require('./traffic');
@@ -190,7 +193,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000 } = {}) {
+function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000 } = {}) {
   const store = new Store(dataDir);
   const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
   // The few outside services Roost leans on, for the admin's status page.
@@ -240,6 +243,16 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       store.saveSoon();
     },
   });
+  // The backup drive, read-only: for browsing and restoring from backups.
+  const backups = new restore.Backups(backupDir);
+  // The one restore into Nest that may be running, and how it is going.
+  let restoreJob = null;
+  // The Roost user whose Nest files a backed-up path is in: Nest/<username>_<id>/files/...
+  // With `inside`, the path must be at or under the files folder, not above it.
+  function nestOwner(segs, inside = false) {
+    if (segs[0] !== 'Nest' || segs.length < 2 || (inside && (segs.length < 3 || segs[2] !== 'files'))) return null;
+    return db().users.find((u) => `${u.username}_${u.id}` === segs[1]) || null;
+  }
   nest.syncUsage();
   const glint = new Glint({ nest });
   const search = createSearch({ sources: [nestSource(nest)], visibleApps: (user) => visibleApps(db(), user) });
@@ -510,7 +523,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   // Settings for the admin page. The mail password never leaves the server.
   function settingsView() {
     const { mail: _mail, jellyfin: _jellyfin, ...rest } = db().settings;
-    return { ...rest, publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()) };
+    return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()) };
   }
 
   // The admin's notice on the dashboard. Expired notices are simply not
@@ -1250,6 +1263,26 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       deliver(user.email, ...resetEmail(user, token, '1 hour')).catch((err) => console.error(`Reset email to @${user.username} failed: ${err.message}`));
     },
 
+    // ---------- backups ----------
+
+    // The dashboard line. Everyone sees how backups are doing; only admins
+    // see why one failed and what the drive holds.
+    'GET /api/backup': (req, res) => {
+      const user = requireMember(req);
+      const status = backup.readStatus(dataDir);
+      const out = backup.summarize(status);
+      if (user.role !== 'admin') {
+        send(res, 200, { state: out.state, lastOk: out.lastOk || null });
+        return;
+      }
+      send(res, 200, {
+        ...out,
+        drive: status && status.drive,
+        last: status && status.last,
+        snapshots: status ? status.snapshots : [],
+      });
+    },
+
     // Admin → Apps → Add app. Docker is only asked when the picker opens.
     'GET /api/admin/app-templates': async (req, res) => {
       requireAdmin(req);
@@ -1259,6 +1292,164 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         running: templates.suggestions(db().apps, docker.containers || [], roostContainer),
         templates: templates.templates(),
       });
+    },
+
+    // Admin → Backups: everything the card shows, in one call.
+    'GET /api/admin/backup': (req, res) => {
+      requireAdmin(req);
+      const status = backup.readStatus(dataDir);
+      const snapshots = status && status.snapshots ? status.snapshots : [];
+      send(res, 200, {
+        ...backup.summarize(status),
+        config: backup.config(db().settings.backup),
+        drive: status && status.drive,
+        last: status && status.last,
+        history: status && status.history ? status.history : [],
+        snapshots: { count: snapshots.length, newest: snapshots[0] ? snapshots[0].at : null, oldest: snapshots.length ? snapshots[snapshots.length - 1].at : null },
+        requested: backup.hasRequest(dataDir),
+      });
+    },
+
+    // "Back up now" and "Cancel" leave a request for the backup service.
+    'POST /api/admin/backup/run': (req, res) => {
+      const admin = requireAdmin(req);
+      const { state, message } = backup.summarize(backup.readStatus(dataDir));
+      if (state === 'off' || state === 'stopped') throw new HttpError(409, 'The backup service isn’t running. Check that roost-backup is started.');
+      if (state === 'running') throw new HttpError(409, 'A backup is already running');
+      if (state === 'drive') throw new HttpError(409, message || 'Backup drive not found');
+      backup.writeRequest(dataDir, 'run');
+      record(req, 'settings-changed', { actor: admin.username, detail: 'backup started by hand' });
+      send(res, 202, { ok: true });
+    },
+
+    'POST /api/admin/backup/cancel': (req, res) => {
+      const admin = requireAdmin(req);
+      if (backup.summarize(backup.readStatus(dataDir)).state !== 'running') throw new HttpError(409, 'No backup is running');
+      backup.writeRequest(dataDir, 'cancel');
+      record(req, 'settings-changed', { actor: admin.username, detail: 'backup cancelled' });
+      send(res, 202, { ok: true });
+    },
+
+    // ---------- restoring from a backup ----------
+    // Everything here is admin-only and read-only on the backup drive. Getting
+    // files back never overwrites anything: it is a download, or a new folder
+    // in the person's Nest.
+
+    // Browse a night like a folder tree.
+    'GET /api/admin/backup/browse': async (req, res) => {
+      requireAdmin(req);
+      const q = new URL(req.url, 'http://roost').searchParams;
+      const nights = backups.nights();
+      if (!backupDir || !nights.length) {
+        send(res, 200, { available: false, reason: !backupDir ? 'not-mounted' : 'no-backups', nights: [] });
+        return;
+      }
+      const night = await backups.night(q.get('snapshot') || nights[0].name);
+      const p = restore.cleanPath(q.get('path'));
+      if (!night || p === null || night.kind(p) !== 'folder') throw new HttpError(404, 'That folder isn’t in this backup');
+      const listing = night.list(p);
+      const here = restore.parts(p);
+      // Whose Nest an item would be restored into, when it is in someone's files.
+      const personOf = (segs) => {
+        const o = nestOwner(segs, true);
+        return o ? o.displayName || o.username : null;
+      };
+      const label = (segs) => {
+        // Nest/<username>_<id> shows as the person's name.
+        if (segs[0] === 'Nest' && segs.length === 2) {
+          const owner = nestOwner(segs);
+          return owner ? owner.displayName || owner.username : null;
+        }
+        return null;
+      };
+      send(res, 200, {
+        available: true,
+        nights: nights.map((n) => ({ name: n.name, at: n.at.toISOString() })),
+        snapshot: { name: night.name, files: night.count, bytes: night.bytes },
+        path: here.map((name, i) => ({ name, label: label(here.slice(0, i + 1)) })),
+        folders: listing.folders.map((f) => ({ ...f, label: label([...here, f.name]), restoreFor: personOf([...here, f.name]) })),
+        files: listing.files.map((f) => ({ ...f, restoreFor: personOf([...here, f.name]) })),
+        restoreTo: personOf(here) ? { name: personOf(here) } : null,
+        job: restoreJob,
+      });
+    },
+
+    // A file as it was, or a folder as a zip.
+    'GET /api/admin/backup/download': async (req, res) => {
+      requireAdmin(req);
+      const q = new URL(req.url, 'http://roost').searchParams;
+      const night = await backups.night(q.get('snapshot') || '');
+      const p = restore.cleanPath(q.get('path'));
+      const kind = night && p ? night.kind(p) : null;
+      if (!kind) throw new HttpError(404, 'That isn’t in this backup');
+      const last = p.slice(p.lastIndexOf('/') + 1);
+      if (kind === 'file') {
+        const entry = night.under(p)[0];
+        // gzipped files are stored smaller than they are, so no Content-Length for them
+        const name = last;
+        const headers = { 'Content-Type': 'application/octet-stream', 'Content-Disposition': disposition(name), 'Cache-Control': 'no-store' };
+        if (!entry[4]) headers['Content-Length'] = entry[1];
+        res.writeHead(200, headers);
+        try {
+          await require('stream/promises').pipeline(night.open(entry), res);
+        } catch (err) {
+          console.error('Backup download stopped:', err.message);
+          res.destroy();
+        }
+        return;
+      }
+      const base = p.includes('/') ? p.slice(0, p.lastIndexOf('/') + 1) : '';
+      const files = night.under(p);
+      const plan = zip.plan(files.map((f) => ({ name: f[0].slice(base.length), open: () => night.open(f), size: f[1], mtime: f[2] })));
+      res.writeHead(200, {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': disposition(`${last || 'Roost backup'} (backup ${night.name}).zip`),
+        'Content-Length': plan.total,
+        'Cache-Control': 'no-store',
+      });
+      try {
+        await zip.streamZip(res, plan);
+      } catch (err) {
+        console.error('Backup zip stopped:', err.message);
+        res.destroy();
+      }
+    },
+
+    // Puts a person's files from a backup into a new folder in their Nest.
+    'POST /api/admin/backup/restore': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      if (restoreJob && restoreJob.running) throw new HttpError(409, 'A restore is already running');
+      const night = await backups.night(str(body.snapshot, 40));
+      const p = restore.cleanPath(body.path);
+      const segs = restore.parts(p);
+      const owner = night && p ? nestOwner(segs, true) : null;
+      if (!night || !p || !night.kind(p)) throw new HttpError(404, 'That isn’t in this backup');
+      if (!owner) throw new HttpError(400, 'Only a person’s Nest files can be restored here. Download the rest instead.');
+      // Everything under what was picked, named from the picked item on down;
+      // the whole "files" folder restores its contents straight into the new folder.
+      const entries = night.under(p);
+      const cut = segs.length === 3 ? p.length + 1 : p.length - segs[segs.length - 1].length;
+      const files = entries.map((f) => ({ rel: f[0].slice(cut), size: f[1], mtime: f[2], open: () => night.open(f) }));
+      const folderName = `Restored from backup ${night.name}`;
+      const total = files.reduce((a, f) => a + f.size, 0);
+      // Space is checked before anything is made, so a refusal leaves no trace.
+      nest.checkSpace(owner, total);
+      const job = { running: true, snapshot: night.name, path: p, person: owner.displayName || owner.username, files: 0, total: files.length, bytes: 0, totalBytes: total, folder: null, error: null, startedAt: new Date().toISOString() };
+      restoreJob = job;
+      record(req, 'settings-changed', { actor: admin.username, target: owner.username, detail: `restored ${segs[segs.length - 1]} from backup ${night.name} into ${owner.username}'s Nest` });
+      nest.importFolder(owner, folderName, files, {
+        onFile: (f, n) => { job.files = n; job.bytes += f.size; },
+      }).then((top) => { job.folder = top.name; }).catch((err) => {
+        job.error = err.status ? err.message : `Stopped: ${err.message}`;
+        console.error('Restore from backup failed:', err);
+      }).finally(() => { job.running = false; job.finishedAt = new Date().toISOString(); });
+      send(res, 202, { job });
+    },
+
+    'GET /api/admin/backup/restore': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, { job: restoreJob });
     },
 
     // ---------- setup checklist ----------
@@ -1278,6 +1469,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         awayBytes: Object.values(traffic.summary().apps).reduce((n, a) => n + a.week, 0),
         tls: certs.status(),
         ticked: db().settings.setupTicked || [],
+        backup: backup.readStatus(dataDir),
       }));
     },
 
@@ -1429,7 +1621,23 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         db().settings.mail = cleanMail(body.mail, mailSettings());
         changes.push(`email ${db().settings.mail ? `via ${db().settings.mail.host}` : 'turned off'}`);
       }
+      let tellBackups = false;
+      if (body.backup !== undefined) {
+        let next;
+        try {
+          next = backup.cleanConfig(body.backup);
+        } catch (err) {
+          throw new HttpError(400, err.message);
+        }
+        if (JSON.stringify(next) !== JSON.stringify(backup.config(db().settings.backup))) {
+          changes.push(`backups ${next.time}, keep ${next.keepDaily} nightly + ${next.keepWeekly} weekly${next.capGb ? `, up to ${next.capGb} GB` : ''}`);
+          tellBackups = true;
+        }
+        db().settings.backup = next;
+      }
       store.save();
+      // The backup service picks the new settings up within a few seconds.
+      if (tellBackups) backup.writeRequest(dataDir, 'reload');
       if (changes.length) record(req, 'settings-changed', { actor: admin.username, detail: changes.join(', ') });
       send(res, 200, { settings: settingsView() });
     },
@@ -1761,7 +1969,7 @@ if (require.main === module) {
   const smartDir = process.env.SMART_DIR || '';
   const httpsPort = Number(process.env.HTTPS_PORT) || 8443;
   const staging = process.env.ROOST_ACME_STAGING === 'true';
-  const server = createServer({ dataDir, nestDir, secureCookies, disks, dockerHost, roostContainer, smartDir, appToken, trustProxy, tls: { staging } });
+  const server = createServer({ dataDir, nestDir, backupDir: process.env.BACKUP_DIR || '', secureCookies, disks, dockerHost, roostContainer, smartDir, appToken, trustProxy, tls: { staging } });
   server.listen(port, () => {
     console.log(`Roost is running on http://localhost:${port} (data in ${dataDir})`);
   });

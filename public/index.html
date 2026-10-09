@@ -145,6 +145,7 @@
           <div class="stat">Load<b id="stat-load">—</b></div>
           <div class="stat">Storage<b id="stat-disk">—</b></div>
         </div>
+        <a class="backup-line mono member-only hidden" id="backup-line"></a>
         <a class="more-link mono member-only" href="#/status">Server status →</a>
         <a class="more-link mono setup-nudge hidden" id="setup-nudge" href="#/admin"></a>
       </div>
@@ -487,6 +488,43 @@
         </div>
         <div class="msg" role="status"></div>
       </form>
+
+      <form class="card panel" id="backup-form">
+        <h3>Backups</h3><span class="mono muted">Every night Roost copies Nest, the apps' settings and its own data to the backup drive. Films and shows aren't included.</span>
+        <p class="tls-state" id="backup-state"><span class="dot"></span><span>Checking…</span></p>
+        <p class="mono muted tls-detail" id="backup-detail"></p>
+        <div class="backup-drive hidden" id="backup-drive">
+          <div class="meter" id="backup-meter" role="meter" aria-label="Backup drive used" aria-valuemin="0" aria-valuemax="100"><i></i></div>
+          <div class="mono muted" id="backup-drive-text"></div>
+        </div>
+        <div class="form-grid">
+          <label class="field"><span>Back up at</span><input type="time" name="time" required></label>
+          <label class="field"><span>Nightly backups to keep</span><input type="number" name="keepDaily" inputmode="numeric" min="1" max="30" required></label>
+          <label class="field"><span>Weekly backups to keep</span><input type="number" name="keepWeekly" inputmode="numeric" min="0" max="12" required></label>
+          <label class="field"><span>Drive size limit (GB)</span><input type="number" name="capGb" inputmode="numeric" min="10" placeholder="No limit"></label>
+        </div>
+        <p class="mono muted tls-help">Each night keeps only what changed, so more nights cost very little space. If the drive holds more than the size limit, the oldest backups go first; the newest is always kept.</p>
+        <div class="row">
+          <button class="btn" type="submit">Save</button>
+          <button class="btn ghost small" type="button" id="backup-run">Back up now</button>
+          <button class="btn danger small hidden" type="button" id="backup-cancel">Cancel backup</button>
+        </div>
+        <div class="msg" role="status"></div>
+        <ol class="activity" id="backup-history"></ol>
+      </form>
+
+      <div class="card panel hidden" id="restore-panel">
+        <h3>Get files back</h3><span class="mono muted">Browse any backup like a folder. Nothing is overwritten: files come back as a download, or as a new folder in the person's Nest.</span>
+        <p class="mono muted tls-help hidden" id="restore-hint"></p>
+        <div id="restore-browser">
+          <div class="form-grid"><label class="field"><span>Backup</span><select id="restore-night"></select></label></div>
+          <nav class="restore-path mono" id="restore-path" aria-label="Where you are in the backup"></nav>
+          <ul class="restore-list" id="restore-list"></ul>
+          <div class="row"><button class="btn small hidden" type="button" id="restore-here"></button></div>
+        </div>
+        <div class="msg" role="status"></div>
+        <p class="mono muted restore-job hidden" id="restore-job" role="status"></p>
+      </div>
 
       <div class="card panel" id="activity-panel">
         <h3>Activity</h3><span class="mono muted">Sign-ins and changes, newest first. Tap a time for the exact date.</span>
