@@ -149,6 +149,15 @@
         <a class="more-link mono member-only" href="#/status">Server status →</a>
         <a class="more-link mono setup-nudge hidden" id="setup-nudge" href="#/admin"></a>
       </div>
+      <!-- One search box across the apps (public/search.js) -->
+      <div class="search hidden" id="search" role="search">
+        <label class="search-field">
+          <span class="search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/></svg></span>
+          <input type="search" id="search-input" placeholder="Search Roost" aria-label="Search Roost" aria-controls="search-results" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
+          <kbd class="search-key mono" aria-hidden="true">/</kbd>
+        </label>
+        <div class="search-results hidden" id="search-results" aria-live="polite"></div>
+      </div>
       <div class="section">
         <div class="section-head">
           <h2>Your apps</h2>
@@ -205,6 +214,37 @@
       <input type="file" id="nest-pick-folder" webkitdirectory multiple hidden>
     </section>
 
+    <!-- Glint: photos (public/glint.js) -->
+    <section id="view-glint" class="nest glint hidden">
+      <aside class="nest-side">
+        <button class="btn nest-new" type="button" id="glint-upload"><span aria-hidden="true">+</span> Upload</button>
+        <nav class="nest-places mono" aria-label="Glint">
+          <a href="#/glint" data-place="photos">Photos</a>
+          <a href="#/glint/favourites" data-place="favourites">Favourites</a>
+          <a href="#/glint/albums" data-place="albums">Albums</a>
+          <a href="#/glint/trash" data-place="trash">Trash</a>
+        </nav>
+        <div class="nest-storage">
+          <div class="meter" aria-hidden="true"><i id="glint-meter"></i></div>
+          <span class="mono muted" id="glint-used"></span>
+          <a class="link-btn mono hidden" id="glint-more"></a>
+        </div>
+      </aside>
+      <div class="nest-main" id="glint-main">
+        <div class="nest-bar">
+          <div class="nest-head">
+            <nav class="nest-crumbs" id="glint-crumbs" aria-label="Where you are"></nav>
+            <div class="nest-tools" id="glint-tools"></div>
+          </div>
+          <div class="nest-selbar hidden" id="glint-selbar" role="toolbar" aria-label="Selected photos"></div>
+        </div>
+        <div id="glint-body" tabindex="0" aria-label="Photos"></div>
+        <div class="nest-sentinel" id="glint-sentinel"></div>
+        <div class="nest-drop hidden" id="glint-drop"><span>Drop photos to upload</span></div>
+      </div>
+      <input type="file" id="glint-pick" accept="image/*,video/*,.heic,.heif" multiple hidden>
+    </section>
+
     <!-- Status view -->
     <section id="view-status" class="section hidden">
       <div class="section-head">
@@ -227,6 +267,12 @@
 
       <h3 class="status-group mono muted">Drives</h3>
       <div class="status-grid" id="status-disks"></div>
+
+      <div id="status-traffic-wrap" class="hidden">
+        <h3 class="status-group mono muted">Sent away from home</h3>
+        <div class="status-grid" id="status-traffic"></div>
+        <p class="mono muted status-note">Uses your home upload. Counts Roost, Nest and Jellyfin watched through Roost.</p>
+      </div>
 
       <div id="status-outside-wrap" class="hidden">
         <h3 class="status-group mono muted">Outside services</h3>
@@ -504,5 +550,7 @@
 
   <script src="/app.js"></script>
   <script src="/nest.js"></script>
+  <script src="/glint.js"></script>
+  <script src="/search.js"></script>
 </body>
 </html>
