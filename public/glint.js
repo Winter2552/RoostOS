@@ -863,7 +863,26 @@
     pump();
   }
 
+  // A phone that goes to sleep mid-upload stops it, so keep the screen on while
+  // photos are sending (browsers without the feature just skip this).
+  let awake = null;
+  async function keepAwake() {
+    const busy = UP.tasks.some((x) => x.state === 'uploading' || x.state === 'queued');
+    if (!busy) {
+      if (awake) awake.release().catch(() => {});
+      awake = null;
+      return;
+    }
+    if (awake || !navigator.wakeLock || document.visibilityState !== 'visible') return;
+    try {
+      awake = await navigator.wakeLock.request('screen');
+      awake.addEventListener('release', () => { awake = null; });
+    } catch { /* low battery or not allowed: uploads still run */ }
+  }
+  document.addEventListener('visibilitychange', keepAwake);
+
   function pump() {
+    keepAwake();
     while (UP.running < UP.max) {
       const t = UP.tasks.find((x) => x.state === 'queued');
       if (!t) break;
