@@ -13,7 +13,7 @@ const ICONS = {
   home: '<path d="M3 11l9-7 9 7v9h-6v-6H9v6H3z"/>',
 };
 
-const state = { serverName: 'Roost', publicUrl: '', mailEnabled: false, user: null, apps: [], status: {}, users: [], defaultLimitGb: null, diskGb: null };
+const state = { serverName: 'Roost', publicUrl: '', mailEnabled: false, user: null, apps: [], status: {}, arranging: null, users: [], defaultLimitGb: null, diskGb: null, notice: null };
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -29,26 +29,121 @@ function el(tag, props = {}, ...children) {
   return node;
 }
 
-function icon(name) {
-  const span = el('span', { class: 'icon-tile', 'aria-hidden': 'true' });
+function icon(name, cls = 'icon-tile') {
+  const span = el('span', { class: cls, 'aria-hidden': 'true' });
   span.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round">${ICONS[name] || ICONS.grid}</svg>`;
   return span;
 }
 
 async function api(method, url, body) {
-  const res = await fetch(url, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
-    credentials: 'same-origin',
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+      credentials: 'same-origin',
+    });
+  } catch {
+    connectionLost();
+    throw new Error("Can't reach the server");
+  }
+  if (serverDown(res)) {
+    connectionLost();
+    throw new Error("Can't reach the server");
+  }
+  connectionBack();
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 && !url.startsWith('/api/login') && !linkToken()) {
     showWelcome(false);
   }
-  if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status });
+  if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status, code: data.code });
   return data;
 }
+
+// ---------- connection ----------
+// When the server stops answering, a banner says so in plain words and checks
+// again on a growing gap. It does nothing while the tab is hidden or the device
+// is offline, so a lost server costs no battery or data.
+
+const conn = { lost: false, booted: false, timer: null, tries: 0, checking: false };
+const RETRY_MS = [2000, 5000, 15000, 60000];
+
+// Roost always answers in JSON. A 5xx page that isn't JSON comes from a proxy
+// or tunnel in front of Roost saying it can't reach the server behind it.
+function serverDown(res) {
+  return res.status >= 502 && !String(res.headers.get('Content-Type')).includes('application/json');
+}
+
+function connectionWhy() {
+  return navigator.onLine
+    ? "The server may be off or restarting, or you're away from home and it can't be reached from here."
+    : 'This device is offline. Roost will reconnect when it is back online.';
+}
+
+function connectionLost() {
+  if (conn.lost) return;
+  conn.lost = true;
+  conn.tries = 0;
+  $('#conn-title').textContent = "Can't reach your Roost server";
+  $('#conn-why').textContent = connectionWhy();
+  $('#conn-retry').classList.remove('hidden');
+  $('#conn-banner').classList.remove('hidden', 'back');
+  scheduleCheck();
+}
+
+function connectionBack() {
+  conn.booted = true;
+  if (!conn.lost) return;
+  conn.lost = false;
+  clearTimeout(conn.timer);
+  $('#conn-title').textContent = 'Connected again';
+  $('#conn-why').textContent = '';
+  $('#conn-retry').classList.add('hidden');
+  $('#conn-banner').classList.add('back');
+  setTimeout(() => { if (!conn.lost) $('#conn-banner').classList.add('hidden'); }, 2000);
+  // Fill in whatever failed to load while the server was away.
+  if (state.user) {
+    loadApps().catch(() => {});
+    route();
+  }
+}
+
+function scheduleCheck() {
+  clearTimeout(conn.timer);
+  if (!conn.lost || document.hidden || !navigator.onLine) return;
+  conn.timer = setTimeout(checkServer, RETRY_MS[Math.min(conn.tries, RETRY_MS.length - 1)]);
+}
+
+async function checkServer() {
+  if (!conn.lost || conn.checking) return;
+  clearTimeout(conn.timer);
+  conn.checking = true;
+  $('#conn-retry').disabled = true;
+  $('#conn-retry').textContent = 'Checking…';
+  let ok = false;
+  try {
+    const res = await fetch('/api/ping', { cache: 'no-store', credentials: 'same-origin' });
+    ok = res.ok;
+  } catch {}
+  conn.checking = false;
+  $('#conn-retry').disabled = false;
+  $('#conn-retry').textContent = 'Try again';
+  if (ok) {
+    // The first load never finished, so start again from the top.
+    if (!conn.booted) return location.reload();
+    connectionBack();
+  } else {
+    conn.tries++;
+    $('#conn-why').textContent = connectionWhy();
+    scheduleCheck();
+  }
+}
+
+$('#conn-retry').addEventListener('click', checkServer);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && conn.lost) checkServer(); });
+window.addEventListener('online', () => { if (conn.lost) { conn.tries = 0; checkServer(); } });
+window.addEventListener('offline', () => { if (conn.lost) { $('#conn-why').textContent = connectionWhy(); clearTimeout(conn.timer); } });
 
 function flash(form, text, ok = true) {
   const msg = $('.msg', form);
@@ -167,6 +262,7 @@ let setupMode = false;
 function showWelcome(setup) {
   setupMode = setup;
   state.user = null;
+  state.arranging = null;
   $('#shell').classList.add('hidden');
   $('#secure').classList.add('hidden');
   $('#welcome').classList.remove('hidden');
@@ -193,6 +289,8 @@ $('#welcome-form').addEventListener('submit', async (e) => {
       return;
     }
     f.reset();
+    // A brand-new Roost opens on the setup checklist (after two-step sign-in).
+    if (setupMode) location.hash = '#/admin';
     await enter(res.user);
   } catch (err) {
     $('#welcome-msg').textContent = err.message;
@@ -453,7 +551,8 @@ async function showJoin(token) {
   if (invite) {
     $('#join-title').textContent = `Join ${info.serverName}`;
     const who = info.invitedBy ? `${info.invitedBy} invited you` : "You're invited";
-    $('#join-lead').textContent = info.apps.length ? `${who} · ${info.apps.join(', ')}` : who;
+    const lead = info.apps.length ? `${who} · ${info.apps.join(', ')}` : who;
+    $('#join-lead').textContent = info.guestUntil ? `${lead} · guest pass until ${untilDate(info.guestUntil)}` : lead;
     $('#join-submit').textContent = 'Create account';
     usernameHint('');
   } else {
@@ -556,6 +655,14 @@ function linkBox(url, note, shareText) {
   return el('div', { class: 'link-box' }, input, el('div', { class: 'row', style: 'margin:0' }, copy, share), el('div', { class: 'mono muted', text: note }));
 }
 
+// When a guest pass ends: after some days, or at the end of the day picked.
+function guestUntil(f) {
+  if (f.guestFor.value !== 'date') return new Date(Date.now() + Number(f.guestFor.value) * 86400000).toISOString();
+  return f.guestDate.value ? new Date(`${f.guestDate.value}T23:59:59`).toISOString() : '';
+}
+
+const isGuest = (u) => u.role === 'guest';
+
 function untilDate(iso) {
   return new Date(iso).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
@@ -573,8 +680,10 @@ async function enter(user) {
   $('#join').classList.add('hidden');
   $('#shell').classList.remove('hidden');
   document.querySelectorAll('.admin-only').forEach((n) => n.classList.toggle('hidden', user.role !== 'admin'));
+  // Guests get a calm view: their apps and their profile, nothing about the server.
+  document.querySelectorAll('.member-only').forEach((n) => n.classList.toggle('hidden', isGuest(user)));
   renderUser();
-  await Promise.all([loadApps(), loadSystem()]);
+  await Promise.all([loadApps(), isGuest(user) ? null : loadSystem()]);
   route();
   if (user.role === 'admin' && !location.hash.startsWith('#/admin')) loadSetup();
 }
@@ -584,8 +693,11 @@ function renderUser() {
   const name = u.displayName || u.username;
   $('#avatar').textContent = name.charAt(0).toUpperCase();
   $('#who-name').textContent = name;
+  const role = isGuest(u) ? `guest until ${shortDate(u.guestUntil)}` : u.role;
+  $('#who-role').textContent = role;
+  $('#account-btn').setAttribute('aria-label', `Account menu for ${name}`);
   $('#hero-name').textContent = name;
-  $('#profile-role').textContent = u.role;
+  $('#profile-role').textContent = role;
   $('#profile-form').displayName.value = u.displayName;
   $('#profile-form').username.value = u.username;
   $('#profile-form').email.value = u.email || '';
@@ -596,20 +708,101 @@ const VIEWS = ['apps', 'nest', 'status', 'profile', 'admin'];
 const hasNest = () => state.apps.some((a) => a.id === 'nest' && a.url === '#/nest');
 
 function route() {
-  if (!state.user) return;
+  // Nothing opens behind the two-step screen; enter() routes once it is done.
+  if (!state.user || needsSecureStep(state.user)) return;
   const [first, ...rest] = location.hash.replace(/^#\/?/, '').split('/');
   let view = first || 'apps';
-  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'nest' && !hasNest())) view = 'apps';
+  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'status' && isGuest(state.user)) || (view === 'nest' && !hasNest())) view = 'apps';
   for (const v of VIEWS) $(`#view-${v}`).classList.toggle('hidden', v !== view);
-  document.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
+  document.querySelectorAll('#account-menu a').forEach((a) => {
+    if (a.dataset.view === view) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  });
+  document.querySelectorAll('#app-bar a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
+  $('#account-btn').classList.toggle('active', ['status', 'profile', 'admin'].includes(view));
+  closeMenu(false);
   if (view === 'admin') { loadAdmin(); loadJellyfin(); }
-  if (view === 'profile') { loadStorage(); loadTwoStep(); loadDevices(); }
+  if (view === 'profile') { if (!isGuest(state.user)) loadStorage(); loadTwoStep(); loadDevices(); }
   if (view === 'status') loadStatus();
   if (view === 'nest') window.nestOpen(rest);
   else document.title = state.serverName;
 }
 
 window.addEventListener('hashchange', () => { if (state.user) route(); });
+
+// ---------- account menu ----------
+// Opens on click or tap everywhere, and also on hover where there is a mouse.
+// Listeners on the document exist only while the menu is open.
+
+const menu = { open: false, byHover: false, timer: null };
+
+function menuItems() {
+  return [...$('#account-menu').querySelectorAll('[role="menuitem"]')].filter((n) => !n.classList.contains('hidden'));
+}
+
+function openMenu({ hover = false, focus = null } = {}) {
+  clearTimeout(menu.timer);
+  menu.byHover = hover;
+  if (!menu.open) {
+    menu.open = true;
+    $('#account-menu').classList.remove('hidden');
+    $('#account-btn').setAttribute('aria-expanded', 'true');
+    document.addEventListener('pointerdown', onOutside);
+  }
+  if (focus === 'first') menuItems()[0].focus();
+  if (focus === 'last') menuItems().at(-1).focus();
+}
+
+function closeMenu(returnFocus = false) {
+  clearTimeout(menu.timer);
+  if (!menu.open) return;
+  menu.open = false;
+  $('#account-menu').classList.add('hidden');
+  $('#account-btn').setAttribute('aria-expanded', 'false');
+  document.removeEventListener('pointerdown', onOutside);
+  if (returnFocus) $('#account-btn').focus();
+}
+
+function onOutside(e) {
+  if (!$('#who').contains(e.target)) closeMenu();
+}
+
+$('#account-btn').addEventListener('click', () => {
+  // A mouse that opened the menu by hovering and then clicks keeps it open.
+  if (menu.open && menu.byHover) menu.byHover = false;
+  else if (menu.open) closeMenu();
+  else openMenu();
+});
+
+$('#account-btn').addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openMenu({ focus: 'first' }); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); openMenu({ focus: 'last' }); }
+  else if (e.key === 'Escape') closeMenu();
+});
+
+$('#account-menu').addEventListener('keydown', (e) => {
+  const items = menuItems();
+  const i = items.indexOf(document.activeElement);
+  if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length].focus(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+  else if (e.key === 'Home') { e.preventDefault(); items[0].focus(); }
+  else if (e.key === 'End') { e.preventDefault(); items.at(-1).focus(); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeMenu(true); }
+  else if (e.key === 'Tab') closeMenu();
+});
+
+// Hover only for a real mouse; touch screens never open it by accident while scrolling.
+$('#who').addEventListener('pointerenter', (e) => {
+  if (e.pointerType !== 'mouse') return;
+  clearTimeout(menu.timer);
+  if (!menu.open) menu.timer = setTimeout(() => openMenu({ hover: true }), 150);
+});
+
+$('#who').addEventListener('pointerleave', (e) => {
+  if (e.pointerType !== 'mouse') return;
+  clearTimeout(menu.timer);
+  if (menu.open && menu.byHover) menu.timer = setTimeout(() => closeMenu(), 250);
+});
 
 $('#logout').addEventListener('click', async () => {
   await api('POST', '/api/logout').catch(() => {});
@@ -621,26 +814,71 @@ $('#logout').addEventListener('click', async () => {
 async function loadApps() {
   const { apps } = await api('GET', '/api/apps');
   state.apps = apps;
-  $('.nav [data-view=nest]').classList.toggle('hidden', !hasNest());
+  renderAppBar();
   renderApps();
   loadWatching(true);
   api('GET', '/api/apps/status').then(({ status }) => { state.status = status; renderApps(); }).catch(() => {});
 }
 
+// Each person's own layout: starred apps first, then the rest, both in their
+// chosen order. Apps they haven't placed yet keep the admin's order at the end.
+function layoutApps(order, favs) {
+  const pos = new Map(order.map((id, i) => [id, i]));
+  const rank = (app, i) => (pos.has(app.id) ? pos.get(app.id) : order.length + i);
+  return state.apps
+    .map((app, i) => ({ app, fav: favs.has(app.id), rank: rank(app, i) }))
+    .sort((a, b) => b.fav - a.fav || a.rank - b.rank);
+}
+
+function myLayout() {
+  if (state.arranging) return layoutApps(state.arranging.order, state.arranging.favs);
+  return layoutApps(state.user.appOrder || [], new Set(state.user.favourites || []));
+}
+
+function renderAppBar() {
+  $('#app-bar').replaceChildren(...myLayout().map(({ app }) => app).filter((app) => app.url).map((app) =>
+    el('a', app.url.startsWith('#/') ? { href: app.url, 'data-view': app.url.slice(2), class: location.hash.startsWith(app.url) ? 'active' : '' } : { href: resolveUrl(app.url), target: '_blank', rel: 'noopener' },
+      icon(app.icon, 'bar-icon'), el('span', { text: app.name }))));
+}
+
 function renderApps() {
   const list = $('#apps');
   const total = state.apps.length;
+  renderArrangeActions();
   if (!total) {
     list.replaceChildren(el('div', { class: 'empty mono', text: 'No apps yet. Ask an admin to give you access.' }));
     return;
   }
-  list.replaceChildren(...state.apps.map((app) => {
+  const layout = myLayout();
+  list.classList.toggle('arranging', Boolean(state.arranging));
+  list.replaceChildren(...layout.map(({ app, fav }, i) => {
     const status = app.url ? state.status[app.id] || 'checking' : 'unset';
     const label = { online: 'Online', offline: 'Offline', checking: 'Checking', unset: 'Not set up' }[status];
     const isAdmin = state.user.role === 'admin';
+    const head = el('div', {}, el('div', { class: 'mono muted' },
+      fav && !state.arranging ? el('span', { class: 'fav-mark', title: 'Favourite', text: '★ ' }) : null, app.tagline),
+    el('h3', { text: app.name }));
+    if (state.arranging) {
+      // Arrows only move a card within its group: starred apps always stay first.
+      const canMove = (j) => j >= 0 && j < total && layout[j].fav === fav;
+      const move = (dir) => el('button', {
+        type: 'button', class: 'arrange-btn', 'data-act': dir < 0 ? 'back' : 'fwd', 'data-id': app.id,
+        'aria-label': `Move ${app.name} ${dir < 0 ? 'earlier' : 'later'}`,
+        disabled: !canMove(i + dir), onclick: () => moveApp(layout, i, dir),
+        text: dir < 0 ? '←' : '→',
+      });
+      return el('div', { class: 'card app-card arrange' },
+        el('button', {
+          type: 'button', class: `star-btn${fav ? ' on' : ''}`, 'data-act': 'star', 'data-id': app.id,
+          'aria-pressed': String(fav), 'aria-label': `Favourite ${app.name}`,
+          onclick: () => toggleFavourite(layout, app.id), text: fav ? '★' : '☆',
+        }),
+        icon(app.icon), head, el('p', { text: app.description }),
+        el('div', { class: 'arrange-row' }, move(-1), move(1)));
+    }
     const children = [
       icon(app.icon),
-      el('div', {}, el('div', { class: 'mono muted', text: app.tagline }), el('h3', { text: app.name })),
+      head,
       el('p', { text: app.description }),
       el('div', { class: 'app-foot mono' },
         el('span', {}, el('span', { class: `dot ${status}` }), label),
@@ -698,11 +936,81 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && state.user) loadWatching(false);
 });
 
+// ---------- arranging apps ----------
+
+function renderArrangeActions(error = '') {
+  const box = $('#arrange-actions');
+  if (!state.arranging) {
+    box.replaceChildren(state.apps.length > 1
+      ? el('button', { type: 'button', class: 'btn ghost small', onclick: startArranging, text: 'Arrange' })
+      : '');
+    return;
+  }
+  box.replaceChildren(
+    error ? el('span', { class: 'mono arrange-error', role: 'alert', text: error }) : '',
+    el('button', { type: 'button', class: 'btn ghost small', onclick: stopArranging, text: 'Cancel' }),
+    el('button', { type: 'button', class: 'btn small', onclick: saveArrangement, text: 'Done' }));
+}
+
+function startArranging() {
+  const order = myLayout().map(({ app }) => app.id);
+  state.arranging = { order, favs: new Set(state.user.favourites || []) };
+  renderApps();
+  $('#apps .arrange-btn, #apps .star-btn')?.focus();
+}
+
+function stopArranging() {
+  state.arranging = null;
+  renderApps();
+}
+
+// Re-draw, then put focus back on the button that was pressed so keyboard
+// users can keep tapping it (or on the card's star if it can't move further).
+function rerenderArranging(id, act) {
+  renderApps();
+  const btn = $(`#apps [data-id="${id}"][data-act="${act}"]`);
+  (btn && !btn.disabled ? btn : $(`#apps [data-id="${id}"][data-act="star"]`))?.focus();
+}
+
+function moveApp(layout, i, dir) {
+  const ids = layout.map(({ app }) => app.id);
+  [ids[i], ids[i + dir]] = [ids[i + dir], ids[i]];
+  state.arranging.order = ids;
+  rerenderArranging(ids[i + dir], dir < 0 ? 'back' : 'fwd');
+}
+
+function toggleFavourite(layout, id) {
+  const { favs } = state.arranging;
+  if (favs.has(id)) favs.delete(id); else favs.add(id);
+  state.arranging.order = layout.map(({ app }) => app.id);
+  rerenderArranging(id, 'star');
+}
+
+async function saveArrangement() {
+  const order = myLayout().map(({ app }) => app.id);
+  const favourites = order.filter((id) => state.arranging.favs.has(id));
+  const saved = layoutApps(state.user.appOrder || [], new Set(state.user.favourites || [])).map(({ app }) => app.id);
+  const savedFavs = saved.filter((id) => (state.user.favourites || []).includes(id));
+  // Only talk to the server when something actually changed.
+  if (order.join() !== saved.join() || favourites.join() !== savedFavs.join()) {
+    try {
+      ({ user: state.user } = await api('PATCH', '/api/me', { appOrder: order, favourites }));
+    } catch (err) {
+      renderArrangeActions(err.message || "Couldn't save. Try again.");
+      return;
+    }
+  }
+  state.arranging = null;
+  renderAppBar();
+  renderApps();
+}
+
 // ---------- system panel ----------
 
 async function loadSystem() {
   try {
     const s = await api('GET', '/api/system');
+    renderNotice(s.notice);
     const used = s.memory.total - s.memory.free;
     $('#stat-uptime').textContent = duration(s.uptime);
     $('#stat-mem').textContent = `${bytes(used)} / ${bytes(s.memory.total)}`;
@@ -714,6 +1022,71 @@ async function loadSystem() {
     // The panel just keeps its dashes if stats aren't available.
   }
 }
+
+// ---------- notice ----------
+
+// Hiding a notice is remembered in this browser only, keyed by when the notice
+// was posted, so a new notice shows again.
+const NOTICE_HIDDEN = 'roost.noticeHidden';
+
+function hiddenNotice() {
+  try { return localStorage.getItem(NOTICE_HIDDEN); } catch { return null; }
+}
+
+function renderNotice(n) {
+  state.notice = n || null;
+  const show = Boolean(n) && hiddenNotice() !== n.at;
+  if (show) $('#notice-text').textContent = n.text;
+  $('#notice').classList.toggle('hidden', !show);
+  renderNoticeAdmin();
+}
+
+$('#notice-close').addEventListener('click', () => {
+  try { localStorage.setItem(NOTICE_HIDDEN, state.notice.at); } catch { /* hides until the next refresh */ }
+  $('#notice').classList.add('hidden');
+});
+
+function noticeUntil(choice) {
+  const d = new Date();
+  if (choice === 'today') d.setHours(23, 59, 0, 0);
+  else if (choice === 'morning') { d.setDate(d.getDate() + 1); d.setHours(8, 0, 0, 0); }
+  else if (choice === 'day') d.setTime(d.getTime() + 86400 * 1000);
+  else if (choice === 'week') d.setTime(d.getTime() + 7 * 86400 * 1000);
+  else return null;
+  return d.toISOString();
+}
+
+function previewNotice() {
+  const text = $('#notice-form').text.value.trim();
+  $('#notice-count').textContent = `${$('#notice-form').text.value.length} / 200`;
+  $('.notice-text', $('#notice-preview')).textContent = text;
+  $('#notice-preview').classList.toggle('hidden', !text);
+}
+
+function renderNoticeAdmin() {
+  const n = state.notice;
+  $('#notice-now').textContent = !n ? 'No notice showing' : n.until ? `Showing now, until ${untilDate(n.until)}` : 'Showing now, until you clear it';
+  $('#notice-clear').classList.toggle('hidden', !n);
+}
+
+async function saveNotice(text, until) {
+  const f = $('#notice-form');
+  try {
+    const { notice } = await api('PUT', '/api/admin/notice', { text, until });
+    renderNotice(notice);
+    flash(f, notice ? 'Posted. Everyone sees it on their dashboard.' : 'Cleared');
+    if (!notice) { f.text.value = ''; previewNotice(); }
+  } catch (err) { flash(f, err.message, false); }
+}
+
+$('#notice-form').text.addEventListener('input', previewNotice);
+$('#notice-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = e.target.text.value.trim();
+  if (!text) return flash(e.target, 'Write a message first', false);
+  saveNotice(text, noticeUntil(e.target.until.value));
+});
+$('#notice-clear').addEventListener('click', () => saveNotice('', null));
 
 // ---------- status page ----------
 
@@ -776,7 +1149,95 @@ function appState(a, dockerOk) {
   return { kind: a.web.state, label: WEB_LABEL[a.web.state] };
 }
 
-function appStatusCard(a, dockerOk) {
+// ---------- uptime history ----------
+
+const HISTORY_DAYS = 30;
+const uptimePick = {}; // app id → the day tapped on its strip
+
+function overlap(ranges, from, to) {
+  let ms = 0;
+  for (const [s, e] of ranges) ms += Math.max(0, Math.min(e, to) - Math.max(s, from));
+  return ms;
+}
+
+// One entry per local day, oldest first: how long it was watched and down.
+function uptimeDays(h, now) {
+  const days = [];
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  for (let i = HISTORY_DAYS - 1; i >= 0; i--) {
+    const start = new Date(today);
+    start.setDate(today.getDate() - i);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 1);
+    const from = start.getTime();
+    const to = Math.min(end.getTime(), now);
+    const watched = overlap(h.watched, from, to);
+    const down = Math.min(watched, overlap(h.outages, from, to));
+    const kind = !watched ? 'none' : !down ? 'up' : down * 2 >= watched ? 'down' : 'part';
+    days.push({ from, to, watched, down, kind, outages: h.outages.filter(([s, e]) => e > from && s < to) });
+  }
+  return days;
+}
+
+const clockTime = (ms) => new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+const dayName = (ms) => new Date(ms).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+const mins = (ms) => duration(Math.max(60, ms / 1000));
+
+function dayDetail(d) {
+  if (!d.watched) return `${dayName(d.from)} · no data`;
+  if (!d.down) return `${dayName(d.from)} · no downtime`;
+  const times = d.outages.slice(0, 3).map(([s, e]) => `${clockTime(Math.max(s, d.from))}–${clockTime(Math.min(e, d.to))}`);
+  const more = d.outages.length > 3 ? ` +${d.outages.length - 3}` : '';
+  return `${dayName(d.from)} · down ${mins(d.down)} (${times.join(', ')}${more})`;
+}
+
+function uptimeStrip(id, h, now) {
+  const days = uptimeDays(h, now);
+  const watched = days.reduce((n, d) => n + d.watched, 0);
+  const down = days.reduce((n, d) => n + d.down, 0);
+  if (!watched) return null;
+  // Any downtime shows a decimal and never rounds up to 100.
+  const percent = down ? Math.min(99.9, 100 * (1 - down / watched)).toFixed(1) : '100';
+  const outages = h.outages.length;
+  const summary = outages ? `${outages} outage${outages > 1 ? 's' : ''} · ${mins(down)}` : 'No outages';
+  const detail = el('div', { class: 'uptime-detail mono muted', 'aria-live': 'polite' });
+  const bars = el('div', { class: 'uptime-bars' }, days.map((d) => el('i', { class: d.kind })));
+  const strip = el('div', {
+    class: 'uptime-strip',
+    role: 'slider',
+    tabindex: '0',
+    'aria-label': `Last ${HISTORY_DAYS} days: ${percent}% up, ${summary.toLowerCase()}`,
+    'aria-valuemin': 0,
+    'aria-valuemax': HISTORY_DAYS - 1,
+  }, bars);
+  const pick = (i) => {
+    const n = Math.max(0, Math.min(HISTORY_DAYS - 1, i));
+    uptimePick[id] = n;
+    [...bars.children].forEach((b, j) => b.classList.toggle('picked', j === n));
+    strip.setAttribute('aria-valuenow', n);
+    strip.setAttribute('aria-valuetext', dayDetail(days[n]));
+    detail.textContent = dayDetail(days[n]);
+  };
+  // The whole strip is the tap target: thin bars are hard to hit on a phone.
+  strip.addEventListener('click', (e) => {
+    const r = bars.getBoundingClientRect();
+    pick(Math.floor(((e.clientX - r.left) / r.width) * HISTORY_DAYS));
+  });
+  strip.addEventListener('keydown', (e) => {
+    const step = { ArrowLeft: -1, ArrowRight: 1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    pick((uptimePick[id] ?? HISTORY_DAYS - 1) + step);
+  });
+  if (uptimePick[id] !== undefined) pick(uptimePick[id]);
+  return el('div', { class: 'uptime' },
+    el('div', { class: 'uptime-head mono muted' }, el('span', { text: `${percent}% · ${HISTORY_DAYS} days` }), el('span', { text: summary })),
+    strip,
+    detail);
+}
+
+function appStatusCard(a, dockerOk, history) {
   const st = appState(a, dockerOk);
   const lines = [];
   if (a.containers.length) {
@@ -794,6 +1255,7 @@ function appStatusCard(a, dockerOk) {
     el('div', { class: 'app-status-head' }, icon(a.icon), el('div', { class: 'mono muted', text: a.tagline })),
     el('div', { class: 'stat-value', text: a.name }),
     el('div', { class: 'mono stat-state' }, el('span', { class: `dot ${st.kind}` }), st.label),
+    history && history.apps[a.id] ? uptimeStrip(a.id, history.apps[a.id], history.now) : null,
     el('div', { class: 'stat-lines mono muted' }, lines.map((t) => el('div', { text: t }))));
 }
 
@@ -814,6 +1276,14 @@ function setSummary(kind, text) {
   $('#status-summary').replaceChildren(el('span', { class: `dot ${kind}` }), el('span', { text }));
 }
 
+// Admins only: the HTTPS certificate needs a look well before it runs out.
+function certProblem(c) {
+  if (!c) return null;
+  if (c.state === 'error') return 'HTTPS certificate: couldn\'t get one (see Admin)';
+  if (c.daysLeft !== null && c.daysLeft < 14) return `HTTPS certificate runs out in ${Math.max(0, c.daysLeft)} days (see Admin)`;
+  return null;
+}
+
 function renderStatus(s) {
   const memUsed = s.memory.total - s.memory.available;
   const memPct = pct(memUsed, s.memory.total);
@@ -830,7 +1300,7 @@ function renderStatus(s) {
     return statCard(d.label, `${bytes(d.free)} free`, `${bytes(used)} of ${bytes(d.total)} used`, pct(used, d.total));
   }));
 
-  $('#status-apps').replaceChildren(...s.apps.map((a) => appStatusCard(a, s.docker.ok)));
+  $('#status-apps').replaceChildren(...s.apps.map((a) => appStatusCard(a, s.docker.ok, s.history)));
 
   const note = $('#status-note');
   note.classList.toggle('hidden', s.docker.ok);
@@ -849,6 +1319,7 @@ function renderStatus(s) {
     ...s.disks.filter((d) => !d.missing && pct(d.total - d.free, d.total) >= FULL_AT).map((d) => `${d.label} drive is nearly full`),
     ...s.disks.filter((d) => d.missing).map((d) => `${d.label} drive not found`),
     ...(memPct >= FULL_AT ? ['Memory is nearly full'] : []),
+    ...(certProblem(s.certificate) ? [certProblem(s.certificate)] : []),
   ];
   setSummary(problems.length ? 'offline' : 'online', problems.length ? problems.join(' · ') : 'Everything is running');
   $('#status-updated').textContent = `Updated ${new Date(s.checkedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
@@ -998,12 +1469,28 @@ $('#two-step-on').addEventListener('submit', (e) => e.preventDefault());
 
 const REQUEST_LABEL = { pending: 'Waiting for an admin', approved: 'Approved', declined: 'Declined' };
 
+// Usage split for the Profile bar: Nest is Files, Glint is Photos, anything
+// else a storage app reports is Other. Empty parts are left out.
+const USAGE_LABELS = { nest: 'Files', glint: 'Photos' };
+
+function usageParts(usage = {}) {
+  const parts = Object.entries(USAGE_LABELS).map(([app, label]) => ({ label, bytes: usage[app] || 0 }));
+  const other = Object.entries(usage).filter(([app]) => !(app in USAGE_LABELS)).reduce((sum, [, n]) => sum + n, 0);
+  parts.push({ label: 'Other', bytes: other });
+  return parts.filter((p) => p.bytes > 0);
+}
+
 async function loadStorage() {
   const { storage, requests } = await api('GET', '/api/me/storage');
   const isAdmin = state.user.role === 'admin';
   const pct = storage.limitBytes ? Math.min(100, (storage.usedBytes / storage.limitBytes) * 100) : 0;
-  $('#storage-fill').style.width = `${pct}%`;
+  const parts = usageParts(storage.usage);
+  // With no limit the bar has nothing to fill up to, so it shows only the split.
+  $('#storage-fill').style.width = `${storage.limitBytes ? pct : (storage.usedBytes ? 100 : 0)}%`;
   $('#storage-fill').classList.toggle('full', pct >= 90);
+  $('#storage-fill').replaceChildren(...parts.map((p, i) => el('span', { class: `part-${i}`, style: `width:${(p.bytes / storage.usedBytes) * 100}%` })));
+  $('#storage-key').replaceChildren(...parts.map((p, i) => el('span', {}, el('i', { class: `part-${i}` }), p.label, el('b', { text: bytes(p.bytes) }))));
+  $('#storage-key').classList.toggle('hidden', !parts.length);
   $('#storage-used').textContent = `${bytes(storage.usedBytes)} used`;
   $('#storage-limit').textContent = storage.limitGb === null ? 'No limit' : `of ${storage.limitGb} GB`;
   const pending = requests.some((r) => r.status === 'pending');
@@ -1162,6 +1649,7 @@ async function loadAdmin() {
     api('GET', '/api/admin/users'), api('GET', '/api/apps'), api('GET', '/api/admin/storage-requests'), api('GET', '/api/admin/invites'),
     api('GET', '/api/admin/settings')]);
   $('#settings-form').adminsNeedTwoStep.checked = settings.adminsNeedTwoStep;
+  if (state.notice && !$('#notice-form').text.value) { $('#notice-form').text.value = state.notice.text; previewNotice(); }
   renderMailSettings(settings);
   state.users = users;
   state.apps = apps;
@@ -1177,6 +1665,7 @@ async function loadAdmin() {
   renderUsers();
   renderInvites(invites);
   $('#new-user-apps').replaceChildren(...appChecks(null));
+  loadTls();
 }
 
 // ---------- Jellyfin sign-in ----------
@@ -1249,8 +1738,68 @@ function renderAppsEditor() {
   $('#apps-editor').replaceChildren(...state.apps.map(appEditorRow));
 }
 
+// Add app opens a short picker: what Docker is running that has no card yet,
+// then the built-in templates, then a blank card. Docker is only asked now.
+function addAppRow(app) {
+  const ids = new Set([...document.querySelectorAll('#apps-editor .admin-app')].map((r) => r.dataset.id));
+  const card = { ...app };
+  if (ids.has(card.id)) delete card.id;
+  const row = appEditorRow(card);
+  $('#apps-editor').append(row);
+  closeAppPicker();
+  row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  $('[name=name]', row).focus({ preventScroll: true });
+}
+
+function closeAppPicker() {
+  $('#app-picker').classList.add('hidden');
+  $('#add-app').setAttribute('aria-expanded', 'false');
+}
+
+function pickerItem(app, detail) {
+  return el('button', { class: 'picker-item', type: 'button', onclick: () => addAppRow(app) },
+    icon(app.icon),
+    el('span', { class: 'picker-text' }, el('span', { text: app.name }), el('span', { class: 'mono muted', text: detail })));
+}
+
+async function openAppPicker() {
+  const picker = $('#app-picker');
+  picker.replaceChildren(el('span', { class: 'mono muted', text: 'Looking for apps on this server…' }));
+  picker.classList.remove('hidden');
+  $('#add-app').setAttribute('aria-expanded', 'true');
+  let data;
+  try {
+    data = await api('GET', '/api/admin/app-templates');
+  } catch (err) {
+    picker.replaceChildren(el('div', { class: 'msg error', text: err.message }));
+    return;
+  }
+  const names = new Set([...document.querySelectorAll('#apps-editor [name=name]')].map((i) => i.value.trim().toLowerCase()));
+  const port = (url) => (url.match(/:(\d+)$/) || [])[1];
+  // Port first: it is what tells two similar entries apart, and long names get cut.
+  const detail = (...parts) => parts.filter(Boolean).join(' · ');
+  const running = data.running.map((a) => pickerItem(a, detail(port(a.url) && `:${port(a.url)}`, a.container)));
+  // A template for an app that is already running would only repeat it.
+  const covered = new Set(data.running.map((a) => a.key));
+  const templates = data.templates
+    .filter((t) => !covered.has(t.key) && !names.has(t.name.toLowerCase()))
+    .map((t) => pickerItem(t, detail(port(t.url) && `:${port(t.url)}`, t.tagline)));
+  picker.replaceChildren(
+    el('div', { class: 'picker-head' },
+      el('h4', { text: 'Running on this server' }),
+      el('button', { class: 'link-btn mono', type: 'button', text: 'Close', onclick: closeAppPicker })),
+    running.length
+      ? el('div', { class: 'picker-list' }, running)
+      : el('span', { class: 'mono muted', text: data.docker.ok ? 'Every running app already has a card.' : 'Roost can\'t see Docker, so only templates are shown.' }),
+    templates.length ? el('h4', { text: 'Templates' }) : null,
+    templates.length ? el('div', { class: 'picker-list' }, templates) : null,
+    el('button', { class: 'btn ghost small', type: 'button', text: 'Blank card', onclick: () => addAppRow({ icon: 'grid' }) }),
+  );
+}
+
 $('#add-app').addEventListener('click', () => {
-  $('#apps-editor').append(appEditorRow({ icon: 'grid' }));
+  if ($('#app-picker').classList.contains('hidden')) openAppPicker();
+  else closeAppPicker();
 });
 
 $('#apps-form').addEventListener('submit', async (e) => {
@@ -1302,6 +1851,16 @@ function renderUsers() {
           `Set a new password for ${state.serverName}`));
       } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
     };
+    const ended = isGuest(u) && !(Date.parse(u.guestUntil) > Date.now());
+    const guestPass = async (body) => {
+      try {
+        await api('PATCH', `/api/admin/users/${u.id}`, body);
+        loadAdmin();
+      } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
+    };
+    // A week more, counted from now for a pass that has already ended.
+    const extend = () => guestPass({ guestUntil: new Date(Math.max(Date.now(), Date.parse(u.guestUntil)) + 7 * 86400000).toISOString() });
+    const endPass = () => confirm(`End ${u.displayName}'s guest pass now? They are signed out straight away.`) && guestPass({ endGuestPass: true });
     const remove = async () => {
       if (!confirm(`Remove ${u.displayName}? They will no longer be able to sign in.`)) return;
       try {
@@ -1309,12 +1868,16 @@ function renderUsers() {
         loadAdmin();
       } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
     };
-    return el('div', { class: 'user-row' },
+    return el('div', { class: `user-row${ended ? ' ended' : ''}` },
       el('div', { class: 'who' },
         el('span', { class: 'avatar', text: (u.displayName || u.username).charAt(0).toUpperCase() }),
         el('div', {}, el('div', { text: u.displayName }), el('div', { class: 'mono muted', text: [`@${u.username}`, u.email].filter(Boolean).join(' · ') })),
         el('span', { class: 'pill', text: u.role }),
         u.twoStep.on ? el('span', { class: 'pill approved', text: 'Two-step' }) : null),
+      isGuest(u) ? el('div', { class: 'row', style: 'margin:0' },
+        el('span', { class: 'mono muted', text: ended ? `Guest pass ended ${shortDate(u.guestUntil)}` : `Guest pass until ${untilDate(u.guestUntil)}` }),
+        el('button', { class: 'btn ghost small', type: 'button', text: 'Add a week', onclick: extend }),
+        ended ? null : el('button', { class: 'btn ghost small', type: 'button', text: 'End now', onclick: endPass })) : null,
       u.role === 'admin' ? el('span', { class: 'mono muted', text: 'Sees every app' }) : checks,
       el('div', { class: 'row user-storage' },
         el('span', { class: 'mono muted', text: `Storage · ${bytes(u.storage.usedBytes)} used` }),
@@ -1343,13 +1906,25 @@ function renderInvites(invites) {
     return el('div', { class: 'request-row' },
       el('div', {},
         el('div', { text: inv.label || 'Invite' }),
-        el('div', { class: 'mono muted', text: `${inv.role} · made ${shortDate(inv.createdAt)} · until ${untilDate(inv.expiresAt)}` })),
+        el('div', { class: 'mono muted', text: `${inv.role}${inv.guestUntil ? ` until ${shortDate(inv.guestUntil)}` : ''} · made ${shortDate(inv.createdAt)} · link works until ${untilDate(inv.expiresAt)}` })),
       el('button', { class: 'btn danger small', type: 'button', text: 'Cancel', onclick: cancel }));
   }));
 }
 
 $('#invite-form').role.addEventListener('change', (e) => {
-  $('#invite-apps-row').classList.toggle('hidden', e.target.value === 'admin');
+  const role = e.target.value;
+  $('#invite-apps-row').classList.toggle('hidden', role === 'admin');
+  $('#guest-until-field').classList.toggle('hidden', role !== 'guest');
+  // Guests start with just Jellyfin; tick more if they need them.
+  $('#new-user-apps').replaceChildren(...appChecks(role === 'guest' ? state.apps.filter((a) => a.id === 'jellyfin').map((a) => a.id) : null));
+  pickers.newUser.setValue(role === 'guest' ? 1 : state.defaultLimitGb);
+});
+
+$('#invite-form').guestFor.addEventListener('change', (e) => {
+  const f = e.target.form;
+  f.guestDate.classList.toggle('hidden', e.target.value !== 'date');
+  f.guestDate.required = e.target.value === 'date';
+  f.guestDate.min = new Date().toLocaleDateString('en-CA');
 });
 
 $('#invite-form').addEventListener('submit', async (e) => {
@@ -1361,10 +1936,14 @@ $('#invite-form').addEventListener('submit', async (e) => {
       email: state.mailEnabled ? f.email.value : '',
       role: f.role.value,
       apps: checkedApps($('#new-user-apps')),
+      guestUntil: f.role.value === 'guest' ? guestUntil(f) : undefined,
       limitGb: pickers.newUser.getValue(),
     });
     f.reset();
     $('#invite-apps-row').classList.remove('hidden');
+    $('#guest-until-field').classList.add('hidden');
+    f.guestDate.classList.add('hidden');
+    f.guestDate.required = false;
     flash(f, '');
     await loadAdmin();
     $('#invite-result').replaceChildren(linkBox(linkUrl('join', token),
@@ -1465,6 +2044,8 @@ const ACTIVITY_LABELS = {
   'storage-declined': 'Declined storage',
   'apps-changed': 'Changed apps',
   'settings-changed': 'Changed server settings',
+  'notice-posted': 'Posted a notice',
+  'notice-cleared': 'Cleared the notice',
 };
 
 const activity = { filter: '', last: null };
@@ -1518,15 +2099,96 @@ $('#activity-filters').addEventListener('click', (e) => {
 
 $('#activity-more').addEventListener('click', () => loadActivity(true));
 
+// ---------- secure connection ----------
+
+let tlsTimer = null;
+
+function longDate(iso) {
+  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function renderTls(t) {
+  const f = $('#tls-form');
+  const c = t.certificate;
+  const [kind, headline] = {
+    off: ['', 'Off: Roost is only on plain HTTP'],
+    pending: ['starting', 'Waiting to get a certificate'],
+    working: ['starting', t.step || 'Getting a certificate'],
+    active: ['online', `Secure: ${t.domain} and *.${t.domain}`],
+    warning: ['starting', `Secure for now, but renewal is failing`],
+    error: ['offline', "Couldn't get a certificate"],
+  }[t.state] || ['', t.state];
+  $('#tls-state').replaceChildren(el('span', { class: `dot ${kind}` }), el('span', { text: headline }));
+
+  const lines = [];
+  if (c && t.state !== 'working') lines.push(`${t.staging ? 'Test certificate' : `From ${c.issuer}`} · valid until ${longDate(c.expiresAt)} (${c.daysLeft} days) · renews 30 days before`);
+  if (t.lastError && t.state !== 'working') lines.push(t.lastError);
+  if (t.state === 'working') lines.push('This usually takes under a minute.');
+  if (t.connection.viaCloudflare) lines.push('You opened this page through Cloudflare.');
+  else if (t.connection.secure) lines.push('You opened this page directly over HTTPS.');
+  $('#tls-detail').textContent = lines.join(' · ');
+
+  // Don't overwrite what someone is typing; an empty field is always filled in.
+  for (const name of ['domain', 'email']) {
+    if (document.activeElement !== f[name] || !f[name].value) f[name].value = t[name] || '';
+  }
+  f.token.placeholder = t.tokenSaved ? 'Saved (leave blank to keep)' : 'Paste the token';
+  f.token.required = !t.tokenSaved;
+  const busy = t.state === 'working';
+  $('#tls-save').disabled = busy;
+  $('#tls-save').textContent = t.tokenSaved ? 'Save' : 'Save and get certificate';
+  $('#tls-renew').classList.toggle('hidden', !t.tokenSaved);
+  $('#tls-renew').disabled = busy;
+  $('#tls-off').classList.toggle('hidden', !t.tokenSaved);
+  $('#tls-off').disabled = busy;
+
+  // Follow progress while a request runs; stop as soon as it finishes.
+  clearTimeout(tlsTimer);
+  if (busy) tlsTimer = setTimeout(loadTls, 1500);
+}
+
+async function loadTls() {
+  if ($('#view-admin').classList.contains('hidden')) return;
+  try { renderTls(await api('GET', '/api/admin/tls')); } catch { /* the rest of Admin still works */ }
+}
+
+$('#tls-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    const t = await api('PUT', '/api/admin/tls', { domain: f.domain.value, token: f.token.value, email: f.email.value });
+    f.token.value = '';
+    renderTls(t);
+    flash(f, 'Saved. Getting the certificate…');
+  } catch (err) { flash(f, err.message, false); }
+});
+
+$('#tls-renew').addEventListener('click', async () => {
+  const f = $('#tls-form');
+  try { renderTls(await api('POST', '/api/admin/tls/renew')); flash(f, 'Renewing…'); } catch (err) { flash(f, err.message, false); }
+});
+
+$('#tls-off').addEventListener('click', async () => {
+  const f = $('#tls-form');
+  if (!confirm('Turn off HTTPS? Roost forgets the Cloudflare token and the certificate. Links using your domain will stop working securely.')) return;
+  try { renderTls(await api('DELETE', '/api/admin/tls')); flash(f, 'HTTPS turned off'); } catch (err) { flash(f, err.message, false); }
+});
+
 // ---------- boot ----------
+
+// Lets Roost install as an app and show an offline screen. Browsers only allow
+// it on HTTPS (or localhost), so on a plain home address this does nothing.
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
 
 (async function boot() {
   tickClock();
   setInterval(tickClock, 30 * 1000);
-  setInterval(() => { if (state.user && !$('#view-apps').classList.contains('hidden')) loadSystem(); }, 15 * 1000);
+  setInterval(() => { if (state.user && !isGuest(state.user) && !conn.lost && !$('#view-apps').classList.contains('hidden')) loadSystem(); }, 15 * 1000);
   // The status page refreshes itself while it is open and the tab is visible.
   setInterval(() => {
-    if (state.user && !document.hidden && !$('#view-status').classList.contains('hidden')) loadStatus();
+    if (state.user && !conn.lost && !document.hidden && !$('#view-status').classList.contains('hidden')) loadStatus();
   }, STATUS_REFRESH_MS);
   const token = linkToken();
   if (token) return showJoin(token);
