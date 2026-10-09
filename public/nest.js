@@ -263,6 +263,17 @@
     bar.parentNode.classList.toggle('high', pctUsed >= 90);
     bar.parentNode.classList.toggle('hidden', !s.limitBytes);
     $('#nest-used').textContent = s.limitBytes ? `${bytes(s.usedBytes)} of ${bytes(s.limitBytes)} used` : `${bytes(s.usedBytes)} used`;
+    // Nearly full: say so, with the way to get more space right there.
+    const more = $('#nest-more');
+    more.classList.toggle('hidden', pctUsed < 90);
+    if (pctUsed >= 90) { const m = moreSpace(); more.href = m.href; more.textContent = m.text; }
+  }
+
+  // Where to get more space: admins raise their own limit, everyone else asks.
+  function moreSpace() {
+    return state.user && state.user.role === 'admin'
+      ? { href: '#/admin', text: 'Raise limit' }
+      : { href: '#/profile', text: 'Ask for more' };
   }
 
   function renderTools() {
@@ -959,6 +970,7 @@
       if (t.state === 'cancelled') return;
       t.state = 'failed';
       t.error = err.message;
+      t.overLimit = err.code === 'over-limit';
     }
   }
 
@@ -980,7 +992,7 @@
         try { d = JSON.parse(x.responseText); } catch { /* not JSON */ }
         // 409 with a position: the server got a different amount, carry on from there.
         if (x.status === 200 || (x.status === 409 && Number.isInteger(d.received))) return resolve(d);
-        const err = new Error(d.error || `Upload failed (${x.status})`);
+        const err = Object.assign(new Error(d.error || `Upload failed (${x.status})`), { code: d.code });
         err.fatal = [400, 401, 403, 404, 413, 507].includes(x.status);
         reject(err);
       };
@@ -1024,7 +1036,9 @@
 
   function taskRow(t) {
     const pctDone = t.size ? (t.live / t.size) * 100 : 100;
-    const actions = t.state === 'failed'
+    const actions = t.state === 'failed' && t.overLimit
+      ? el('a', { class: 'link-btn mono', ...moreSpace() })
+      : t.state === 'failed'
       ? el('button', { type: 'button', class: 'link-btn mono', text: 'Retry', onclick: () => { t.state = 'queued'; renderPanel(); pump(); } })
       : t.state === 'done'
         ? ni('check', 'nup-done')
