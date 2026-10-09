@@ -227,6 +227,7 @@ function handleAs(ip, headers = {}) {
     const res = {
       headersSent: false,
       setHeader() {},
+      on() {},
       writeHead(status) { out.status = status; this.headersSent = true; },
       end(data) { out.body = String(data || ''); resolve(out); },
     };

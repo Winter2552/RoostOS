@@ -35,8 +35,8 @@ const STEPS = [
   {
     id: 'data-drive',
     group: 'Server',
-    title: 'Keep Nest on the 3 TB drive',
-    why: 'Files go on the big data drive, not the 240 GB system SSD.',
+    title: 'Keep Nest and Glint on the 3 TB drive',
+    why: 'Files and photos go on the big data drive, not the 240 GB system SSD. Glint keeps its photos in Nest\'s folder, so this one setting covers both.',
     how: [
       'In ZimaOS, open Storage and note the mount folder of the 3 TB drive.',
       'In Roost\'s compose file, point the Nest volume at a folder on it, e.g. /media/Data/roost-nest:/nest.',
@@ -147,6 +147,20 @@ const STEPS = [
     optional: true,
     covers: ['SECURE_COOKIES', 'BEHIND_PROXY'],
     check: (ctx) => ctx.secureCookies && ctx.trustProxy,
+  },
+  {
+    id: 'upload-meter',
+    group: 'Reach it from anywhere',
+    title: 'Watch what leaves the house',
+    why: 'Home upload is slow. The status page shows how much Roost, Nest and Jellyfin send to people away from home, so you can see if it is filling up.',
+    how: [
+      'Once Roost is reachable from outside, open it once on a phone with Wi-Fi off.',
+      'On the status page, check Sent away from home under the server cards. It ticks off here when away traffic shows up.',
+      'Phones and browsers keep Roost\'s own files and re-use Nest files they already have, so most visits send very little.',
+    ],
+    action: { label: 'Open status', view: 'status' },
+    optional: true,
+    check: (ctx) => ctx.awayBytes > 0,
   },
   {
     id: 'https',
