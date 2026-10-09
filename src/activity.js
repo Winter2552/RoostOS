@@ -32,11 +32,13 @@ const KINDS = {
   'storage-approved': 'storage',
   'storage-declined': 'storage',
   'apps-changed': 'settings',
+  'app-restarted': 'apps',
+  'app-restart-failed': 'apps',
   'settings-changed': 'settings',
   'notice-posted': 'settings',
   'notice-cleared': 'settings',
 };
-const FILTERS = ['sign-ins', 'failed', 'users', 'storage', 'settings'];
+const FILTERS = ['sign-ins', 'failed', 'users', 'storage', 'apps', 'settings'];
 
 class ActivityLog {
   constructor(dataDir, { saveDelayMs = SAVE_DELAY_MS, max = MAX_ENTRIES } = {}) {

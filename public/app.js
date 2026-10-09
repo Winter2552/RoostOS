@@ -1130,6 +1130,9 @@ $('#notice-clear').addEventListener('click', () => saveNotice('', null));
 const STATUS_REFRESH_MS = 5 * 1000;
 const FULL_AT = 90;
 let statusBusy = false;
+let lastStatus = null;
+// Restart button state per app id: confirm, busy, done or error (with msg).
+const restarts = new Map();
 
 function pct(used, total) {
   return total ? Math.round((used / total) * 100) : 0;
@@ -1294,7 +1297,58 @@ function appStatusCard(a, dockerOk, history) {
     el('div', { class: 'stat-value', text: a.name }),
     el('div', { class: 'mono stat-state' }, el('span', { class: `dot ${st.kind}` }), st.label),
     history && history.apps[a.id] ? uptimeStrip(a.id, history.apps[a.id], history.now) : null,
-    el('div', { class: 'stat-lines mono muted' }, lines.map((t) => el('div', { text: t }))));
+    el('div', { class: 'stat-lines mono muted' }, lines.map((t) => el('div', { text: t }))),
+    a.restartable || restarts.has(a.id) ? restartRow(a) : null);
+}
+
+function autoRestartText(s) {
+  const own = s.tz === myZone() ? '' : ` ${s.tz}`;
+  return `Restarts ${s.every === 'week' ? `${WEEKDAYS[s.day]}s` : 'daily'} at ${s.time}${own}`;
+}
+
+// Restart lives in the app's own card: one tap asks, the second restarts.
+function restartRow(a) {
+  const r = restarts.get(a.id) || {};
+  const set = (next) => {
+    if (next) restarts.set(a.id, next); else restarts.delete(a.id);
+    if (lastStatus) renderStatus(lastStatus);
+  };
+  const row = el('div', { class: 'restart-row mono', 'aria-live': 'polite' });
+  if (r.step === 'confirm') {
+    const yes = el('button', { type: 'button', class: 'btn small danger', text: 'Restart', onclick: () => restartApp(a, set) });
+    row.append(
+      el('div', { class: 'restart-ask', text: `Restart ${a.name}? Anyone using it is cut off for a moment.` }),
+      el('div', { class: 'restart-actions' }, yes,
+        el('button', { type: 'button', class: 'btn small ghost', text: 'Cancel', onclick: () => set(null) })));
+    queueMicrotask(() => yes.focus());
+  } else if (r.step === 'busy') {
+    row.append(el('span', { class: 'spinner', 'aria-hidden': 'true' }), el('span', { class: 'muted', text: `Restarting ${a.name}…` }));
+  } else if (r.step === 'done') {
+    row.append(el('span', { class: 'dot online' }), el('span', { text: 'Restarted' }));
+  } else {
+    if (r.step === 'error') row.append(el('div', { class: 'restart-error', text: r.msg }));
+    if (a.restartSchedule && r.step !== 'error') row.append(el('span', { class: 'muted restart-auto', text: autoRestartText(a.restartSchedule) }));
+    row.append(el('button', {
+      type: 'button',
+      class: 'link-btn mono',
+      text: r.step === 'error' ? 'Try again' : 'Restart',
+      'aria-label': `Restart ${a.name}`,
+      onclick: () => set({ step: 'confirm' }),
+    }));
+  }
+  return row;
+}
+
+async function restartApp(a, set) {
+  set({ step: 'busy' });
+  try {
+    await api('POST', `/api/admin/apps/${encodeURIComponent(a.id)}/restart`);
+    set({ step: 'done' });
+    setTimeout(() => { if ((restarts.get(a.id) || {}).step === 'done') set(null); }, 4000);
+  } catch (err) {
+    set({ step: 'error', msg: err.message });
+  }
+  loadStatus();
 }
 
 // ---------- drive health ----------
@@ -1410,6 +1464,7 @@ function certProblem(c) {
 }
 
 function renderStatus(s) {
+  lastStatus = s;
   const memUsed = s.memory.total - s.memory.available;
   const memPct = pct(memUsed, s.memory.total);
   $('#status-server').replaceChildren(
@@ -1869,6 +1924,43 @@ function checkedApps(container) {
   return [...container.querySelectorAll('input[type=checkbox]:checked')].map((c) => c.value);
 }
 
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const myZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+// Auto-restart: Never / Every day / Every week, with the time (and weekday) only
+// when they matter. The time is on this device's clock; its zone is saved with it.
+function scheduleFields(saved) {
+  const s = saved || { every: 'never', time: '04:00', day: 1 };
+  const every = el('select', { name: 'restartEvery', 'aria-label': 'Auto-restart' },
+    [['never', 'Never'], ['day', 'Every day'], ['week', 'Every week']].map(([v, t]) => el('option', { value: v, text: t, selected: v === s.every })));
+  const day = el('select', { name: 'restartDay', 'aria-label': 'Day of the week' },
+    WEEKDAYS.map((d, i) => el('option', { value: i, text: d, selected: i === (s.day ?? 1) })));
+  const time = el('input', { type: 'time', name: 'restartTime', value: s.time, required: true, 'aria-label': 'Auto-restart time' });
+  const zone = el('span', { class: 'mono muted restart-zone', text: saved && saved.tz !== myZone() ? `${saved.tz} time` : 'your time' });
+  const when = el('div', { class: 'schedule-when' }, day, time, zone);
+  const sync = () => {
+    when.classList.toggle('hidden', every.value === 'never');
+    day.classList.toggle('hidden', every.value !== 'week');
+    time.required = every.value !== 'never';
+  };
+  every.addEventListener('change', sync);
+  sync();
+  return el('div', { class: 'schedule-row' },
+    el('label', { class: 'field' }, el('span', { text: 'Auto-restart' }), every),
+    when,
+    el('span', { class: 'mono muted schedule-hint', text: 'Keeps an app fresh. Only for apps on the restart list (Admin → Setup).' }));
+}
+
+// What the form sends: nothing for Never. A schedule left as it was keeps its zone.
+function readSchedule(row, saved) {
+  const every = $('[name=restartEvery]', row).value;
+  if (every === 'never') return null;
+  const time = $('[name=restartTime]', row).value;
+  const day = Number($('[name=restartDay]', row).value);
+  const same = saved && saved.every === every && saved.time === time && (every === 'day' || saved.day === day);
+  return { every, time, day, tz: same ? saved.tz : myZone() };
+}
+
 function appEditorRow(app) {
   const iconSelect = el('select', { name: 'icon' }, Object.keys(ICONS).map((k) => el('option', { value: k, text: k, selected: k === app.icon })));
   const row = el('div', { class: 'admin-app', 'data-id': app.id || '' },
@@ -1879,6 +1971,7 @@ function appEditorRow(app) {
       el('label', { class: 'field' }, el('span', { text: 'Icon' }), iconSelect),
       el('label', { class: 'field' }, el('span', { text: 'Container' }), el('input', { type: 'text', name: 'container', value: app.container || '', placeholder: 'Found by name if empty', spellcheck: 'false' })),
     ),
+    scheduleFields(app.restartSchedule),
     el('div', { class: 'row' },
       el('label', { class: 'field', style: 'flex:1' }, el('span', { text: 'Description' }), el('input', { type: 'text', name: 'description', value: app.description || '', maxlength: 200 })),
       el('button', { class: 'btn danger small', type: 'button', text: 'Remove', onclick: () => row.remove() })),
@@ -1960,6 +2053,7 @@ $('#apps-form').addEventListener('submit', async (e) => {
     const get = (n) => $(`[name=${n}]`, row).value;
     const app = { name: get('name'), tagline: get('tagline'), url: get('url'), icon: get('icon'), description: get('description'), container: get('container') };
     if (row.dataset.id) app.id = row.dataset.id;
+    app.restartSchedule = readSchedule(row, (state.apps.find((a) => a.id === row.dataset.id) || {}).restartSchedule);
     return app;
   });
   try {
@@ -2195,6 +2289,8 @@ const ACTIVITY_LABELS = {
   'storage-approved': 'Approved storage',
   'storage-declined': 'Declined storage',
   'apps-changed': 'Changed apps',
+  'app-restarted': 'Restarted an app',
+  'app-restart-failed': 'Restart failed',
   'settings-changed': 'Changed server settings',
   'notice-posted': 'Posted a notice',
   'notice-cleared': 'Cleared the notice',
@@ -2576,7 +2672,9 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
   setInterval(() => { if (state.user && !isGuest(state.user) && !conn.lost && !$('#view-apps').classList.contains('hidden')) loadSystem(); }, 15 * 1000);
   // The status page refreshes itself while it is open and the tab is visible.
   setInterval(() => {
-    if (state.user && !conn.lost && !document.hidden && !$('#view-status').classList.contains('hidden')) loadStatus();
+    // Holds still while a restart question is open, so the buttons don't move under a finger.
+    const asking = [...restarts.values()].some((r) => r.step === 'confirm');
+    if (state.user && !conn.lost && !document.hidden && !asking && !$('#view-status').classList.contains('hidden')) loadStatus();
   }, STATUS_REFRESH_MS);
   const token = linkToken();
   if (token) return showJoin(token);

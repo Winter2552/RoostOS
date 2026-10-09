@@ -14,10 +14,11 @@ const mail = require('./mail');
 const setup = require('./setup');
 const backup = require('./backup');
 const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
-const { listContainers, containersFor } = require('./docker');
+const { listContainers, containersFor, restartContainer } = require('./docker');
 const { DriveHealth } = require('./smart');
 const { OutsideServices } = require('./outside');
 const templates = require('./templates');
+const { cleanSchedule, isDue } = require('./schedule');
 const { CertManager, validDomain } = require('./tls');
 const twoStep = require('./twostep');
 const { qrSvg } = require('./qr');
@@ -193,7 +194,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000 } = {}) {
+function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000 } = {}) {
   const store = new Store(dataDir);
   const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
   // The few outside services Roost leans on, for the admin's status page.
@@ -223,6 +224,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   const pendingCodes = new Map();
   const pendingSetups = new Map();
   const cpu = new CpuMeter();
+  // When each app was last restarted from the status page, to stop double taps.
+  const restartedAt = new Map();
   // Drives shown on the status page. Without a list, show the system drive and
   // the drive Roost keeps its data on (the same drive is only listed once).
   const diskList = disks && disks.length ? disks : [{ label: 'System', path: '/' }, { label: 'Data', path: dataDir }];
@@ -318,6 +321,52 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   const uptimeSaveTimer = setInterval(() => uptime.save(), 60 * 60 * 1000);
   uptimeSaveTimer.unref();
   runUptime({ web: true });
+
+  // Restarts an app's containers that the Docker helper lists. Turned away with
+  // an HttpError when it can't (no Docker, not on the list, restarted less than
+  // minGapMs ago); a restart Docker itself fails carries restartFailed.
+  async function restartApp(app, minGapMs) {
+    const docker = await listContainers(dockerHost, probeTimeoutMs);
+    if (docker.error) throw new HttpError(503, 'Docker is not connected');
+    const allowed = new Set(docker.restartable);
+    const names = containersFor(app, docker.containers)
+      .map((c) => c.name)
+      .filter((n) => allowed.has(n) && n !== roostContainer);
+    if (!names.length) throw new HttpError(403, `${app.name} can't be restarted from Roost`);
+    if (Date.now() - (restartedAt.get(app.id) || 0) < minGapMs) throw new HttpError(429, `${app.name} was just restarted. Give it a moment.`);
+    restartedAt.set(app.id, Date.now());
+    try {
+      await Promise.all(names.map((n) => restartContainer(dockerHost, n)));
+    } catch (cause) {
+      restartedAt.delete(app.id);
+      throw Object.assign(new Error('restart failed'), { restartFailed: true, cause });
+    }
+    return names;
+  }
+
+  // Scheduled restarts. One cheap check every 20 seconds (no Docker call unless
+  // an app is due); each schedule fires once in its minute, skips an app that
+  // was restarted in the last 10 minutes, and a restart missed because Roost
+  // was off is not made up later.
+  const scheduledMinute = new Map();
+  const runSchedules = () => {
+    const now = new Date();
+    const minute = Math.floor(now.getTime() / 60000);
+    for (const app of db().apps) {
+      if (!isDue(app.restartSchedule, now) || scheduledMinute.get(app.id) === minute) continue;
+      scheduledMinute.set(app.id, minute);
+      restartApp(app, 10 * 60 * 1000).then(
+        (names) => activity.add('app-restarted', { actor: 'schedule', detail: `${app.name} (${names.join(', ')})` }),
+        (err) => {
+          if (err.status === 429) return; // Someone just restarted it by hand.
+          const why = err.restartFailed ? err.cause.message : err.message;
+          activity.add('app-restart-failed', { actor: 'schedule', detail: `${app.name}: ${why}` });
+        },
+      );
+    }
+  };
+  const scheduleTimer = setInterval(runSchedules, scheduleCheckMs);
+  scheduleTimer.unref();
 
   function currentUser(req) {
     const s = sessions.get(tokenOf(req));
@@ -484,6 +533,9 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         container: str(a.container, 200),
         icon: ICONS.includes(a.icon) ? a.icon : 'grid',
       };
+      const schedule = cleanSchedule(a.restartSchedule);
+      if (schedule instanceof Error) throw new HttpError(400, `${app.name || 'App'}: ${schedule.message}`);
+      if (schedule) app.restartSchedule = schedule;
       if (!app.name) throw new HttpError(400, 'Every app needs a name');
       if (!/^[a-z0-9-]+$/i.test(app.id) || seen.has(app.id)) throw new HttpError(400, 'Bad app id');
       if (!validAppUrl(app.url)) throw new HttpError(400, `${app.name}: link must start with http:// or https://`);
@@ -1028,6 +1080,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         Promise.all(visibleApps(db(), user).map((a) => appProbe(a, host, probeTimeoutMs))),
       ]);
       const all = docker.containers || [];
+      const canRestart = new Set(user.role === 'admin' ? docker.restartable || [] : []);
       const claimed = new Set();
       const claim = (list) => { list.forEach((c) => claimed.add(c.id)); return list; };
       const apps = [
@@ -1040,14 +1093,20 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
           uptime: process.uptime(),
           containers: claim(containersFor({ id: 'roost', container: roostContainer }, all)),
         },
-        ...visibleApps(db(), user).map((a, i) => ({
-          id: a.id,
-          name: a.name,
-          tagline: a.tagline,
-          icon: a.icon,
-          web: web[i],
-          containers: claim(containersFor(a, all)),
-        })),
+        ...visibleApps(db(), user).map((a, i) => {
+          const containers = claim(containersFor(a, all));
+          return {
+            id: a.id,
+            name: a.name,
+            tagline: a.tagline,
+            icon: a.icon,
+            web: web[i],
+            containers,
+            // Admins get a Restart button when the Docker helper lists this app's containers.
+            restartSchedule: user.role === 'admin' ? a.restartSchedule || null : undefined,
+            restartable: containers.some((c) => canRestart.has(c.name) && c.name !== roostContainer),
+          };
+        }),
       ];
       send(res, 200, {
         ...health,
@@ -1065,6 +1124,23 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         history: uptime.history(visibleApps(db(), user).map((a) => a.id)),
         checkedAt: new Date().toISOString(),
       });
+    },
+
+    // Restarts the app's containers that Roost's Docker helper allows. Roost
+    // itself is never restarted from here: the page would lose its answer.
+    'POST /api/admin/apps/:id/restart': async (req, res, id) => {
+      const admin = requireAdmin(req);
+      const app = db().apps.find((a) => a.id === id);
+      if (!app) throw new HttpError(404, 'No such app');
+      try {
+        const names = await restartApp(app, 30 * 1000);
+        record(req, 'app-restarted', { actor: admin.username, detail: `${app.name} (${names.join(', ')})` });
+      } catch (err) {
+        if (!err.restartFailed) throw err;
+        record(req, 'app-restart-failed', { actor: admin.username, detail: `${app.name}: ${err.cause.message}` });
+        throw new HttpError(502, `${app.name} didn't restart (${err.cause.message})`);
+      }
+      send(res, 200, { ok: true });
     },
 
     'GET /api/admin/users': (req, res) => {
@@ -1464,6 +1540,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         drives: readDisks(diskList),
         driveHealth: driveHealth.read(),
         dockerOk: !docker.error,
+        restartable: docker.restartable || [],
         secureCookies,
         trustProxy,
         awayBytes: Object.values(traffic.summary().apps).reduce((n, a) => n + a.week, 0),
@@ -1572,7 +1649,17 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const admin = requireAdmin(req);
       const body = await readJson(req);
       const before = new Map(db().apps.map((a) => [a.id, a]));
-      db().apps = cleanApps(body.apps);
+      const apps = cleanApps(body.apps);
+      // A schedule for an app Roost can't restart would only fail every night.
+      const docker = apps.some((a) => a.restartSchedule) ? await listContainers(dockerHost, probeTimeoutMs) : { error: 'skipped' };
+      if (!docker.error) {
+        for (const a of apps) {
+          const same = JSON.stringify(a.restartSchedule) === JSON.stringify((before.get(a.id) || {}).restartSchedule);
+          const ok = containersFor(a, docker.containers).some((c) => docker.restartable.includes(c.name) && c.name !== roostContainer);
+          if (a.restartSchedule && !same && !ok) throw new HttpError(400, `${a.name} isn't on the restart list, so it can't restart on a schedule (see Admin → Setup)`);
+        }
+      }
+      db().apps = apps;
       const after = new Set(db().apps.map((a) => a.id));
       const changes = [
         ...db().apps.filter((a) => !before.has(a.id)).map((a) => `added ${a.name}`),
@@ -1813,7 +1900,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/invites|admin\/storage-requests|admin\/setup|storage\/users|links|me\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/setup|storage\/users|links|me\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }
@@ -1934,6 +2021,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     clearInterval(sweepTimer);
     clearInterval(uptimeTimer);
     clearInterval(uptimeSaveTimer);
+    clearInterval(scheduleTimer);
     clearTimeout(uptimeSoon);
     events.stop();
     uptime.save();

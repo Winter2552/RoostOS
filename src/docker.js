@@ -1,9 +1,10 @@
 'use strict';
 
-// Read-only container info from the Docker Engine API, for the status page.
-// DOCKER_HOST can be a TCP address (the docker-proxy service in
-// docker-compose.yml, which only allows reading containers), a unix socket,
-// or the Docker Desktop pipe on Windows.
+// Container info from the Docker Engine API, for the status page, and
+// restarts for admins. DOCKER_HOST can be a TCP address (Roost's own Docker
+// helper in docker-compose.yml, src/docker-helper.js, which only allows
+// reading containers and restarting the ones it lists), a unix socket, or the
+// Docker Desktop pipe on Windows. Restarts only work through the helper.
 
 const http = require('http');
 
@@ -20,12 +21,13 @@ function target(dockerHost) {
   return null;
 }
 
-function getJson(t, path, timeoutMs) {
+function getJson(t, path, timeoutMs, method = 'GET') {
   return new Promise((resolve, reject) => {
-    const req = http.get({ ...t, path, timeout: timeoutMs }, (res) => {
+    const req = http.request({ ...t, path, method, timeout: timeoutMs }, (res) => {
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () => {
+        if (res.statusCode === 204) return resolve(null);
         if (res.statusCode !== 200) return reject(new Error(`Docker answered ${res.statusCode}`));
         try {
           resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
@@ -36,6 +38,7 @@ function getJson(t, path, timeoutMs) {
     });
     req.on('timeout', () => req.destroy(new Error('Docker timed out')));
     req.on('error', reject);
+    req.end();
   });
 }
 
@@ -49,11 +52,26 @@ function publishedPorts(list) {
     .sort((a, b) => a.public - b.public);
 }
 
-// → { containers: [...] } or { error } when Docker can't be reached.
-async function listContainers(dockerHost, timeoutMs = 2500) {
+// One reading is shared for a couple of seconds, so several open status pages
+// (and the setup checklist) don't each ask Docker the same thing.
+const SHARE_MS = 2000;
+const shared = new Map();
+
+// → { containers: [...], restartable: [names] } or { error } when Docker can't be reached.
+function listContainers(dockerHost, timeoutMs = 2500) {
+  const hit = shared.get(dockerHost);
+  if (hit && Date.now() - hit.at < SHARE_MS) return hit.reading;
+  const reading = readContainers(dockerHost, timeoutMs);
+  shared.set(dockerHost, { at: Date.now(), reading });
+  return reading;
+}
+
+async function readContainers(dockerHost, timeoutMs) {
   const t = target(dockerHost);
   if (!t) return { error: 'not configured' };
   try {
+    // Only Roost's helper answers this; straight Docker has no restart list.
+    const restartable = getJson(t, '/roost/restartable', timeoutMs).then((r) => r.names || [], () => []);
     const list = await getJson(t, '/containers/json?all=1', timeoutMs);
     const containers = await Promise.all(list.map(async (c) => {
       // Inspect gives the start time, restart count and health check result.
@@ -78,7 +96,7 @@ async function listContainers(dockerHost, timeoutMs = 2500) {
         ports: publishedPorts(c.Ports),
       };
     }));
-    return { containers };
+    return { containers, restartable: await restartable };
   } catch (err) {
     return { error: err.message };
   }
@@ -101,4 +119,16 @@ function containersFor(app, containers) {
   });
 }
 
-module.exports = { listContainers, containersFor, target };
+// Docker answers once the container is back up (or gave up), so this can take
+// as long as the app needs to stop and start.
+async function restartContainer(dockerHost, name, timeoutMs = 60 * 1000) {
+  const t = target(dockerHost);
+  if (!t) throw new Error('Docker is not connected');
+  try {
+    await getJson(t, `/containers/${encodeURIComponent(name)}/restart`, timeoutMs, 'POST');
+  } finally {
+    shared.delete(dockerHost);
+  }
+}
+
+module.exports = { listContainers, containersFor, restartContainer, target };
