@@ -27,6 +27,9 @@ services:
       ROOST_DISKS: "System=/hostfs/system;Data=/hostfs/data"
       # Where Nest keeps everyone's files (the mount below).
       NEST_DIR: /nest
+      # The backup drive, read-only (the mount below), so Admin → Backups can
+      # browse backups and get files back out of them.
+      BACKUP_DIR: /backup
       # Container status comes from the docker-proxy service below, which only lets
       # Roost read the container list. Remove both to fall back to web checks.
       DOCKER_HOST: tcp://docker-proxy:2375
@@ -38,6 +41,9 @@ services:
       # Nest's files, as normal folders: one per user. Point the left side at a
       # folder on the 3 TB data drive (ZimaOS shows its mount under Storage).
       - /DATA/roost-nest:/nest
+      # The backup drive, read-only. Same folder as the roost-backup service's
+      # /backup line below.
+      - /media/Backup:/backup:ro
       # Read-only, only so the status page can see how full each drive is.
       # /DATA is on the system SSD. Point the second line at the 3 TB data drive's
       # mount folder (ZimaOS shows it under Storage); until then it repeats /DATA
@@ -77,6 +83,9 @@ services:
       # (ZimaOS shows it under Storage). Until then backups wait: Roost
       # never backs up onto the drive the data is on.
       - /media/Backup:/backup
+      # Only to bring a whole backup back after the server was lost: take the #
+      # off the next line, redeploy, and see "Bringing a backup back" in the README.
+      # - /DATA/restored:/restore
 
   # Read-only window onto Docker for the status page: lists and inspects
   # containers, refuses everything else (no starting, stopping or exec).

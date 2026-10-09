@@ -127,6 +127,21 @@ Every night (at 3:00 unless you change it), a second container (`roost-backup`, 
 - The drive must be a Linux format (ext4) for hard links. ZimaOS Storage can format it.
 - The dashboard shows when the last backup finished, and turns amber after two missed nights and red when a backup failed or the drive is missing.
 
+### Getting files back
+
+**Admin → Backups → Get files back** browses any backup like a folder. For a file or folder you can **Download** it (folders come as a .zip) or **Restore to Nest** (inside Nest folders only). A restore never overwrites: it makes a new folder called "Restored from backup 2026-10-08 0300" in that person's Nest and puts the files there, with their original dates. It checks the person's storage limit first and refuses before anything is made if it won't fit. Nothing already in Nest is changed. To put a Nest file back where it was, move it out of that folder yourself.
+
+### If the server itself is gone
+
+Reinstall Roost, plug the backup drive in, and add a folder to the `roost-backup` service in `docker-compose.yml` to receive the files (the `/DATA/restored:/restore` line is there, commented out). Then:
+
+```sh
+docker exec -it roost-backup node src/restore-cli.js list
+docker exec -it roost-backup node src/restore-cli.js restore "2026-10-08 0300" /restore
+```
+
+You can pass a path inside the backup after the output folder (for example `Nest`) to get back only that part. The files land in `/DATA/restored` as `Nest/`, `Roost/` and `App settings/`; stop Roost, move each folder to where it came from (Nest to `/DATA/roost-nest`, Roost to `/DATA/AppData/roost`, App settings to `/DATA/AppData`), and start it again. The command refuses a folder that already has files in it. With `--replace` it moves the existing folder aside (to `<folder>.before-restore-<time>`, never deleted) after you type `restore` to confirm.
+
 ## Stack
 
 Plain Node.js (22.13+) with no npm dependencies, and a vanilla HTML/CSS/JS front end with no build step. Accounts and the app list live in one JSON file (`/data/roost.json`); Nest's folder details live in SQLite (`/data/nest.db`, using Node's built-in `node:sqlite`). Passwords are hashed with scrypt; sessions are HttpOnly, SameSite=Strict cookies held in memory, so a restart signs everyone out.

@@ -292,6 +292,42 @@ class Nest {
     return parent;
   }
 
+  // Puts files that come from outside Nest (a backup) into a new folder at the
+  // top of the user's drive. Nothing already in Nest is touched: the folder
+  // gets a free name, and everything goes inside it.
+  //   files: [{ rel: 'a/b.txt', size, mtime, open() }], open() returns a stream.
+  // Stops before starting if it wouldn't fit the user's limit or the drive.
+  async importFolder(user, folderName, files, { onFile } = {}) {
+    this.checkSpace(user, files.reduce((a, f) => a + f.size, 0));
+    const top = this.createFolder(user, '', folderName);
+    let restored = 0;
+    for (const f of files) {
+      const slash = f.rel.lastIndexOf('/');
+      const parent = slash < 0 ? top.id : this.ensurePath(user, top.id, f.rel.slice(0, slash));
+      const name = this.uniqueName(user, parent, cleanName(f.rel.slice(slash + 1)) || 'file');
+      const dir = this.diskPath(user, parent);
+      const temp = this.uploadPath(user, `restore-${newId()}`);
+      fs.mkdirSync(path.dirname(temp), { recursive: true });
+      try {
+        await pipeline(f.open(), fs.createWriteStream(temp, { flags: 'wx' }));
+        const size = fs.statSync(temp).size;
+        const when = new Date(f.mtime);
+        fs.utimesSync(temp, when, when);
+        fs.renameSync(temp, path.join(dir, name));
+        const id = newId();
+        this.q.insert.run(id, user.id, parent, name, 'file', size, '', Date.now(), f.mtime);
+      } catch (err) {
+        fs.rmSync(temp, { force: true });
+        this.changed(user);
+        throw err;
+      }
+      restored++;
+      if (onFile) onFile(f, restored);
+    }
+    this.changed(user);
+    return top;
+  }
+
   rename(user, id, rawName) {
     const n = this.node(user, id);
     const name = cleanName(rawName);
@@ -650,4 +686,4 @@ function gbText(bytes) {
   return gb >= 10 ? `${Math.round(gb)} GB` : gb >= 1 ? `${gb.toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
 }
 
-module.exports = { Nest, cleanName, CHUNK, PAGE, TRASH_DAYS };
+module.exports = { Nest, cleanName, disposition, CHUNK, PAGE, TRASH_DAYS };

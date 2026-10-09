@@ -79,7 +79,7 @@ const STEPS = [
     how: [
       'Plug a USB SSD (1 TB is plenty) into the server. In ZimaOS Storage, format it as ext4 if asked; this wipes it.',
       'Note the drive\'s mount folder in ZimaOS Storage, e.g. /media/Backup.',
-      'In Roost\'s compose file, point the roost-backup service\'s /backup line at it, e.g. /media/Backup:/backup, and set TZ to your time zone so backups run at your time of day.',
+      'In Roost\'s compose file, point the roost-backup service\'s /backup line at it, e.g. /media/Backup:/backup, and the roost service\'s /backup:ro line at the same folder (so Admin → Backups can get files back). Set TZ to your time zone so backups run at your time of day.',
       'Redeploy Roost. This ticks off once Roost has found the drive.',
     ],
     covers: ['BACKUP_DIR', 'APPDATA_DIR', 'backup'],
