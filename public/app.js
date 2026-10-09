@@ -1270,6 +1270,22 @@ function healthCard(d, open) {
   return card;
 }
 
+// ---------- outside services (admins only) ----------
+
+const OUTSIDE_DOT = { good: 'online', watch: 'starting', bad: 'offline', unset: 'unset' };
+
+function renderOutside(list) {
+  $('#status-outside-wrap').classList.toggle('hidden', !list);
+  if (!list) return;
+  $('#status-outside').replaceChildren(...list.map((o) => {
+    const when = o.checkedAt ? `checked ${ago(o.checkedAt)}` : '';
+    const detail = [o.expiresAt ? `valid until ${longDate(o.expiresAt)}` : null, o.detail, when].filter(Boolean).join(' · ');
+    return el('div', { class: `container-row outside-row ${o.state}` },
+      el('span', { class: 'mono' }, el('span', { class: `dot ${OUTSIDE_DOT[o.state]}` }), o.name, el('span', { class: 'muted outside-role', text: ` · ${o.role}` })),
+      el('span', { class: 'outside-state' }, el('b', { text: o.headline }), detail ? el('span', { class: 'mono muted', text: detail }) : null));
+  }));
+}
+
 function renderHealth(h) {
   $('#status-health-wrap').classList.toggle('hidden', !h);
   if (!h) return;
@@ -1328,6 +1344,7 @@ function renderStatus(s) {
   }));
 
   renderHealth(s.driveHealth);
+  renderOutside(s.outside);
 
   $('#status-apps').replaceChildren(...s.apps.map((a) => appStatusCard(a, s.docker.ok, s.history)));
 
@@ -1355,6 +1372,10 @@ function renderStatus(s) {
   problems.push(...drives.filter((d) => d.verdict === 'bad').map((d) => `${driveName(d)}: ${d.headline.toLowerCase()}`));
   // Worth a look, but nothing is down: a yellow dot rather than a red one.
   const warnings = drives.filter((d) => d.verdict === 'watch').map((d) => `${driveName(d)}: ${d.reasons[0].toLowerCase()}`);
+  // The certificate has its own line in the summary above; the rest are listed here.
+  const outside = (s.outside || []).filter((o) => o.id !== 'letsencrypt');
+  problems.push(...outside.filter((o) => o.state === 'bad').map((o) => `${o.name}: ${o.headline.toLowerCase()}`));
+  warnings.push(...outside.filter((o) => o.state === 'watch').map((o) => `${o.name}: ${o.headline.toLowerCase()}`));
   if (problems.length) setSummary('offline', [...problems, ...warnings].join(' · '));
   else if (warnings.length) setSummary('starting', warnings.join(' · '));
   else setSummary('online', 'Everything is running');
