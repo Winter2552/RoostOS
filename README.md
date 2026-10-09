@@ -22,8 +22,8 @@ The steps live in `src/setup.js`, which is the single tally of what setting up R
 - **First run** creates the admin account.
 - **Dashboard**: greeting, live server stats (uptime, memory, load, free space on the data drive) and a card for every app you have access to, each showing whether the app is reachable.
 - **Status**: refreshes every 5 seconds. First, each app (and Roost itself) with its container state from Docker: running, stopped, restarting, unhealthy, how long it has been up and how often it restarted, plus whether it answers on its link. Admins also see every other container. Below that, server health: uptime, CPU, memory and free space on each drive. Each app also shows a 30-day uptime strip, one bar per day (tap a day to see when it was down). Roost keeps this itself in `uptime.json` next to its data, starting from the day it is installed; days Roost was off show as no data. Problems are listed at the top.
-- **Profile**: change your display name and password, turn two-step sign-in on or off, see your storage use and limit, and ask an admin for more space.
-- **Admin**: edit the app list and links, invite or remove users, make password reset links, choose which apps each user sees and how much storage they get, approve or decline storage requests, rename the server, and set up HTTPS.
+- **Profile**: change your display name and password, turn two-step sign-in on or off, see where you're signed in and sign other devices out, see your storage use and limit, and ask an admin for more space.
+- **Admin**: edit the app list and links, invite or remove users, make password reset links, choose which apps each user sees and how much storage they get, approve or decline storage requests, connect Jellyfin sign-in, rename the server, and set up HTTPS.
 
 ![Signing in to Roost](docs/screenshots/sign-in.png)
 
@@ -128,6 +128,26 @@ docker restart roost
 
 Recovery codes and trusted devices are stored only as hashes. The authenticator secret has to be stored as-is in `roost.json`, so keep that file as private as the server itself.
 
+## One sign-in
+
+Roost is the only account system: one username and password (plus two-step sign-in) for Roost and the apps it serves.
+
+- **Staying signed in**: sign-ins are saved to `sessions.json` next to `roost.json`, so restarting or updating Roost doesn't sign anyone out. Only hashes of the sign-in tokens are written. A browser stays signed in for 30 days.
+- **Signed-in devices**: Profile lists every browser and app signed in to your account (for example "Safari on iPhone"), with when each was last active. Sign out any one of them, or all except the one you're on. Changing your password signs out every other device.
+- **Device keys for phone apps**: an app signs in with `POST /api/login` and `{ "username", "password", "device": "Raven's iPhone" }` (then `/api/login/code` if two-step is on), and gets a `key` back instead of a cookie. It sends `Authorization: Bearer <key>` on every request. Keys last a year and show up under signed-in devices.
+- **For apps Roost serves** (Nest and Glint, or anything behind a proxy): `GET /api/auth/check?app=<app id>` answers 200 with `{ user: { id, username, displayName, role } }` when the browser or key is signed in and allowed that app, 401 when nobody is signed in, and 403 when they don't have access.
+
+### Jellyfin
+
+Connect Jellyfin under **Admin → Jellyfin sign-in**: its address as Roost reaches it (on ZimaOS, the server's LAN address and port, e.g. `http://192.168.1.20:8096`) and an API key made in Jellyfin under **Dashboard → API Keys**. Then:
+
+- **Same account everywhere**: everyone with Jellyfin access gets a Jellyfin account with their Roost username and password. Roost only knows a password when it's typed, so the account is made or updated when the user is added, signs in, or changes their password. An existing Jellyfin account with the same name is taken over at the person's next Roost sign-in. Jellyfin admin accounts are never changed.
+- **Opens signed in**: the Jellyfin card opens Jellyfin through Roost at `/jellyfin/`, already signed in as that person, in any browser on any device. Each Roost sign-in is its own Jellyfin device, and signing out of Roost signs that browser out of Jellyfin too.
+- **Access follows Roost**: taking Jellyfin away from someone, or deleting them, switches their Jellyfin account off and ends their Jellyfin sign-ins. Giving it back switches it on again.
+- **Only for people Roost lets in**: `/jellyfin/` needs a Roost sign-in with Jellyfin access, so Jellyfin isn't reachable through Roost by anyone else.
+- **Jellyfin's own apps** (TV, phone) sign in with the same username and password once per device.
+- If Jellyfin is down or the link is off, Roost works as before and the card opens Jellyfin's own address.
+
 ## Stack
 
 Plain Node.js (22.13+) with no npm dependencies, and a vanilla HTML/CSS/JS front end with no build step. Accounts and the app list live in one JSON file (`/data/roost.json`); Nest's folder details live in SQLite (`/data/nest.db`, using Node's built-in `node:sqlite`). Passwords are hashed with scrypt; sessions are HttpOnly, SameSite=Strict cookies held in memory, so a restart signs everyone out.
@@ -142,6 +162,10 @@ Plain Node.js (22.13+) with no npm dependencies, and a vanilla HTML/CSS/JS front
 Data is kept in `/DATA/AppData/roost` on the host, and Nest's files in `/DATA/roost-nest`. Before storing real files, change that `/DATA/roost-nest` mount in `docker-compose.yml` to a folder on the 3 TB data drive. For the status page to show the data drive, change the second `/DATA` mount in `docker-compose.yml` to the folder ZimaOS mounted the 3 TB drive on; `ROOST_DISKS` sets the labels.
 
 Container status comes through the `docker-proxy` service in the compose file, which only lets Roost read the container list (it can't start, stop or change anything). Apps are matched to containers by name; if a container is named differently, put its name in the app's **Container** field under Admin. Without Docker access the status page falls back to checking each app's link and says so.
+
+Drive health (temperature, bad sectors, SSD wear) comes from the small `roost-smart` service, built from `smart/`. Once an hour it reads each drive's SMART data with `smartctl` and leaves it in a shared volume for Roost; it has no network, and it leaves sleeping drives asleep. It is given only the drives listed under its `devices:` (the SSD to start with). When the 3 TB drive is in, remove the `#` in front of its `/dev/sdb` line and redeploy. ZimaOS shows each drive's name under Storage.
+
+Admins also see **Outside services** on the status page: the Cloudflare tunnel (from its `cloudflared` container, plus whether the saved Cloudflare token still works), the Let's Encrypt certificate (expiry date, with a warning under 14 days) and Docker Hub. The container and certificate come from what Roost already reads; the token and Docker Hub are checked once a day, so the page never waits on the internet. Nothing extra to set up.
 
 The **Activity** section under Admin lists sign-ins, failed sign-in attempts (the username typed, never the password), user and app changes, and storage requests and approvals. It keeps the newest 1,000 entries in `/data/activity.json`. If Roost is reached through a tunnel or reverse proxy, set `BEHIND_PROXY=true` so the log shows each visitor's address instead of the proxy's; leave it off otherwise, since the forwarded-address header can be faked.
 

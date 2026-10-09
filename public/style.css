@@ -429,8 +429,11 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 .checks { display: flex; flex-wrap: wrap; gap: 8px 18px; }
 .checks label { display: flex; gap: 6px; align-items: center; font-size: 14px; }
 
-.admin-app, .user-row { border-top: 1px solid var(--line); padding: 18px 0; }
-.admin-app:first-of-type, .user-row:first-of-type { border-top: 0; }
+.admin-app, .user-row, .device-row { border-top: 1px solid var(--line); padding: 18px 0; }
+.admin-app:first-of-type, .user-row:first-of-type, .device-row:first-of-type { border-top: 0; }
+.device-row { display: flex; gap: 16px; align-items: center; justify-content: space-between; }
+.device-row .pill { margin-left: 8px; vertical-align: 1px; }
+.device-row .link-btn { white-space: nowrap; flex-shrink: 0; }
 
 /* Add app picker */
 .app-picker { border-top: 1px solid var(--line); padding: 18px 0 8px; display: grid; gap: 12px; justify-items: start; }
@@ -636,6 +639,46 @@ a.btn { text-decoration: none; text-align: center; }
   .card { box-shadow: 4px 4px 0 var(--shadow); }
 }
 
+/* ---------- continue watching ---------- */
+
+.watching { padding-top: 0; }
+
+/* One row that scrolls sideways; room at the bottom for the cards' shadow. */
+.watch-row {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 240px;
+  gap: 24px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding: 0 6px 10px 0;
+  scrollbar-width: thin;
+}
+
+.watch-card { display: flex; flex-direction: column; overflow: hidden; text-decoration: none; scroll-snap-align: start; transition: transform 120ms ease, box-shadow 120ms ease; }
+a.watch-card:focus-visible { transform: translate(4px, 4px); box-shadow: 3px 3px 0 var(--shadow); outline: none; }
+
+.watch-pic { position: relative; aspect-ratio: 16 / 9; background: var(--bg); border-bottom: 2px solid var(--ink); display: grid; place-items: center; }
+.watch-pic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.watch-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(10, 10, 10, 0.6); }
+.watch-bar i { display: block; height: 100%; background: var(--ink); }
+
+.watch-text { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.watch-title { font-size: 17px; font-weight: 500; letter-spacing: -0.01em; }
+.watch-title, .watch-sub, .watch-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.watch-sub { font-size: 14px; }
+.watch-meta { font-size: 11px; margin-top: 3px; }
+
+@media (hover: hover) {
+  a.watch-card:hover { transform: translate(4px, 4px); box-shadow: 3px 3px 0 var(--shadow); }
+}
+
+@media (max-width: 600px) {
+  .watch-row { grid-auto-columns: 72%; gap: 16px; }
+  .watch-card { border-radius: 16px; }
+  .watch-title { font-size: 16px; }
+}
+
 /* ---------- status page ---------- */
 
 .more-link { display: inline-block; margin-top: 26px; color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--line); padding-bottom: 2px; }
@@ -678,6 +721,38 @@ a.btn { text-decoration: none; text-align: center; }
 .container-row { display: flex; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
 .container-row:first-child { border-top: 0; }
 .container-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Outside services: one calm line each. */
+.outside-row { align-items: baseline; }
+.outside-row.unset { opacity: 0.6; }
+.outside-role { font-size: 12px; }
+.outside-state { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; text-align: right; white-space: normal !important; }
+.outside-state b { font-weight: 500; }
+.outside-state .mono { font-size: 12px; }
+@media (max-width: 600px) {
+  .outside-state { align-items: flex-start; text-align: left; }
+  .outside-row > span:first-child { white-space: normal; }
+}
+
+/* Drive health: tap a card for the numbers behind the verdict. */
+.drive-health { cursor: pointer; align-self: start; }
+.drive-health summary { display: flex; flex-direction: column; gap: 10px; list-style: none; outline-offset: 6px; border-radius: 8px; }
+.drive-health summary::-webkit-details-marker { display: none; }
+.drive-health .stat-state { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drive-health:not([open]) .stat-lines { display: none; }
+.drive-health[open] .stat-lines { margin-top: 10px; }
+.drive-health[open] .stat-state, .drive-health[open] .stat-lines div { white-space: normal; }
+.drive-health .health-reason { color: var(--ink); }
+.drive-health.watch { border-color: #f5d77a; }
+.drive-health.bad { border-color: var(--bad); }
+.drive-health.unknown { border-style: dashed; box-shadow: none; }
+
+@media (max-width: 600px) {
+  .drive-health .stat-value { white-space: normal; }
+  .drive-health .stat-state { white-space: normal; font-size: 12px; }
+  /* An opened card takes the whole row, so its numbers have room. */
+  .drive-health[open] { grid-column: 1 / -1; }
+}
 
 @media (max-width: 600px) {
   .container-list { padding: 4px 16px; }
@@ -1077,3 +1152,5 @@ body.gview-open { overflow: hidden; }
 @media (pointer: coarse) {
   .gtile-tick { width: 32px; height: 32px; }
 }
+
+.panel-note { margin: 14px 0 0; font-size: 12px; line-height: 1.6; }

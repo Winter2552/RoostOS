@@ -722,8 +722,8 @@ function route() {
   document.querySelectorAll('#app-bar a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
   $('#account-btn').classList.toggle('active', ['status', 'profile', 'admin'].includes(view));
   closeMenu(false);
-  if (view === 'admin') loadAdmin();
-  if (view === 'profile') { if (!isGuest(state.user)) loadStorage(); loadTwoStep(); }
+  if (view === 'admin') { loadAdmin(); loadJellyfin(); }
+  if (view === 'profile') { if (!isGuest(state.user)) loadStorage(); loadTwoStep(); loadDevices(); }
   if (view === 'status') loadStatus();
   if (view === 'nest') window.nestOpen(rest);
   if (view === 'glint') window.glintOpen(rest);
@@ -818,6 +818,7 @@ async function loadApps() {
   state.apps = apps;
   renderAppBar();
   renderApps();
+  loadWatching(true);
   api('GET', '/api/apps/status').then(({ status }) => { state.status = status; renderApps(); }).catch(() => {});
 }
 
@@ -888,10 +889,54 @@ function renderApps() {
     // Apps built into Roost (like Nest) open in place; the rest in a new tab.
     const builtIn = app.url.startsWith('#/');
     return app.url
-      ? el('a', builtIn ? { class: 'card app-card', href: app.url } : { class: 'card app-card', href: resolveUrl(app.url), target: '_blank', rel: 'noopener' }, children)
+      ? el('a', builtIn ? { class: 'card app-card', href: app.url } : { class: 'card app-card', href: app.openUrl || resolveUrl(app.url), target: '_blank', rel: 'noopener' }, children)
       : el('div', { class: 'card app-card disabled' }, children);
   }));
 }
+
+// ---------- continue watching ----------
+
+// Shown under the apps so it never pushes them around as it loads. Checked
+// again when someone comes back to the tab, at most once a minute.
+const WATCH_REFRESH_MS = 60 * 1000;
+let watchedAt = 0;
+
+function minutesLeft(m) {
+  if (!m) return '';
+  return m < 60 ? `${m} min left` : `${Math.floor(m / 60)} h ${m % 60} min left`;
+}
+
+async function loadWatching(force) {
+  const linked = state.apps.some((a) => a.id === 'jellyfin' && a.openUrl);
+  if (!linked) return $('#watching').classList.add('hidden');
+  if (!force && Date.now() - watchedAt < WATCH_REFRESH_MS) return;
+  watchedAt = Date.now();
+  let items = [];
+  try {
+    ({ items } = await api('GET', '/api/jellyfin/resume'));
+  } catch {
+    // Leave the row as it was.
+    return;
+  }
+  $('#watching').classList.toggle('hidden', !items.length);
+  $('#watch-row').replaceChildren(...items.map((it) => {
+    const hash = `#/details?id=${it.id}${it.serverId ? `&serverId=${it.serverId}` : ''}`;
+    const sub = [it.where, minutesLeft(it.minutesLeft)].filter(Boolean).join(' · ');
+    return el('a', { class: 'card watch-card', href: `/jellyfin/${hash}`, target: '_blank', rel: 'noopener', title: it.subtitle ? `${it.title}: ${it.subtitle}` : it.title },
+      el('div', { class: 'watch-pic' },
+        it.image ? el('img', { src: it.image, alt: '', loading: 'lazy', decoding: 'async', width: 480, height: 270 }) : icon('play'),
+        el('div', { class: 'watch-bar', role: 'meter', 'aria-label': 'Watched', 'aria-valuenow': it.percent, 'aria-valuemin': 0, 'aria-valuemax': 100 },
+          el('i', { style: `width:${it.percent}%` }))),
+      el('div', { class: 'watch-text' },
+        el('div', { class: 'watch-title', text: it.title }),
+        it.subtitle ? el('div', { class: 'watch-sub muted', text: it.subtitle }) : null,
+        sub ? el('div', { class: 'mono muted watch-meta', text: sub }) : null));
+  }));
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.user) loadWatching(false);
+});
 
 // ---------- arranging apps ----------
 
@@ -1068,7 +1113,8 @@ function statCard(label, value, sub, bar) {
     el('div', { class: 'mono muted stat-sub', text: sub }));
 }
 
-function ago(iso) {
+// "3h 20m" since a time; the activity log's ago() says "3 h ago" instead.
+function elapsed(iso) {
   return duration(Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000));
 }
 
@@ -1086,9 +1132,9 @@ function containerState(c) {
 
 function containerSince(c) {
   const exit = c.exitCode ? ` (exit ${c.exitCode})` : '';
-  if (c.startedAt) return `up ${ago(c.startedAt)}`;
+  if (c.startedAt) return `up ${elapsed(c.startedAt)}`;
   if (c.state === 'restarting') return `crashing${exit}`;
-  if (c.finishedAt) return `stopped ${ago(c.finishedAt)} ago${exit}`;
+  if (c.finishedAt) return `stopped ${elapsed(c.finishedAt)} ago${exit}`;
   return c.state;
 }
 
@@ -1216,6 +1262,93 @@ function appStatusCard(a, dockerOk, history) {
     el('div', { class: 'stat-lines mono muted' }, lines.map((t) => el('div', { text: t }))));
 }
 
+// ---------- drive health ----------
+
+const HEALTH_DOT = { good: 'online', watch: 'starting', bad: 'offline', unknown: 'unset' };
+
+// Drive makers count in thousands, so a "240 GB" drive is shown as 240 GB, not 224.
+function driveSize(n) {
+  if (!n) return '';
+  return n >= 1e12 ? `${+(n / 1e12).toFixed(1)} TB` : `${Math.round(n / 1e9)} GB`;
+}
+
+function hoursOn(h) {
+  const years = h / (24 * 365);
+  if (years >= 1) {
+    const y = +years.toFixed(1);
+    return `${y} year${y === 1 ? '' : 's'}`;
+  }
+  return h >= 48 ? `${Math.round(h / 24)} days` : `${h} hours`;
+}
+
+function healthLines(d) {
+  const x = d.details || {};
+  const n = (v) => Number(v).toLocaleString();
+  return [
+    x.temp !== null && x.temp !== undefined ? `Temperature ${x.temp}°C` : null,
+    x.hours !== null && x.hours !== undefined ? `Powered on ${hoursOn(x.hours)} (${n(x.hours)} h)` : null,
+    x.wear !== null && x.wear !== undefined ? `Life used ${x.wear}%` : null,
+    x.written ? `Written ${bytes(x.written)}` : null,
+    x.reallocated !== null && x.reallocated !== undefined ? `Replaced sectors ${n(x.reallocated)}` : null,
+    x.pending !== null && x.pending !== undefined ? `Unreadable sectors ${n(x.pending)}` : null,
+    x.uncorrectable !== null && x.uncorrectable !== undefined ? `Lost sectors ${n(x.uncorrectable)}` : null,
+    x.cableErrors !== null && x.cableErrors !== undefined ? `Cable errors ${n(x.cableErrors)} (ever)` : null,
+    d.model ? `${d.model}${d.serial ? ` · ${d.serial}` : ''}` : null,
+    d.asleep && d.readAt ? 'Asleep now, so this is its last reading' : null,
+    d.readAt ? `Read ${ago(d.readAt)} · /dev/${d.device}` : `/dev/${d.device}`,
+  ].filter(Boolean);
+}
+
+// One card per drive: a verdict in plain words, the reason that matters, and
+// the numbers behind it when you tap it.
+function healthCard(d, open) {
+  const x = d.details || {};
+  const name = [d.kind, driveSize(d.capacity)].filter(Boolean).join(' · ') || `/dev/${d.device}`;
+  const fine = [x.temp !== null && x.temp !== undefined ? `${x.temp}°C` : null, x.hours ? `${hoursOn(x.hours)} on` : null].filter(Boolean).join(' · ');
+  const why = d.reasons && d.reasons.length ? d.reasons[0] : fine || 'No problems found';
+  const card = el('details', { class: `card stat-card drive-health ${d.verdict}`, 'data-device': d.device, open },
+    el('summary', {},
+      el('div', { class: 'mono muted', text: name }),
+      el('div', { class: 'stat-value', text: d.headline }),
+      el('div', { class: 'mono stat-state' }, el('span', { class: `dot ${HEALTH_DOT[d.verdict]}` }), why)),
+    el('div', { class: 'stat-lines mono muted' },
+      (d.reasons || []).slice(1).map((t) => el('div', { class: 'health-reason', text: t })),
+      healthLines(d).map((t) => el('div', { text: t }))));
+  return card;
+}
+
+// ---------- outside services (admins only) ----------
+
+const OUTSIDE_DOT = { good: 'online', watch: 'starting', bad: 'offline', unset: 'unset' };
+
+function renderOutside(list) {
+  $('#status-outside-wrap').classList.toggle('hidden', !list);
+  if (!list) return;
+  $('#status-outside').replaceChildren(...list.map((o) => {
+    const when = o.checkedAt ? `checked ${ago(o.checkedAt)}` : '';
+    const detail = [o.expiresAt ? `valid until ${longDate(o.expiresAt)}` : null, o.detail, when].filter(Boolean).join(' · ');
+    return el('div', { class: `container-row outside-row ${o.state}` },
+      el('span', { class: 'mono' }, el('span', { class: `dot ${OUTSIDE_DOT[o.state]}` }), o.name, el('span', { class: 'muted outside-role', text: ` · ${o.role}` })),
+      el('span', { class: 'outside-state' }, el('b', { text: o.headline }), detail ? el('span', { class: 'mono muted', text: detail }) : null));
+  }));
+}
+
+function renderHealth(h) {
+  $('#status-health-wrap').classList.toggle('hidden', !h);
+  if (!h) return;
+  // The page refreshes every few seconds; keep any card you opened open.
+  const open = new Set([...document.querySelectorAll('#status-health details[open]')].map((n) => n.dataset.device));
+  $('#status-health').replaceChildren(...h.drives.map((d) => healthCard(d, open.has(d.device))));
+  const note = $('#status-health-note');
+  const text = h.missing || (!h.drives.length && !h.checkedAt)
+    ? 'Waiting for the first health check from the roost-smart helper.'
+    : h.stale
+      ? `Health checks have stopped${h.checkedAt ? `; the last one was ${ago(h.checkedAt)}` : ''}. Is roost-smart running?`
+      : h.checkedAt ? `Checked hourly · last ${ago(h.checkedAt)}` : '';
+  note.textContent = text;
+  note.classList.toggle('hidden', !text);
+}
+
 async function loadStatus() {
   if (statusBusy) return;
   statusBusy = true;
@@ -1257,6 +1390,9 @@ function renderStatus(s) {
     return statCard(d.label, `${bytes(d.free)} free`, `${bytes(used)} of ${bytes(d.total)} used`, pct(used, d.total));
   }));
 
+  renderHealth(s.driveHealth);
+  renderOutside(s.outside);
+
   $('#status-apps').replaceChildren(...s.apps.map((a) => appStatusCard(a, s.docker.ok, s.history)));
 
   const note = $('#status-note');
@@ -1278,7 +1414,18 @@ function renderStatus(s) {
     ...(memPct >= FULL_AT ? ['Memory is nearly full'] : []),
     ...(certProblem(s.certificate) ? [certProblem(s.certificate)] : []),
   ];
-  setSummary(problems.length ? 'offline' : 'online', problems.length ? problems.join(' · ') : 'Everything is running');
+  const drives = (s.driveHealth && s.driveHealth.drives) || [];
+  const driveName = (d) => [d.kind || 'Drive', driveSize(d.capacity)].filter(Boolean).join(' ');
+  problems.push(...drives.filter((d) => d.verdict === 'bad').map((d) => `${driveName(d)}: ${d.headline.toLowerCase()}`));
+  // Worth a look, but nothing is down: a yellow dot rather than a red one.
+  const warnings = drives.filter((d) => d.verdict === 'watch').map((d) => `${driveName(d)}: ${d.reasons[0].toLowerCase()}`);
+  // The certificate has its own line in the summary above; the rest are listed here.
+  const outside = (s.outside || []).filter((o) => o.id !== 'letsencrypt');
+  problems.push(...outside.filter((o) => o.state === 'bad').map((o) => `${o.name}: ${o.headline.toLowerCase()}`));
+  warnings.push(...outside.filter((o) => o.state === 'watch').map((o) => `${o.name}: ${o.headline.toLowerCase()}`));
+  if (problems.length) setSummary('offline', [...problems, ...warnings].join(' · '));
+  else if (warnings.length) setSummary('starting', warnings.join(' · '));
+  else setSummary('online', 'Everything is running');
   $('#status-updated').textContent = `Updated ${new Date(s.checkedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
 }
 
@@ -1307,8 +1454,53 @@ $('#password-form').addEventListener('submit', async (e) => {
   try {
     await api('PATCH', '/api/me', { currentPassword: f.currentPassword.value, newPassword: f.newPassword.value });
     f.reset();
-    flash(f, 'Password changed');
+    flash(f, 'Password changed. Your other devices were signed out.');
+    loadDevices();
   } catch (err) { flash(f, err.message, false); }
+});
+
+// ---------- signed-in devices ----------
+
+function lastActive(iso) {
+  const sec = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (sec < 600) return 'Active now';
+  if (sec < 3600) return `Active ${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `Active ${Math.floor(sec / 3600)}h ago`;
+  const days = Math.floor(sec / 86400);
+  return `Active ${days} day${days === 1 ? '' : 's'} ago`;
+}
+
+async function loadDevices() {
+  const panel = $('#devices-panel');
+  let devices;
+  try {
+    ({ devices } = await api('GET', '/api/me/devices'));
+  } catch (err) { flash(panel, err.message, false); return; }
+  $('#devices-list').replaceChildren(...devices.map((d) => {
+    const signOut = async () => {
+      try {
+        await api('DELETE', `/api/me/devices/${d.id}`);
+        loadDevices();
+      } catch (err) { flash(panel, err.message, false); }
+    };
+    return el('div', { class: 'device-row' },
+      el('div', {},
+        el('div', {},
+          el('span', { text: d.name || (d.kind === 'app' ? 'Roost app' : 'Browser') }),
+          d.current ? el('span', { class: 'pill approved', text: 'This device' }) : null,
+          d.kind === 'app' ? el('span', { class: 'pill', text: 'App' }) : null),
+        el('div', { class: 'mono muted', title: `Signed in ${shortDate(d.created)}`, text: d.current ? 'Active now' : lastActive(d.lastSeen) })),
+      d.current ? null : el('button', { class: 'link-btn mono', type: 'button', text: 'Sign out', onclick: signOut }));
+  }));
+  $('#devices-others').classList.toggle('hidden', devices.length < 2);
+}
+
+$('#sign-out-others').addEventListener('click', async () => {
+  try {
+    await api('POST', '/api/me/devices/sign-out-others');
+    await loadDevices();
+    flash($('#devices-panel'), 'Signed out everywhere else');
+  } catch (err) { flash($('#devices-panel'), err.message, false); }
 });
 
 // ---------- two-step in profile ----------
@@ -1579,6 +1771,46 @@ async function loadAdmin() {
   $('#new-user-apps').replaceChildren(...appChecks(null));
   loadTls();
 }
+
+// ---------- Jellyfin sign-in ----------
+
+// Loaded on its own so a slow or stopped Jellyfin never holds up the Admin page.
+async function loadJellyfin() {
+  try {
+    renderJellyfin(await api('GET', '/api/admin/jellyfin'));
+  } catch (err) { flash($('#jellyfin-form'), err.message, false); }
+}
+
+function renderJellyfin(j) {
+  const f = $('#jellyfin-form');
+  f.url.value = j.url;
+  f.apiKey.value = '';
+  f.apiKey.placeholder = j.keySaved ? 'Saved · paste a new one to replace it' : '';
+  $('#jellyfin-dot').className = `dot ${j.connected ? 'online' : j.url ? 'offline' : ''}`;
+  $('#jellyfin-text').textContent = j.connected
+    ? `Connected to ${j.serverName} · Jellyfin ${j.version} · ${j.accounts} account${j.accounts === 1 ? '' : 's'}`
+    : j.url ? `Can't reach Jellyfin: ${j.error}` : 'Off · Jellyfin keeps its own sign-in';
+  $('#jellyfin-off').classList.toggle('hidden', !j.url);
+  $('#jellyfin-save').textContent = j.url ? 'Save' : 'Connect';
+}
+
+$('#jellyfin-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    renderJellyfin(await api('PUT', '/api/admin/jellyfin', { url: f.url.value, apiKey: f.apiKey.value }));
+    flash(f, 'Connected. People are linked to Jellyfin the next time they sign in to Roost.');
+  } catch (err) { flash(f, err.message, false); }
+});
+
+$('#jellyfin-off').addEventListener('click', async () => {
+  const f = $('#jellyfin-form');
+  if (!confirm('Turn off the Jellyfin link? Jellyfin keeps its accounts; people sign in to it themselves.')) return;
+  try {
+    renderJellyfin(await api('PUT', '/api/admin/jellyfin', { url: '' }));
+    flash(f, 'Turned off');
+  } catch (err) { flash(f, err.message, false); }
+});
 
 function appChecks(selected) {
   return state.apps.map((a) => el('label', {},
