@@ -39,6 +39,16 @@ function getJson(t, path, timeoutMs) {
   });
 }
 
+// Host ports a container is reachable on, e.g. [{ public: 8097, private: 8096 }].
+// The same port shows once per address (IPv4 and IPv6), so duplicates go.
+function publishedPorts(list) {
+  const seen = new Set();
+  return (list || [])
+    .filter((p) => p.PublicPort && p.Type !== 'udp' && !seen.has(p.PublicPort) && seen.add(p.PublicPort))
+    .map((p) => ({ public: p.PublicPort, private: p.PrivatePort }))
+    .sort((a, b) => a.public - b.public);
+}
+
 // → { containers: [...] } or { error } when Docker can't be reached.
 async function listContainers(dockerHost, timeoutMs = 2500) {
   const t = target(dockerHost);
@@ -65,6 +75,7 @@ async function listContainers(dockerHost, timeoutMs = 2500) {
         finishedAt: !st.Running && st.FinishedAt && !st.FinishedAt.startsWith('0001') ? st.FinishedAt : null,
         exitCode: st.Running ? null : st.ExitCode ?? null,
         restarts: info.RestartCount ?? 0,
+        ports: publishedPorts(c.Ports),
       };
     }));
     return { containers };
