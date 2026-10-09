@@ -424,6 +424,19 @@
         </div>
         <div class="msg" role="status"></div>
       </form>
+      <form class="card panel" id="remote-form">
+        <h3>Remote access</h3><span class="mono muted">Reach Roost away from home, through Cloudflare</span>
+        <p class="tls-state" id="remote-state"><span class="dot"></span><span>Checking…</span></p>
+        <p class="mono muted tls-detail" id="remote-detail"></p>
+        <label class="check-line"><input type="checkbox" name="ddns"> Keep the domain pointed at this connection</label>
+        <label class="check-line"><input type="checkbox" name="cloudflareOnly"> Only accept outside traffic that comes through Cloudflare</label>
+        <p class="mono muted tls-help">Needs the domain and token from Secure connection. Also forward port 443 on your router to this server and set Cloudflare's SSL mode to Full (strict); Check now tests the whole route from outside.</p>
+        <div class="row">
+          <button class="btn" type="submit">Save</button>
+          <button class="btn ghost small" type="button" id="remote-check">Check now</button>
+        </div>
+        <div class="msg" role="status"></div>
+      </form>
       <form class="card panel" id="mail-form">
         <h3>Email</h3><span class="mono muted">For "Forgot password?" and emailed invites. Roost hands mail to a relay such as Resend or Brevo; see the README.</span>
         <div class="form-grid">

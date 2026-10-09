@@ -128,7 +128,7 @@ const STEPS = [
     why: 'Invite and reset links use it, so they open from anywhere.',
     how: [
       'Buy the domain (roostos.network) and add it to a free Cloudflare account.',
-      'Point the domain at your home connection (the remote access step will walk through this once it is built).',
+      'Point the domain at your home connection (the "Keep your domain pointed at home" step below does this for you).',
       'Under Admin → Server, set Public address to https://roostos.network.',
     ],
     action: { label: 'Set address', view: 'admin', focus: 'settings-form', field: 'publicUrl' },
@@ -166,6 +166,51 @@ const STEPS = [
     covers: ['tls', 'HTTPS_PORT', 'ROOST_ACME_STAGING'],
     // A certificate in use counts, even while a renewal is retrying.
     check: (ctx) => ['active', 'warning'].includes(ctx.tls.state),
+  },
+
+  {
+    id: 'remote-dns',
+    group: 'Reach it from anywhere',
+    title: 'Keep your domain pointed at home',
+    why: 'Your home address changes now and then; Roost updates the domain\'s record so the address keeps working.',
+    how: [
+      'First finish the HTTPS step, which saves the domain and Cloudflare token Roost uses here too.',
+      'Under Admin → Remote access, tick "Keep the domain pointed at this connection" and press Save, then Check now.',
+      'Roost makes (and later fixes) one record for the domain in Cloudflare, with the orange cloud on, so your home address stays hidden.',
+    ],
+    action: { label: 'Open Remote access', view: 'admin', focus: 'remote-form' },
+    optional: true,
+    covers: ['remote'],
+    check: (ctx) => Boolean(ctx.remote.ddns && ctx.remote.dns && ctx.remote.dns.ok),
+  },
+  {
+    id: 'remote-forward',
+    group: 'Reach it from anywhere',
+    title: 'Open port 443 on your router',
+    why: 'Lets Cloudflare reach Roost from outside the house.',
+    how: [
+      'In your router\'s settings, find Port forwarding and forward external port 443 (TCP) to this server\'s address on port 443.',
+      'In Cloudflare, under SSL/TLS, choose "Full (strict)".',
+      'Under Admin → Remote access, press Check now. Roost asks for its own address from outside and shows what it found.',
+      'If nothing answers and Roost says your public address starts with 100.64 to 100.127, your internet provider shares one address between homes (CGNAT). Ask them for a public address (often free); until then Roost can\'t be reached from outside.',
+    ],
+    action: { label: 'Open Remote access', view: 'admin', focus: 'remote-form' },
+    optional: true,
+    // The router is the one part Roost can't see; its own test from outside is the proof.
+    check: (ctx) => Boolean(ctx.remote.reach && ctx.remote.reach.ok),
+  },
+  {
+    id: 'remote-cloudflare-only',
+    group: 'Reach it from anywhere',
+    title: 'Only accept traffic through Cloudflare',
+    why: 'Anyone who finds your home address can\'t skip Cloudflare\'s protection; at home you still get in directly.',
+    how: [
+      'Do this after the check above passes.',
+      'Under Admin → Remote access, tick "Only accept outside traffic that comes through Cloudflare" and press Save.',
+    ],
+    action: { label: 'Open Remote access', view: 'admin', focus: 'remote-form' },
+    optional: true,
+    check: (ctx) => Boolean(ctx.remote.cloudflareOnly && ctx.remote.reach && ctx.remote.reach.ok),
   },
 
   // ---------- email ----------

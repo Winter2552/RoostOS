@@ -2254,6 +2254,56 @@ async function loadTls() {
   try { renderTls(await api('GET', '/api/admin/tls')); } catch { /* the rest of Admin still works */ }
 }
 
+// ---------- remote access ----------
+
+function ago(ms) {
+  const m = Math.round((Date.now() - ms) / 60000);
+  return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
+}
+
+function renderRemote(r) {
+  const f = $('#remote-form');
+  const reach = r.reach;
+  const [kind, headline] = !r.domain || !r.tokenSaved ? ['', 'Set up Secure connection first']
+    : r.cgnat ? ['offline', 'Your internet provider shares your address (CGNAT)']
+    : reach && reach.ok ? ['online', `Reachable from outside (${reach.ms} ms)`]
+    : reach ? ['offline', 'Not reachable from outside yet']
+    : ['', 'Not checked yet'];
+  $('#remote-state').replaceChildren(el('span', { class: `dot ${kind}` }), el('span', { text: headline }));
+  const lines = [];
+  if (r.dns && r.dns.ok) lines.push(`${r.domain} points at ${r.dns.ip} (${ago(r.dns.at)})`);
+  if (r.dns && !r.dns.ok) lines.push(r.dns.error);
+  if (r.cgnat) lines.push('Ask your internet provider for a public address; port forwarding can\'t work until you have one');
+  if (reach && !reach.ok) lines.push(reach.error);
+  if (reach) lines.push(`Checked ${ago(reach.at)}`);
+  $('#remote-detail').textContent = lines.join(' · ');
+  f.ddns.checked = r.ddns;
+  f.cloudflareOnly.checked = r.cloudflareOnly;
+}
+
+async function loadRemote() {
+  if ($('#view-admin').classList.contains('hidden')) return;
+  try { renderRemote(await api('GET', '/api/admin/remote')); } catch { /* the rest of Admin still works */ }
+}
+
+$('#remote-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    renderRemote(await api('PUT', '/api/admin/remote', { ddns: f.ddns.checked, cloudflareOnly: f.cloudflareOnly.checked }));
+    flash(f, 'Saved');
+  } catch (err) { flash(f, err.message, false); }
+});
+
+$('#remote-check').addEventListener('click', async () => {
+  const f = $('#remote-form');
+  const btn = $('#remote-check');
+  btn.disabled = true;
+  flash(f, 'Checking from outside…');
+  try { renderRemote(await api('POST', '/api/admin/remote/check')); flash(f, 'Checked'); } catch (err) { flash(f, err.message, false); }
+  btn.disabled = false;
+});
+
 $('#tls-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = e.target;

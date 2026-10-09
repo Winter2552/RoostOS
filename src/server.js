@@ -16,6 +16,7 @@ const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
 const { DriveHealth } = require('./smart');
 const { OutsideServices } = require('./outside');
+const remoteAccess = require('./remote');
 const templates = require('./templates');
 const { CertManager, validDomain } = require('./tls');
 const twoStep = require('./twostep');
@@ -197,11 +198,19 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000 } = {}) {
+function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000 } = {}) {
   const store = new Store(dataDir);
   const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
   // The few outside services Roost leans on, for the admin's status page.
   const outside = new OutsideServices({ tokenOf: () => (store.db.settings.tls || {}).token || '', ...outsideOptions });
+  // Reaching Roost from outside through Cloudflare: real visitor addresses,
+  // the domain's A record, and the end-to-end test.
+  const remote = new remoteAccess.RemoteAccess({
+    getSettings: () => store.db.settings.remote,
+    patch: (fields) => { store.db.settings.remote = { ...store.db.settings.remote, ...fields }; store.saveSoon(); },
+    getTls: () => store.db.settings.tls,
+    ...remoteOptions,
+  });
   const activity = new ActivityLog(dataDir, { saveDelayMs: activitySaveDelayMs });
   // Nest used to be an outside app with no link; it is built in now.
   const nestApp = store.db.apps.find((a) => a.id === 'nest');
@@ -508,7 +517,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
 
   // Settings for the admin page. The mail password never leaves the server.
   function settingsView() {
-    const { mail: _mail, jellyfin: _jellyfin, ...rest } = db().settings;
+    // The Cloudflare token (in tls) stays on the server.
+    const { mail: _mail, jellyfin: _jellyfin, tls: _tls, ...rest } = db().settings;
     return { ...rest, publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()) };
   }
 
@@ -1267,6 +1277,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         secureCookies,
         trustProxy,
         tls: certs.status(),
+        remote: remote.view(),
         ticked: db().settings.setupTicked || [],
       }));
     },
@@ -1445,6 +1456,40 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       const before = Number(q.get('before')) || Infinity;
       const filter = FILTERS.includes(q.get('filter')) ? q.get('filter') : '';
       send(res, 200, activity.page({ before, filter, limit: 50 }));
+    },
+
+    // ---------- remote access ----------
+
+    // Public on purpose: the check asks for this from outside. It only proves
+    // "this is that Roost" and reveals nothing else.
+    'GET /api/remote/ping': (req, res) => {
+      send(res, 200, { nonce: remote.nonce });
+    },
+
+    'GET /api/admin/remote': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, remote.view());
+    },
+
+    'PUT /api/admin/remote': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const before = db().settings.remote || {};
+      const next = remoteAccess.clean(body);
+      db().settings.remote = { ...before, ...next };
+      store.save();
+      const changes = [];
+      if (next.ddns !== Boolean(before.ddns)) changes.push(`keeping the domain pointed home ${next.ddns ? 'on' : 'off'}`);
+      if (next.cloudflareOnly !== Boolean(before.cloudflareOnly)) changes.push(`Cloudflare-only traffic ${next.cloudflareOnly ? 'on' : 'off'}`);
+      if (changes.length) record(req, 'settings-changed', { actor: admin.username, detail: `Remote access: ${changes.join(', ')}` });
+      send(res, 200, remote.view());
+    },
+
+    // Updates the record and tests the route from outside; takes a few seconds.
+    'POST /api/admin/remote/check': async (req, res) => {
+      requireAdmin(req);
+      await remote.check();
+      send(res, 200, remote.view());
     },
 
     // ---------- HTTPS certificate ----------
@@ -1663,7 +1708,20 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     jellyfin.proxy(req, res);
   }
 
+  // Runs first on every request: believes the visitor's real address only when
+  // the connection is Cloudflare's, and turns away outside traffic that skipped
+  // Cloudflare when the admin asked for that. True means the request is handled.
+  function screen(req) {
+    const visitor = remote.visitor(req);
+    if (visitor) req.roostIp = visitor;
+    return remote.blocks(req);
+  }
+
   async function handle(req, res) {
+    if (screen(req)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+      return res.end('Use the Roost address, not the IP');
+    }
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
     res.setHeader('X-Frame-Options', 'DENY');
@@ -1696,6 +1754,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   // Live updates from Jellyfin (a WebSocket) pass through on both the HTTP and
   // HTTPS side.
   function onUpgrade(req, socket, head) {
+    if (screen(req)) return socket.destroy();
     const { pathname } = new URL(req.url, 'http://roost');
     if (pathname.startsWith(`${JELLYFIN_PREFIX}/`) && jellyfinAllowed(req)) return jellyfin.proxyUpgrade(req, socket, head);
     socket.destroy();
@@ -1705,6 +1764,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   server.on('upgrade', onUpgrade);
   server.certs = certs;
   server.outside = outside;
+  server.remote = remote;
   // The HTTPS side shares every route; the certificate is looked up per
   // connection, so a renewal takes effect without a restart.
   // Browsers opening Roost by IP address send no name and get no certificate,
@@ -1717,6 +1777,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   server.on('close', () => {
     certs.stop();
     outside.stop();
+    remote.stop();
     clearInterval(sweepTimer);
     clearInterval(uptimeTimer);
     clearInterval(uptimeSaveTimer);
@@ -1758,6 +1819,7 @@ if (require.main === module) {
   });
   server.certs.start();
   server.outside.start();
+  server.remote.start();
   server.createHttpsServer().listen(httpsPort, () => {
     console.log(`HTTPS is listening on port ${httpsPort}${server.certs.cert ? '' : ' (no certificate yet; set one up under Admin)'}`);
   });
