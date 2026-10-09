@@ -24,6 +24,8 @@ const { ActivityLog, clientIp, FILTERS } = require('./activity');
 const { HttpError, send, readJson, str } = require('./http');
 const { Nest } = require('./nest');
 const { Glint } = require('./glint');
+const { Assets } = require('./assets');
+const { TrafficMeter } = require('./traffic');
 const { createSearch, nestSource } = require('./search');
 const { Jellyfin, PREFIX: JELLYFIN_PREFIX, OPENER_HTML } = require('./jellyfin');
 const { UptimeLog, watchDockerEvents } = require('./uptime');
@@ -38,17 +40,6 @@ const MAX_TRUSTED = 20;
 const CODE_WAIT_MS = 5 * 60 * 1000;
 const CODE_TRIES = 5;
 const ICONS = ['play', 'orbit', 'folder', 'spark', 'grid', 'cloud', 'music', 'home'];
-
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-  '.json': 'application/json',
-  '.webmanifest': 'application/manifest+json',
-};
 
 // ---------- helpers ----------
 
@@ -205,6 +196,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   // The few outside services Roost leans on, for the admin's status page.
   const outside = new OutsideServices({ tokenOf: () => (store.db.settings.tls || {}).token || '', ...outsideOptions });
   const activity = new ActivityLog(dataDir, { saveDelayMs: activitySaveDelayMs });
+  const traffic = new TrafficMeter(dataDir);
+  const assets = new Assets(PUBLIC_DIR);
   // Nest and Glint used to be outside apps with no link; they are built in now.
   let linked = false;
   for (const [id, url] of [['nest', '#/nest'], ['glint', '#/glint']]) {
@@ -1050,6 +1043,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         apps,
         // Everything else Docker runs, for admins only.
         otherContainers: user.role === 'admin' ? all.filter((c) => !claimed.has(c.id)) : [],
+        // What left the house, for admins only.
+        traffic: user.role === 'admin' ? traffic.summary() : null,
         // Certificate health, for admins once HTTPS is set up.
         certificate: user.role === 'admin' ? certSummary() : null,
         // Cloudflare, Let's Encrypt and Docker Hub at a glance, for admins only.
@@ -1280,6 +1275,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         dockerOk: !docker.error,
         secureCookies,
         trustProxy,
+        awayBytes: Object.values(traffic.summary().apps).reduce((n, a) => n + a.week, 0),
         tls: certs.status(),
         ticked: db().settings.setupTicked || [],
       }));
@@ -1632,24 +1628,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
         { src: '/icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
       ],
     });
-    res.writeHead(200, { 'Content-Type': MIME['.webmanifest'], 'Cache-Control': 'no-cache' });
+    res.writeHead(200, { 'Content-Type': 'application/manifest+json', 'Cache-Control': 'no-cache' });
     res.end(req.method === 'HEAD' ? undefined : body);
-  }
-
-  function serveStatic(req, res, pathname) {
-    let rel = decodeURIComponent(pathname);
-    if (rel === '/' || !path.extname(rel)) rel = '/index.html';
-    const file = path.normalize(path.join(PUBLIC_DIR, rel));
-    if (!file.startsWith(PUBLIC_DIR + path.sep)) return send(res, 404, { error: 'Not found' });
-    fs.readFile(file, (err, data) => {
-      if (err) return send(res, 404, { error: 'Not found' });
-      res.writeHead(200, {
-        'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-        // App icons rarely change; everything else is checked on every load.
-        'Cache-Control': rel.startsWith('/icons/') ? 'public, max-age=604800' : 'no-cache',
-      });
-      res.end(req.method === 'HEAD' ? undefined : data);
-    });
   }
 
   // Jellyfin is only reachable through Roost by people Roost lets in to it.
@@ -1677,22 +1657,30 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     jellyfin.proxy(req, res);
   }
 
+  // Which app a request counts against on the upload meter.
+  function trafficApp(pathname) {
+    if (pathname === JELLYFIN_PREFIX || pathname.startsWith(`${JELLYFIN_PREFIX}/`)) return 'jellyfin';
+    if (pathname.startsWith('/api/nest/')) return 'nest';
+    return pathname.startsWith('/api/glint/') ? 'glint' : 'roost';
+  }
+
   async function handle(req, res) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
     res.setHeader('X-Frame-Options', 'DENY');
     try {
-      const { pathname } = new URL(req.url, 'http://roost');
+      const { pathname, searchParams } = new URL(req.url, 'http://roost');
+      traffic.track(req, res, trafficApp(pathname), clientIp(req, trustProxy));
       if (pathname === JELLYFIN_PREFIX || pathname.startsWith(`${JELLYFIN_PREFIX}/`)) {
         serveJellyfin(req, res, pathname);
       } else if (pathname.startsWith('/api/nest/')) {
         const user = requireUser(req);
         if (!visibleApps(db(), user).some((a) => a.id === 'nest')) throw new HttpError(403, 'You don’t have access to Nest');
-        await nest.handle(req, res, user, pathname, new URL(req.url, 'http://roost').searchParams);
+        await nest.handle(req, res, user, pathname, searchParams);
       } else if (pathname.startsWith('/api/glint/')) {
         const user = requireUser(req);
         if (!visibleApps(db(), user).some((a) => a.id === 'glint')) throw new HttpError(403, 'You don’t have access to Glint');
-        await glint.handle(req, res, user, pathname, new URL(req.url, 'http://roost').searchParams);
+        await glint.handle(req, res, user, pathname, searchParams);
       } else if (pathname.startsWith('/api/')) {
         const found = route(req.method, pathname);
         if (!found) throw new HttpError(404, 'Not found');
@@ -1700,7 +1688,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
       } else if (pathname === '/manifest.webmanifest' && (req.method === 'GET' || req.method === 'HEAD')) {
         serveManifest(req, res);
       } else if (req.method === 'GET' || req.method === 'HEAD') {
-        serveStatic(req, res, pathname);
+        if (!assets.serve(req, res, pathname, searchParams.get('v'))) send(res, 404, { error: 'Not found' });
       } else {
         throw new HttpError(405, 'Method not allowed');
       }
@@ -1743,6 +1731,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     uptime.save();
     store.flush();
     activity.flush();
+    traffic.flush();
     sessions.flush();
     nest.close();
   });
@@ -1753,6 +1742,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     uptime.save();
     store.flush();
     activity.flush();
+    traffic.flush();
     sessions.flush();
   };
   return server;

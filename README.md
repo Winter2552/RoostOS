@@ -134,6 +134,17 @@ docker restart roost
 
 Recovery codes and trusted devices are stored only as hashes. The authenticator secret has to be stored as-is in `roost.json`, so keep that file as private as the server itself.
 
+## Saving home upload
+
+Home upload is slow (about 18 Mb/s), so Roost sends as little as it can to people away from home, with nothing outside to set up:
+
+- Roost's own pages and scripts are cached by the browser for a year (the page links each file with a version, so updates still arrive at once), and text is compressed.
+- Nest downloads carry a version tag; a device that already has the file gets a tiny "not changed" reply instead of the file, and a resumed download of a changed file starts over.
+- Bigger answers (folder lists, status) are compressed.
+- Status → *Sent away from home* shows, for admins, how much Roost, Nest and Jellyfin (watched through Roost) sent outside the house today and this week (counted per day, kept for 31 days). Home addresses (192.168.x.x, 10.x.x.x and so on) are not counted; Tailscale addresses are, since they still use the upload.
+
+Behind a tunnel or proxy, set `BEHIND_PROXY` to `true` so away visitors are told apart from home ones.
+
 ## One sign-in
 
 Roost is the only account system: one username and password (plus two-step sign-in) for Roost and the apps it serves.

@@ -1410,6 +1410,16 @@ function renderStatus(s) {
       el('span', { class: 'mono muted', text: `${st.label} · ${containerSince(c)}` }));
   }));
 
+  const t = s.traffic;
+  $('#status-traffic-wrap').classList.toggle('hidden', !t);
+  if (t) {
+    const names = { roost: s.apps[0].name, nest: 'Nest', glint: 'Glint', jellyfin: 'Jellyfin' };
+    $('#status-traffic').replaceChildren(...['roost', 'nest', 'glint', 'jellyfin'].map((id) => {
+      const a = t.apps[id] || { today: 0, week: 0 };
+      return statCard(names[id], bytes(a.today), `today · ${bytes(a.week)} this week`);
+    }));
+  }
+
   const problems = [
     ...s.apps.map((a) => [a, appState(a, s.docker.ok)]).filter(([, st]) => st.kind === 'offline').map(([a, st]) => `${a.name}: ${st.label.toLowerCase()}`),
     ...s.disks.filter((d) => !d.missing && pct(d.total - d.free, d.total) >= FULL_AT).map((d) => `${d.label} drive is nearly full`),
