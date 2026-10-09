@@ -525,6 +525,27 @@
         <ol class="activity" id="backup-history"></ol>
       </form>
 
+      <div class="card panel" id="update-form">
+        <h3>Updates</h3><span class="mono muted">Roost's own code comes from GitHub. See what's new and update when you're ready: nothing updates by itself, and if the new version won't start, the old one is put back.</span>
+        <p class="tls-state" id="update-state"><span class="dot"></span><span>Checking…</span></p>
+        <p class="mono muted tls-detail" id="update-detail"></p>
+        <ul class="update-changes mono" id="update-changes"></ul>
+        <p class="mono muted tls-help hidden" id="update-note"></p>
+        <details class="update-tech mono muted hidden" id="update-tech"><summary>Technical details</summary><pre id="update-tech-text"></pre></details>
+        <div class="row" id="update-buttons">
+          <button class="btn" type="button" id="update-apply">Update Roost</button>
+          <button class="btn ghost small" type="button" id="update-check">Check now</button>
+        </div>
+        <div class="update-confirm hidden" id="update-confirm" role="alertdialog" aria-labelledby="update-confirm-text">
+          <p class="mono" id="update-confirm-text">Update Roost now? It will be unavailable for a minute or two while it restarts.</p>
+          <div class="row">
+            <button class="btn" type="button" id="update-yes">Update now</button>
+            <button class="btn ghost small" type="button" id="update-no">Not now</button>
+          </div>
+        </div>
+        <div class="msg" role="status"></div>
+      </div>
+
       <div class="card panel hidden" id="restore-panel">
         <h3>Get files back</h3><span class="mono muted">Browse any backup like a folder. Nothing is overwritten: files come back as a download, or as a new folder in the person's Nest.</span>
         <p class="mono muted tls-help hidden" id="restore-hint"></p>

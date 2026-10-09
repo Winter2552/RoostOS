@@ -1874,6 +1874,7 @@ async function loadAdmin() {
   $('#new-user-apps').replaceChildren(...appChecks(null));
   loadTls();
   loadBackupAdmin();
+  loadUpdateAdmin();
   restoreView.night = '';
   browseBackup('');
 }
@@ -2447,6 +2448,130 @@ $('#tls-off').addEventListener('click', async () => {
   const f = $('#tls-form');
   if (!confirm('Turn off HTTPS? Roost forgets the Cloudflare token and the certificate. Links using your domain will stop working securely.')) return;
   try { renderTls(await api('DELETE', '/api/admin/tls')); flash(f, 'HTTPS turned off'); } catch (err) { flash(f, err.message, false); }
+});
+
+// ---------- updates (Admin) ----------
+
+let updateTimer = null;
+let updateAsking = false;
+let updateLast = null;
+
+const UPDATE_PHASE = {
+  checking: 'Checking what’s new',
+  merge: 'Bringing in the new code',
+  build: 'Building the new version, which takes a few minutes',
+  restart: 'Restarting Roost',
+  health: 'Waiting for the new version to start',
+  rollback: 'Something failed, so the old version is being put back',
+};
+
+function plural(n, one, many) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+function renderUpdate(u) {
+  updateLast = u;
+  const applying = u.state === 'applying';
+  const [dot, headline] = {
+    off: ['', 'The updater isn’t set up yet'],
+    stopped: ['offline', 'The updater isn’t running'],
+    checking: ['starting', 'Looking at GitHub…'],
+    applying: ['starting', `Updating Roost… ${UPDATE_PHASE[u.phase] || ''}`.trim()],
+    available: ['starting', `${plural(u.behind, 'change', 'changes')} waiting on GitHub`],
+    current: ['online', 'Roost is up to date'],
+    error: ['offline', u.checkError || 'Couldn’t look at GitHub'],
+  }[u.state] || ['', ''];
+  $('#update-state').replaceChildren(el('span', { class: `dot ${dot}` }), el('span', { text: headline }));
+
+  const lines = [];
+  if (u.state === 'off') lines.push('Finish “Update Roost from inside Roost” in Setup above.');
+  if (u.state === 'stopped') lines.push('Check that roost-updater is started in ZimaOS, then reload this page.');
+  if (u.head && !['off', 'stopped'].includes(u.state)) lines.push(`Running ${u.head.short}${u.head.date ? `, from ${shortDate(u.head.date)}` : ''}`);
+  if (u.checkedAt && !['off', 'stopped'].includes(u.state)) lines.push(`checked ${backupWhen(u.checkedAt)}`);
+  if (u.checkError && u.state !== 'error') lines.push(u.checkError);
+  $('#update-detail').textContent = lines.join(' · ');
+
+  $('#update-changes').replaceChildren(...(u.state === 'available' ? u.commits : []).map((c) =>
+    el('li', {}, el('span', { class: 'muted', text: c.sha }), el('span', { text: c.subject }))));
+
+  // One note at a time: what blocks the update, or how the last one went.
+  const notes = [];
+  const l = u.last;
+  if (u.state === 'available' && u.conflicts.length) {
+    notes.push(`You changed ${u.conflicts.join(', ')} on the server, and this update changes it too. Move your own settings into docker-compose.override.yml, then check again.`);
+  }
+  if (u.state === 'available' && u.ahead) notes.push('This folder has changes of its own that aren’t on GitHub, so it can’t be updated here.');
+  if (u.state === 'available' && (u.composeChanged || u.updaterChanged)) {
+    notes.push('This update also changes the compose file or the updater. Roost and its backups update here; to apply the rest, run “docker compose up -d --build” in the Roost folder afterwards.');
+  }
+  if (l && !l.ok && !applying) {
+    notes.push(`The last update didn’t work: ${l.error}${l.rolledBack ? ' The old version is running again.' : ''}`);
+  } else if (l && l.ok && !l.nothing && !applying && Date.now() - Date.parse(l.finishedAt) < 7 * 86400000) {
+    notes.push(`Updated ${backupWhen(l.finishedAt)} (${plural(l.count, 'change', 'changes')}).${l.needsRedeploy ? ' The compose file or updater changed too: run “docker compose up -d --build” in the Roost folder to apply that part.' : ''}`);
+  }
+  $('#update-note').textContent = notes.join(' ');
+  $('#update-note').classList.toggle('hidden', !notes.length);
+  const tech = l && !l.ok && !applying ? l.detail : '';
+  $('#update-tech').classList.toggle('hidden', !tech);
+  $('#update-tech-text').textContent = tech || '';
+
+  const canApply = u.state === 'available' && !u.conflicts.length && !u.ahead && !u.requested;
+  $('#update-apply').disabled = !canApply;
+  $('#update-apply').classList.toggle('hidden', u.state !== 'available');
+  $('#update-check').disabled = ['off', 'stopped', 'checking', 'applying'].includes(u.state) || u.requested;
+  $('#update-check').textContent = u.state === 'checking' || (u.requested && u.state !== 'applying') ? 'Checking…' : 'Check now';
+  $('#update-buttons').classList.toggle('hidden', updateAsking || applying);
+  $('#update-confirm').classList.toggle('hidden', !updateAsking || applying);
+  $('#update-confirm-text').textContent = `Update Roost now? ${plural(u.behind, 'change', 'changes')} will be installed. Roost is unavailable for a minute or two while it restarts, and the old version is put back if the new one fails.`;
+
+  clearTimeout(updateTimer);
+  updateTimer = setTimeout(loadUpdateAdmin, applying || u.requested || u.state === 'checking' ? 3000 : 30000);
+}
+
+async function loadUpdateAdmin() {
+  clearTimeout(updateTimer);
+  if ($('#view-admin').classList.contains('hidden') || document.hidden) {
+    if (!$('#view-admin').classList.contains('hidden')) updateTimer = setTimeout(loadUpdateAdmin, 30000);
+    return;
+  }
+  try {
+    renderUpdate(await api('GET', '/api/admin/update'));
+  } catch (err) {
+    // While Roost restarts for an update, it simply doesn't answer for a bit.
+    if (updateLast && updateLast.state === 'applying' && !err.status) {
+      $('#update-state').replaceChildren(el('span', { class: 'dot starting' }), el('span', { text: 'Roost is restarting on the new version…' }));
+      updateTimer = setTimeout(loadUpdateAdmin, 3000);
+    }
+  }
+}
+
+$('#update-check').addEventListener('click', async () => {
+  const f = $('#update-form');
+  try {
+    await api('POST', '/api/admin/update/check');
+    loadUpdateAdmin();
+  } catch (err) { flash(f, err.message, false); }
+});
+
+$('#update-apply').addEventListener('click', () => {
+  updateAsking = true;
+  if (updateLast) renderUpdate(updateLast);
+  $('#update-yes').focus();
+});
+
+$('#update-no').addEventListener('click', () => {
+  updateAsking = false;
+  if (updateLast) renderUpdate(updateLast);
+});
+
+$('#update-yes').addEventListener('click', async () => {
+  const f = $('#update-form');
+  updateAsking = false;
+  try {
+    await api('POST', '/api/admin/update/apply', { confirm: true });
+    flash(f, 'Starting the update');
+  } catch (err) { flash(f, err.message, false); }
+  loadUpdateAdmin();
 });
 
 // ---------- backups (Admin) ----------

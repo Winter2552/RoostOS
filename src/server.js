@@ -13,6 +13,7 @@ const links = require('./links');
 const mail = require('./mail');
 const setup = require('./setup');
 const backup = require('./backup');
+const selfUpdate = require('./self-update');
 const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor, restartContainer } = require('./docker');
 const { DriveHealth } = require('./smart');
@@ -1457,6 +1458,51 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 202, { ok: true });
     },
 
+    // ---------- updating Roost ----------
+    // Admin → Updates. Roost only leaves requests for the roost-updater service
+    // and reads what it reports; it never runs git or Docker itself.
+
+    'GET /api/admin/update': (req, res) => {
+      requireAdmin(req);
+      const summary = selfUpdate.summarize(selfUpdate.readStatus(dataDir));
+      // Write an update's outcome to the activity log, once.
+      const last = summary.last;
+      if (last && last.finishedAt && selfUpdate.lastLogged(dataDir) !== last.finishedAt && !last.nothing) {
+        selfUpdate.markLogged(dataDir, last.finishedAt);
+        record(req, 'settings-changed', {
+          target: 'roost-updater',
+          detail: last.ok
+            ? `Roost updated to ${String(last.to).slice(0, 7)} (${last.count} ${last.count === 1 ? 'change' : 'changes'})`
+            : `Roost update ${last.rolledBack ? 'failed and was rolled back' : 'failed'}: ${last.error}`,
+        });
+      }
+      send(res, 200, { ...summary, requested: selfUpdate.hasRequest(dataDir) });
+    },
+
+    'POST /api/admin/update/check': (req, res) => {
+      requireAdmin(req);
+      const { state } = selfUpdate.summarize(selfUpdate.readStatus(dataDir));
+      if (state === 'off' || state === 'stopped') throw new HttpError(409, 'The updater isn’t running. Check that roost-updater is started.');
+      if (state === 'applying') throw new HttpError(409, 'Roost is being updated right now');
+      selfUpdate.writeRequest(dataDir, 'check');
+      send(res, 202, { ok: true });
+    },
+
+    'POST /api/admin/update/apply': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      // The button asks first; the server insists on the answer too.
+      if (body.confirm !== true) throw new HttpError(400, 'Confirm the update first');
+      const summary = selfUpdate.summarize(selfUpdate.readStatus(dataDir));
+      if (selfUpdate.hasRequest(dataDir) || summary.state === 'applying') throw new HttpError(409, 'An update is already on its way');
+      if (summary.state === 'off' || summary.state === 'stopped') throw new HttpError(409, 'The updater isn’t running. Check that roost-updater is started.');
+      if (summary.state !== 'available') throw new HttpError(409, 'There is nothing new to update to');
+      if (summary.conflicts.length) throw new HttpError(409, `You changed ${summary.conflicts.join(', ')} on the server, and this update changes it too. Move your own settings into docker-compose.override.yml first.`);
+      selfUpdate.writeRequest(dataDir, 'apply');
+      record(req, 'settings-changed', { actor: admin.username, detail: `Roost update started (${summary.behind} ${summary.behind === 1 ? 'change' : 'changes'})` });
+      send(res, 202, { ok: true });
+    },
+
     // ---------- restoring from a backup ----------
     // Everything here is admin-only and read-only on the backup drive. Getting
     // files back never overwrites anything: it is a download, or a new folder
@@ -1598,6 +1644,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         tls: certs.status(),
         ticked: db().settings.setupTicked || [],
         backup: backup.readStatus(dataDir),
+        update: selfUpdate.summarize(selfUpdate.readStatus(dataDir)),
       }));
     },
 
