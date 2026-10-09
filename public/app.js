@@ -1218,6 +1218,11 @@ function appStatusCard(a, dockerOk, history) {
     a.restartable || restarts.has(a.id) ? restartRow(a) : null);
 }
 
+function autoRestartText(s) {
+  const own = s.tz === myZone() ? '' : ` ${s.tz}`;
+  return `Restarts ${s.every === 'week' ? `${WEEKDAYS[s.day]}s` : 'daily'} at ${s.time}${own}`;
+}
+
 // Restart lives in the app's own card: one tap asks, the second restarts.
 function restartRow(a) {
   const r = restarts.get(a.id) || {};
@@ -1239,6 +1244,7 @@ function restartRow(a) {
     row.append(el('span', { class: 'dot online' }), el('span', { text: 'Restarted' }));
   } else {
     if (r.step === 'error') row.append(el('div', { class: 'restart-error', text: r.msg }));
+    if (a.restartSchedule && r.step !== 'error') row.append(el('span', { class: 'muted restart-auto', text: autoRestartText(a.restartSchedule) }));
     row.append(el('button', {
       type: 'button',
       class: 'link-btn mono',
@@ -1636,6 +1642,43 @@ function checkedApps(container) {
   return [...container.querySelectorAll('input[type=checkbox]:checked')].map((c) => c.value);
 }
 
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const myZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+// Auto-restart: Never / Every day / Every week, with the time (and weekday) only
+// when they matter. The time is on this device's clock; its zone is saved with it.
+function scheduleFields(saved) {
+  const s = saved || { every: 'never', time: '04:00', day: 1 };
+  const every = el('select', { name: 'restartEvery', 'aria-label': 'Auto-restart' },
+    [['never', 'Never'], ['day', 'Every day'], ['week', 'Every week']].map(([v, t]) => el('option', { value: v, text: t, selected: v === s.every })));
+  const day = el('select', { name: 'restartDay', 'aria-label': 'Day of the week' },
+    WEEKDAYS.map((d, i) => el('option', { value: i, text: d, selected: i === (s.day ?? 1) })));
+  const time = el('input', { type: 'time', name: 'restartTime', value: s.time, required: true, 'aria-label': 'Auto-restart time' });
+  const zone = el('span', { class: 'mono muted restart-zone', text: saved && saved.tz !== myZone() ? `${saved.tz} time` : 'your time' });
+  const when = el('div', { class: 'schedule-when' }, day, time, zone);
+  const sync = () => {
+    when.classList.toggle('hidden', every.value === 'never');
+    day.classList.toggle('hidden', every.value !== 'week');
+    time.required = every.value !== 'never';
+  };
+  every.addEventListener('change', sync);
+  sync();
+  return el('div', { class: 'schedule-row' },
+    el('label', { class: 'field' }, el('span', { text: 'Auto-restart' }), every),
+    when,
+    el('span', { class: 'mono muted schedule-hint', text: 'Keeps an app fresh. Only for apps on the restart list (Admin → Setup).' }));
+}
+
+// What the form sends: nothing for Never. A schedule left as it was keeps its zone.
+function readSchedule(row, saved) {
+  const every = $('[name=restartEvery]', row).value;
+  if (every === 'never') return null;
+  const time = $('[name=restartTime]', row).value;
+  const day = Number($('[name=restartDay]', row).value);
+  const same = saved && saved.every === every && saved.time === time && (every === 'day' || saved.day === day);
+  return { every, time, day, tz: same ? saved.tz : myZone() };
+}
+
 function appEditorRow(app) {
   const iconSelect = el('select', { name: 'icon' }, Object.keys(ICONS).map((k) => el('option', { value: k, text: k, selected: k === app.icon })));
   const row = el('div', { class: 'admin-app', 'data-id': app.id || '' },
@@ -1646,6 +1689,7 @@ function appEditorRow(app) {
       el('label', { class: 'field' }, el('span', { text: 'Icon' }), iconSelect),
       el('label', { class: 'field' }, el('span', { text: 'Container' }), el('input', { type: 'text', name: 'container', value: app.container || '', placeholder: 'Found by name if empty', spellcheck: 'false' })),
     ),
+    scheduleFields(app.restartSchedule),
     el('div', { class: 'row' },
       el('label', { class: 'field', style: 'flex:1' }, el('span', { text: 'Description' }), el('input', { type: 'text', name: 'description', value: app.description || '', maxlength: 200 })),
       el('button', { class: 'btn danger small', type: 'button', text: 'Remove', onclick: () => row.remove() })),
@@ -1727,6 +1771,7 @@ $('#apps-form').addEventListener('submit', async (e) => {
     const get = (n) => $(`[name=${n}]`, row).value;
     const app = { name: get('name'), tagline: get('tagline'), url: get('url'), icon: get('icon'), description: get('description'), container: get('container') };
     if (row.dataset.id) app.id = row.dataset.id;
+    app.restartSchedule = readSchedule(row, (state.apps.find((a) => a.id === row.dataset.id) || {}).restartSchedule);
     return app;
   });
   try {

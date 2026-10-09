@@ -385,7 +385,7 @@ label.field, div.field { display: flex; flex-direction: column; gap: 6px; }
 
 .field > span { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
 
-input[type='text'], input[type='password'], input[type='url'], input[type='email'], input[type='number'], input[type='date'], select {
+input[type='text'], input[type='password'], input[type='url'], input[type='email'], input[type='number'], input[type='date'], input[type='time'], select {
   background: var(--bg);
   border: 1.5px solid var(--line);
   border-radius: 12px;
@@ -674,6 +674,12 @@ a.btn { text-decoration: none; text-align: center; }
 .stat-state { font-size: 13px; }
 .stat-lines { font-size: 11px; display: flex; flex-direction: column; gap: 3px; border-top: 1px solid var(--line); padding-top: 10px; }
 .stat-lines div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.schedule-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 16px; margin: 4px 0 12px; }
+.schedule-row .field { min-width: 150px; }
+.schedule-when { display: flex; align-items: center; gap: 8px; }
+.schedule-when input[type='time'] { width: auto; color-scheme: dark; }
+.schedule-hint { flex-basis: 100%; font-size: 12px; text-transform: none; letter-spacing: 0; }
+.restart-auto { flex-basis: 100%; text-transform: none; letter-spacing: 0; }
 .restart-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; min-height: 22px; }
 .restart-row .link-btn { font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
 .restart-row .link-btn:hover, .restart-row .link-btn:focus-visible { color: var(--ink); }

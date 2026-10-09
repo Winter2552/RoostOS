@@ -146,3 +146,53 @@ test('admins restart an app through the helper; Roost itself is never offered', 
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
+
+test('an app restarts itself on its schedule, and only when it can be restarted', async () => {
+  const { clockIn } = require('../src/schedule');
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'roost-schedule-'));
+  const server = createServer({
+    dataDir, probeTimeoutMs: 300, scheduleCheckMs: 50, dockerHost: `tcp://127.0.0.1:${helper.address().port}`,
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = async (method, url, body, cookie) => {
+    const headers = {};
+    if (body) headers['Content-Type'] = 'application/json';
+    if (cookie) headers.Cookie = cookie;
+    const res = await fetch(base + url, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    const setCookie = res.headers.get('set-cookie');
+    return { status: res.status, body: await res.json().catch(() => null), cookie: setCookie && setCookie.split(';')[0] };
+  };
+  try {
+    const admin = (await call('POST', '/api/setup', { username: 'raven', password: 'correct horse' })).cookie;
+    await setUpTwoStep(call, admin);
+    const apps = (await call('GET', '/api/apps', null, admin)).body.apps;
+    const put = (jellyfin, nova) => call('PUT', '/api/admin/apps', {
+      apps: apps.map((a) => (a.id === 'jellyfin' ? { ...a, restartSchedule: jellyfin } : a.id === 'nova' ? { ...a, restartSchedule: nova } : a)),
+    }, admin);
+
+    // Not on the helper's list: refused when saving, not left to fail every night.
+    const never = { every: 'day', time: '04:00', tz: 'UTC' };
+    assert.equal((await put(null, never)).status, 400);
+    assert.equal((await put({ every: 'day', time: 'soon', tz: 'UTC' }, null)).status, 400);
+
+    // Wait out the end of a minute so "now" is still the same minute when it fires.
+    if (new Date().getUTCSeconds() > 55) await new Promise((r) => setTimeout(r, 5000));
+    seen.length = 0;
+    const now = clockIn(new Date(), 'UTC');
+    assert.equal((await put({ every: 'day', time: now.time, tz: 'UTC' }, null)).status, 200);
+    await new Promise((r) => setTimeout(r, 400));
+    // Once in that minute, however often it checks.
+    assert.deepEqual(seen.filter((s) => s.startsWith('POST')), ['POST /containers/jellyfin/restart?t=10']);
+    const log = (await call('GET', '/api/admin/activity?filter=apps', null, admin)).body.entries;
+    assert.equal(log[0].type, 'app-restarted');
+    assert.equal(log[0].actor, 'schedule');
+
+    // It shows on the admin's status card.
+    const status = (await call('GET', '/api/status', null, admin)).body;
+    assert.equal(status.apps.find((a) => a.id === 'jellyfin').restartSchedule.time, now.time);
+  } finally {
+    server.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});

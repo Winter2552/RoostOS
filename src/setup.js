@@ -74,12 +74,13 @@ const STEPS = [
   {
     id: 'restart',
     group: 'Server',
-    title: 'Choose which apps admins can restart',
-    why: 'A stuck app gets a Restart button on the status page, so you can fix it from your phone.',
+    title: 'Choose which apps admins can restart, and when',
+    why: 'A stuck app gets a Restart button on the status page, and apps can restart themselves on a schedule.',
     how: [
       'In ZimaOS, note the container name of each app (e.g. jellyfin).',
       'In Roost\'s compose file, list them in ROOST_RESTARTABLE under roost-docker, e.g. "jellyfin,coffee-galaxy".',
       'Under Admin → Apps, make sure each app\'s container name matches.',
+      'Optional: under Admin → Apps, set Auto-restart on an app (e.g. Jellyfin every day at 04:00) to keep it fresh.',
       'Redeploy Roost. Only the containers listed can be restarted; Roost itself never is.',
     ],
     action: { label: 'Open status', view: 'status' },
