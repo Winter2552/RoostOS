@@ -444,6 +444,33 @@ const NO_STEP = {
 
 const MANUAL = STEPS.filter((s) => s.manual).map((s) => s.id);
 
+// The Admin cards that are about setting something up once, in page order. When
+// every step behind a card is done, Admin folds it into the "Set up" drawer at
+// the bottom of the page. `steps: 'all'` is the checklist card itself. A card
+// with required steps is finished when those are done; a card with only
+// optional steps (Remote access, Coffee Galaxy) when all of them are.
+// test/setup.test.js checks every id here exists.
+const CARDS = [
+  { id: 'setup-panel', steps: 'all' },
+  { id: 'jellyfin-form', steps: ['jellyfin-sign-in'] },
+  { id: 'tls-form', steps: ['https'] },
+  { id: 'remote-form', steps: ['remote-dns', 'remote-forward', 'remote-cloudflare-only'] },
+  { id: 'coffee-form', steps: ['coffee-link', 'coffee-gateway'] },
+  { id: 'mail-form', steps: ['email'] },
+  { id: 'backup-form', steps: ['backup-drive', 'first-backup'] },
+  { id: 'update-form', steps: ['self-update'] },
+];
+
+function cardsDone(steps) {
+  const byId = new Map(steps.map((s) => [s.id, s]));
+  return CARDS.map((card) => {
+    const mine = card.steps === 'all' ? steps : card.steps.map((id) => byId.get(id));
+    const required = mine.filter((s) => !s.optional);
+    const pool = required.length ? required : mine;
+    return { id: card.id, done: pool.length > 0 && pool.every((s) => s.done) };
+  });
+}
+
 async function checklist(ctx) {
   const steps = STEPS.map(({ check, ...step }) => {
     let done = false;
@@ -455,7 +482,7 @@ async function checklist(ctx) {
     return { ...step, done };
   });
   const required = steps.filter((s) => !s.optional);
-  return { steps, done: required.filter((s) => s.done).length, total: required.length };
+  return { steps, done: required.filter((s) => s.done).length, total: required.length, cards: cardsDone(steps) };
 }
 
-module.exports = { STEPS, NO_STEP, MANUAL, checklist };
+module.exports = { STEPS, NO_STEP, MANUAL, CARDS, checklist };

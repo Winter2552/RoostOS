@@ -1117,6 +1117,25 @@ a.watch-card:focus-visible { transform: translate(4px, 4px); box-shadow: 3px 3px
 .setup-tick.done { background: var(--ink); border-color: var(--ink); color: var(--bg); }
 .setup-nudge { margin-left: 18px; color: var(--ink); }
 
+/* Finished setup cards, folded away at the bottom of Admin. */
+.done-drawer > summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  min-height: 56px; padding: 16px 22px; cursor: pointer; list-style: none;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+}
+.done-drawer > summary::-webkit-details-marker { display: none; }
+.done-drawer-title { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.done-drawer-title b { font-size: 20px; font-weight: 500; letter-spacing: -0.02em; }
+.done-drawer-title .mono { font-size: 11px; overflow-wrap: anywhere; }
+.done-drawer > summary .pill { flex: none; white-space: nowrap; }
+.done-drawer > summary .pill::after { content: ' +'; }
+.done-drawer[open] > summary .pill::after { content: ' \2212'; }
+.done-drawer[open] > summary { margin-bottom: 32px; }
+.done-drawer > summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+@media (hover: hover) {
+  .done-drawer > summary:hover { border-color: var(--ink); }
+}
+
 @media (hover: hover) {
   .setup-row:hover { background: rgba(242, 239, 233, 0.05); }
 }

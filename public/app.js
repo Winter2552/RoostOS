@@ -1773,12 +1773,43 @@ function renderStorageRequests(requests) {
 
 const setupState = { steps: [], current: null, open: null };
 
-async function loadSetup() {
+async function loadSetup(arrange = false) {
   try {
     const data = await api('GET', '/api/admin/setup');
     setupState.steps = data.steps;
     renderSetup(data);
+    if (arrange) arrangeAdminCards(data.cards);
   } catch { /* the panel keeps its last state */ }
+}
+
+// Finished setup cards fold into a "Set up" drawer at the bottom of Admin; they
+// come back out by themselves if something stops being set up. Each card leaves
+// a marker where it belongs on the page, so it returns to the same spot.
+// Only done when Admin opens, so a card never jumps while someone is using it.
+function arrangeAdminCards(cards) {
+  const drawer = $('#done-drawer');
+  const body = $('#done-drawer-body');
+  const moved = [];
+  for (const { id, done } of cards) {
+    const card = document.getElementById(id);
+    if (!card) continue;
+    if (!card.homeMarker) {
+      card.homeMarker = document.createComment(id);
+      card.before(card.homeMarker);
+    }
+    const inDrawer = card.parentNode === body;
+    if (done && !card.contains(document.activeElement)) {
+      moved.push(card);
+    } else if (!done && inDrawer && !card.contains(document.activeElement)) {
+      card.homeMarker.after(card);
+    } else if (inDrawer) {
+      moved.push(card);
+    }
+  }
+  body.append(...moved);
+  drawer.classList.toggle('hidden', moved.length === 0);
+  $('#done-drawer-count').textContent = String(moved.length);
+  $('#done-drawer-names').textContent = moved.map((c) => $('h3', c).textContent).join(' · ');
 }
 
 function renderSetup({ steps, done, total }) {
@@ -1843,6 +1874,9 @@ function openSetupAction({ view, focus, field }) {
   const jump = () => {
     const form = focus && document.getElementById(focus);
     if (!form) return;
+    // A finished card lives in the Set up drawer; open it so the card can be seen.
+    const drawer = form.closest('details');
+    if (drawer) drawer.open = true;
     form.scrollIntoView({ behavior: 'smooth', block: 'start' });
     const input = (field && form.elements[field]) || form.querySelector('input:not([type=hidden]):not([disabled]), select, textarea');
     if (input) input.focus({ preventScroll: true });
@@ -1861,7 +1895,7 @@ $('#setup-toggle').addEventListener('click', () => {
 });
 
 async function loadAdmin() {
-  loadSetup();
+  loadSetup(true);
   const [{ users }, { apps }, { requests, defaultLimitGb }, { invites, publicUrl }, { settings }, { family }] = await Promise.all([
     api('GET', '/api/admin/users'), api('GET', '/api/apps'), api('GET', '/api/admin/storage-requests'), api('GET', '/api/admin/invites'),
     api('GET', '/api/admin/settings'), api('GET', '/api/admin/family')]);

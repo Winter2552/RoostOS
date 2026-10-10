@@ -633,6 +633,15 @@
         <div class="row hidden" id="activity-more-row"><button class="btn ghost small" type="button" id="activity-more">Show more</button></div>
         <div class="msg" role="status"></div>
       </div>
+
+      <!-- Finished setup cards fold in here (see arrangeAdminCards in app.js). -->
+      <details class="done-drawer hidden" id="done-drawer">
+        <summary>
+          <span class="done-drawer-title"><b>Set up</b><span class="mono muted" id="done-drawer-names"></span></span>
+          <span class="pill" id="done-drawer-count"></span>
+        </summary>
+        <div id="done-drawer-body"></div>
+      </details>
     </section>
 
     <footer class="footer mono muted">
