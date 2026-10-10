@@ -1,0 +1,89 @@
+/* Roostflix: Roost's skin for Jellyfin's web page. Black, cream, rounded
+   posters, a header that fades in. Written against Jellyfin 10.10's page; if
+   a Jellyfin update renames something, that rule just stops applying and
+   Jellyfin shows its own look there. No fonts or images are downloaded. */
+
+:root {
+  --rf-bg: #0a0a0a;
+  --rf-cream: #f2efe9;
+  --rf-dim: #a8a49c;
+  --rf-card: #161513;
+  --rf-mono: 'Space Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+
+html, body, .backgroundContainer, .backgroundContainer.withBackdrop, .mainDrawer, .dialog {
+  background: var(--rf-bg) !important;
+  color: var(--rf-cream);
+}
+
+/* ---- name and logo: the Roost wordmark, drawn by the browser ---- */
+.pageTitleWithDefaultLogo, .pageTitleWithLogo {
+  background: none !important;
+  width: auto !important;
+  display: flex;
+  align-items: center;
+}
+.pageTitleWithDefaultLogo::before, .pageTitleWithLogo::before {
+  content: 'Roostflix';
+  font: 700 1.55rem var(--rf-mono);
+  letter-spacing: -0.05em;
+  color: var(--rf-cream);
+}
+.pageTitleWithDefaultLogo::after, .pageTitleWithLogo::after {
+  content: '';
+  width: 0.42em;
+  height: 0.85em;
+  margin-left: 0.18em;
+  background: var(--rf-cream);
+  border-radius: 0 0.5em 0 0;
+  animation: rf-blink 1.2s steps(2, jump-none) infinite;
+}
+@keyframes rf-blink { 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) {
+  .pageTitleWithDefaultLogo::after, .pageTitleWithLogo::after { animation: none; }
+}
+
+/* ---- header: clear over the page, black once you scroll ---- */
+.skinHeader, .skinHeader.semiTransparent {
+  background: linear-gradient(rgba(0, 0, 0, 0.85), rgba(0, 0, 0, 0)) !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+.skinHeader.headerBackground, .skinHeader-withBackground {
+  background: var(--rf-bg) !important;
+}
+.headerTabs .emby-tab-button, .headerButton { color: var(--rf-cream); }
+.headerTabs .emby-tab-button-active { color: var(--rf-cream); border-color: var(--rf-cream); }
+
+/* ---- rows and posters ---- */
+.sectionTitle, .sectionTitle-cards {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.card .cardBox, .cardImageContainer, .cardScalable, .cardOverlayContainer {
+  border-radius: 8px;
+}
+.cardBox:not(.visualCardBox) .cardPadder { background: var(--rf-card); }
+.cardText { color: var(--rf-cream); }
+.cardText-secondary { color: var(--rf-dim); }
+@media (hover: hover) {
+  .card .cardBox { transition: transform 0.18s ease; }
+  .card:hover .cardBox { transform: scale(1.06); z-index: 2; position: relative; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .card .cardBox { transition: none; }
+  .card:hover .cardBox { transform: none; }
+}
+
+/* ---- buttons and progress: cream on black instead of Jellyfin blue ---- */
+.button-accent, .raised.button-submit, .emby-button.button-submit, .detailButton.button-accent {
+  background: var(--rf-cream) !important;
+  color: var(--rf-bg) !important;
+  border-radius: 6px;
+  font-weight: 700;
+}
+.itemProgressBarForeground, .mdl-slider-background-lower, .emby-slider-background-lower {
+  background: var(--rf-cream) !important;
+}
+.emby-input:focus, .emby-select:focus { border-color: var(--rf-cream) !important; }
+a { color: var(--rf-cream); }

@@ -1939,6 +1939,7 @@ async function loadJellyfin() {
 function renderJellyfin(j) {
   const f = $('#jellyfin-form');
   f.url.value = j.url;
+  f.skin.checked = j.skin;
   f.apiKey.value = '';
   f.apiKey.placeholder = j.keySaved ? 'Saved · paste a new one to replace it' : '';
   $('#jellyfin-dot').className = `dot ${j.connected ? 'online' : j.url ? 'offline' : ''}`;
@@ -1956,6 +1957,17 @@ $('#jellyfin-form').addEventListener('submit', async (e) => {
     renderJellyfin(await api('PUT', '/api/admin/jellyfin', { url: f.url.value, apiKey: f.apiKey.value }));
     flash(f, 'Connected. People are linked to Jellyfin the next time they sign in to Roost.');
   } catch (err) { flash(f, err.message, false); }
+});
+
+$('#jellyfin-form').skin.addEventListener('change', async (e) => {
+  const f = $('#jellyfin-form');
+  try {
+    await api('PUT', '/api/admin/roostflix', { on: e.target.checked });
+    flash(f, e.target.checked ? 'Roostflix look on' : "Back to Jellyfin's own look");
+  } catch (err) {
+    e.target.checked = !e.target.checked;
+    flash(f, err.message, false);
+  }
 });
 
 $('#jellyfin-off').addEventListener('click', async () => {
