@@ -25,7 +25,13 @@ const HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-au
 const BACK_HOP = new Set([...HOP].filter((h) => h !== 'content-length'));
 
 class Coffee {
-  constructor({ getConfig, getDomain, target = TARGET, now = Date.now }) {
+  // The other galaxies (src/galaxies.js) reuse this gateway with their own
+  // prefix, a shorter list of open paths and their own name in error messages.
+  constructor({ getConfig, getDomain, target = TARGET, now = Date.now, prefix = PREFIX, open = OPEN, name = 'Coffee Galaxy', healthError = '' }) {
+    this.healthError = healthError;
+    this.prefix = prefix;
+    this.openPaths = open;
+    this.name = name;
     this.getConfig = getConfig;
     this.getDomain = getDomain;
     this.target = new URL(target);
@@ -56,9 +62,9 @@ class Coffee {
 
   // "/coffee/chat?x=1" → { open, path: "/chat" }; null for anything outside /coffee.
   route(pathname) {
-    if (pathname !== PREFIX && !pathname.startsWith(`${PREFIX}/`)) return null;
-    const path = pathname.slice(PREFIX.length) || '/';
-    return { path, open: OPEN.has(path), helper: path === HELPER };
+    if (pathname !== this.prefix && !pathname.startsWith(`${this.prefix}/`)) return null;
+    const path = pathname.slice(this.prefix.length) || '/';
+    return { path, open: this.openPaths.has(path), helper: path === HELPER && this.openPaths.has(HELPER) };
   }
 
   // The phone app's endpoint is open, so it gets a plain per-address limit.
@@ -122,7 +128,7 @@ class Coffee {
     out.on('error', () => {
       if (!res.headersSent) {
         res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
-        res.end('Coffee Galaxy is not answering right now.');
+        res.end(`${this.name} is not answering right now.`);
       } else {
         res.destroy();
       }
@@ -131,14 +137,14 @@ class Coffee {
     req.pipe(out);
   }
 
-  // Is Coffee Galaxy answering over the link right now?
+  // Is it answering right now?
   async health(fetchImpl = fetch, timeoutMs = 4000) {
     const started = this.now();
     try {
       const res = await fetchImpl(`${this.target.origin}/__health`, { signal: AbortSignal.timeout(timeoutMs) });
-      return res.ok ? { ok: true, ms: this.now() - started, at: this.now() } : { ok: false, at: this.now(), error: `Coffee Galaxy answered ${res.status}` };
+      return res.ok ? { ok: true, ms: this.now() - started, at: this.now() } : { ok: false, at: this.now(), error: `${this.name} answered ${res.status}` };
     } catch {
-      return { ok: false, at: this.now(), error: 'Nothing answered over the link. Check both ends are up and the address/key match' };
+      return { ok: false, at: this.now(), error: this.healthError || 'Nothing answered over the link. Check both ends are up and the address/key match' };
     }
   }
 }

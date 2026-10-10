@@ -39,6 +39,9 @@ services:
       DOCKER_HOST: tcp://roost-docker:2375
       # Drive health readings from the roost-smart service below (the read-only mount).
       SMART_DIR: /smart
+    # Lets Roost reach the other containers on this box (galaxies) by the ports they publish.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - roost-docker
     volumes:

@@ -172,6 +172,15 @@
       </div>
     </section>
 
+    <!-- Galaxies: the squares behind the Nova card -->
+    <section id="view-galaxies" class="section hidden">
+      <div class="section-head">
+        <h2>Galaxies</h2>
+        <a class="more-link mono" href="#/">← Your apps</a>
+      </div>
+      <div class="apps" id="galaxy-apps"></div>
+    </section>
+
     <!-- Nest: My Drive and Trash (public/nest.js) -->
     <section id="view-nest" class="nest hidden">
       <aside class="nest-side">
@@ -541,6 +550,20 @@
           <button class="btn ghost small" type="button" id="coffee-copy">Copy Roost's key</button>
           <button class="btn ghost small" type="button" id="coffee-secret">Make a secret</button>
           <button class="btn ghost small" type="button" id="coffee-check">Check link</button>
+        </div>
+        <div class="msg" role="status"></div>
+      </form>
+      <form class="card panel" id="galaxies-panel">
+        <h3>Galaxies</h3><span class="mono muted">Other galaxies run as Docker containers on this server, opened through Roost at nova.&lt;your domain&gt;/&lt;name&gt;. Coffee Galaxy has its own card above.</span>
+        <div id="galaxies-list"></div>
+        <p class="mono muted tls-help" id="galaxy-new" hidden></p>
+        <div class="form-grid">
+          <label class="field"><span>Name</span><input type="text" name="name" maxlength="40" placeholder="Books" autocomplete="off"></label>
+          <label class="field"><span>Port it listens on</span><input type="text" name="port" inputmode="numeric" placeholder="8200" autocomplete="off"></label>
+          <label class="field"><span>Image (optional)</span><input type="text" name="image" placeholder="ghcr.io/you/books:latest" autocomplete="off" spellcheck="false" autocapitalize="none"></label>
+        </div>
+        <div class="row">
+          <button class="btn" type="submit">Add a galaxy</button>
         </div>
         <div class="msg" role="status"></div>
       </form>

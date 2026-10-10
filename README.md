@@ -141,6 +141,10 @@ Coffee Galaxy can stay on its own server and still be opened at `nova.<your doma
 
 On every request Roost checks the sign-in, the app, and the guest pass, then adds `X-Roost-User`, `X-Roost-Admin`, `X-Roost-Ts` and `X-Roost-Sig` (HMAC-SHA256 of `ts\nuser\nadmin`, keyed with the secret text) and removes any such headers the browser sent. The Van Reader phone app's address (`/__vanstock/helper`, limited to 60 a minute per address), `/__health`, the manifest and the two icons need no Roost sign-in. The WireGuard link is made inside the Roost container, so the compose file gives it `NET_ADMIN`; remove that line if you don't use this.
 
+## Other galaxies (Docker, on this box)
+
+Every galaxy except Coffee Galaxy runs as a Docker container here. **Admin → Galaxies → Add a galaxy** takes a name and the port its container listens on, and gives you a compose file (with the shared secret, shown once) to import in ZimaOS. Roost serves it at `nova.<your domain>/<name>/` with the same one sign-in, guest passes and per-person tick as Coffee Galaxy. What a galaxy must do (the signed header, `/__health`) is in [docs/galaxies.md](docs/galaxies.md). Re-import Roost's own compose file once: it now maps `host.docker.internal` so Roost can reach the containers.
+
 ## Two-step sign-in
 
 After the password, Roost asks for a 6-digit code from an authenticator app (Google or Microsoft Authenticator, 1Password, Bitwarden, or the phone's own passwords app). It's built into Roost with no outside service, using the standard TOTP codes (RFC 6238); Roost draws the setup QR code itself.
