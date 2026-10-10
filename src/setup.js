@@ -318,6 +318,23 @@ const STEPS = [
     check: (ctx) => Boolean(ctx.coffee.enabled && ctx.coffee.secretSaved),
   },
 
+  {
+    id: 'galaxies',
+    group: 'Galaxies',
+    title: 'Add a galaxy that runs on this server',
+    why: 'Every galaxy except Coffee Galaxy runs as a Docker container here. Roost gives it a name under nova.roostos.network and the same one sign-in.',
+    how: [
+      'Under Admin → Galaxies press "Add a galaxy", give it a name and the port its container listens on.',
+      'Copy the compose file Roost shows (it holds the shared secret, shown once) into ZimaOS → App Store → Custom Install → Import.',
+      'Press Check to see Roost reach it, then tick the galaxy for the people who should have it under Admin → People.',
+      'Once, re-import Roost\'s own compose file so Roost can reach containers on this box (it adds host.docker.internal).',
+    ],
+    action: { label: 'Open Galaxies', view: 'admin', focus: 'galaxies-panel' },
+    optional: true,
+    covers: ['galaxies'],
+    check: (ctx) => ctx.galaxies.galaxies.some((g) => g.enabled && g.check && g.check.ok),
+  },
+
   // ---------- email ----------
   {
     id: 'email',

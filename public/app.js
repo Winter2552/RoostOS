@@ -676,10 +676,11 @@ function untilDate(iso) {
 // Coffee Galaxy sends signed-out visitors here with ?next=coffee; once they are
 // signed in, they go back to it.
 function followNext() {
-  if (new URLSearchParams(location.search).get('next') !== 'coffee') return false;
+  const next = new URLSearchParams(location.search).get('next');
+  if (!/^[a-z][a-z0-9-]{1,23}$/.test(next || '')) return false;
   history.replaceState(null, '', location.pathname + location.hash);
   if (/^[\d.]+$/.test(location.hostname) || !location.hostname.includes('.')) return false;
-  location.assign(`https://nova.${location.hostname}/coffee/`);
+  location.assign(`https://nova.${location.hostname}/${next}/`);
   return true;
 }
 
@@ -855,8 +856,8 @@ function myLayout() {
 }
 
 function renderAppBar() {
-  $('#app-bar').replaceChildren(...myLayout().map(({ app }) => app).filter((app) => app.url).map((app) =>
-    el('a', app.url.startsWith('#/') ? { href: app.url, 'data-view': app.url.slice(2), class: location.hash.startsWith(app.url) ? 'active' : '' } : { href: resolveUrl(app.url), target: '_blank', rel: 'noopener' },
+  $('#app-bar').replaceChildren(...myLayout().map(({ app }) => app).filter((app) => app.url || app.openUrl).map((app) =>
+    el('a', app.url.startsWith('#/') ? { href: app.url, 'data-view': app.url.slice(2), class: location.hash.startsWith(app.url) ? 'active' : '' } : { href: app.openUrl || resolveUrl(app.url), target: '_blank', rel: 'noopener' },
       icon(app.icon, 'bar-icon'), el('span', { text: app.name }))));
 }
 
@@ -871,7 +872,7 @@ function renderApps() {
   const layout = myLayout();
   list.classList.toggle('arranging', Boolean(state.arranging));
   list.replaceChildren(...layout.map(({ app, fav }, i) => {
-    const status = app.url ? state.status[app.id] || 'checking' : 'unset';
+    const status = app.url || app.openUrl ? state.status[app.id] || 'checking' : 'unset';
     const label = { online: 'Online', offline: 'Offline', checking: 'Checking', unset: 'Not set up' }[status];
     const isAdmin = state.user.role === 'admin';
     const head = el('div', {}, el('div', { class: 'mono muted' },
@@ -901,11 +902,11 @@ function renderApps() {
       el('p', { text: app.description }),
       el('div', { class: 'app-foot mono' },
         el('span', {}, el('span', { class: `dot ${status}` }), label),
-        el('span', { text: app.url ? 'Open →' : isAdmin ? 'Add link' : '' })),
+        el('span', { text: app.url || app.openUrl ? 'Open →' : isAdmin ? 'Add link' : '' })),
     ];
     // Apps built into Roost (like Nest) open in place; the rest in a new tab.
     const builtIn = app.url.startsWith('#/');
-    return app.url
+    return app.url || app.openUrl
       ? el('a', builtIn ? { class: 'card app-card', href: app.url } : { class: 'card app-card', href: app.openUrl || resolveUrl(app.url), target: '_blank', rel: 'noopener' }, children)
       : el('div', { class: 'card app-card disabled' }, children);
   }));
@@ -1886,6 +1887,7 @@ async function loadAdmin() {
   loadTls();
   loadRemote();
   loadCoffee();
+  loadGalaxies();
   loadBackupAdmin();
   loadUpdateAdmin();
   loadNestDrive();
@@ -2565,6 +2567,84 @@ $('#coffee-check').addEventListener('click', async () => {
   flash(f, 'Checking the link…');
   try { renderCoffee(await api('POST', '/api/admin/coffee/check')); flash(f, 'Checked'); } catch (err) { flash(f, err.message, false); }
   btn.disabled = false;
+});
+
+// ---------- Galaxies ----------
+
+let galaxiesShown = null;
+
+function renderGalaxies(v) {
+  galaxiesShown = v;
+  const list = $('#galaxies-list');
+  if (!v.galaxies.length) {
+    list.replaceChildren(el('p', { class: 'mono muted tls-help', text: 'No galaxies yet. Add one below, then copy the compose file Roost gives you into ZimaOS.' }));
+    return;
+  }
+  const f = $('#galaxies-panel');
+  list.replaceChildren(...v.galaxies.map((g) => {
+    const ck = g.check;
+    const [kind, headline] = !g.enabled ? ['', 'Off']
+      : ck && ck.ok ? ['online', `Answering (${ck.ms} ms)`]
+      : ck ? ['offline', 'Not answering']
+      : ['starting', 'Not checked yet'];
+    const act = (label, fn, cls = 'btn ghost small') => el('button', { class: cls, type: 'button', text: label, onclick: async (e) => {
+      e.target.disabled = true;
+      try { await fn(); } catch (err) { flash(f, err.message, false); }
+      e.target.disabled = false;
+    } });
+    const reload = (next) => { renderGalaxies(next); loadApps(); };
+    const detail = [`${g.address}`, ck && !ck.ok ? ck.error : ck ? `checked ${agoMs(ck.at)}` : '', g.openUrl ? g.openUrl.replace(/^https:\/\//, '') : ''].filter(Boolean).join(' · ');
+    return el('div', { class: 'request-row' },
+      el('div', {},
+        el('div', {}, el('span', { class: `dot ${kind}` }), el('span', { text: `${g.name} · ${headline}` })),
+        el('div', { class: 'mono muted', text: detail })),
+      el('div', { class: 'row' },
+        act('Check', async () => { flash(f, 'Checking…'); reload(await api('POST', `/api/admin/galaxies/${g.id}/check`)); flash(f, 'Checked'); }),
+        act(g.enabled ? 'Turn off' : 'Turn on', async () => { reload(await api('PUT', `/api/admin/galaxies/${g.id}`, { enabled: !g.enabled })); flash(f, 'Saved'); }),
+        act('Compose file', async () => {
+          const { compose } = await api('GET', `/api/admin/galaxies/${g.id}/compose`);
+          showGalaxyCompose(`Compose file for ${g.name}. The secret is shown only when it is made; use "New secret" to get one.`, compose);
+        }),
+        act('New secret', async () => {
+          if (!confirm(`Make a new shared secret for ${g.name}? It will refuse Roost until you put the new one in its container.`)) return;
+          const res = await api('POST', `/api/admin/galaxies/${g.id}/secret`);
+          reload(res);
+          showGalaxyCompose(`New secret for ${g.name}. Copy it now, it is shown once.`, res.compose);
+        }),
+        act('Remove', async () => {
+          if (!confirm(`Remove ${g.name}? Its card goes too; the container itself is not touched.`)) return;
+          reload(await api('DELETE', `/api/admin/galaxies/${g.id}`));
+          flash(f, 'Removed');
+        }, 'btn danger small')));
+  }));
+}
+
+// Shows a compose file with a Copy button, in the note under the list.
+function showGalaxyCompose(headline, compose) {
+  const note = $('#galaxy-new');
+  note.hidden = false;
+  note.replaceChildren(
+    el('div', { text: headline }),
+    el('pre', { class: 'mono', style: 'white-space:pre-wrap;word-break:break-all;margin:10px 0;text-transform:none;letter-spacing:0', text: compose }),
+    el('button', { class: 'link-btn mono', type: 'button', text: 'Copy', onclick: async () => { await copyPlain(compose); flash($('#galaxies-panel'), 'Copied'); } }));
+}
+
+async function loadGalaxies() {
+  if ($('#view-admin').classList.contains('hidden')) return;
+  try { renderGalaxies(await api('GET', '/api/admin/galaxies')); } catch { /* the rest of Admin still works */ }
+}
+
+$('#galaxies-panel').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    const res = await api('POST', '/api/admin/galaxies', { name: f.name.value, port: f.port.value, image: f.image.value });
+    f.reset();
+    renderGalaxies(res);
+    loadApps();
+    showGalaxyCompose('Added. Copy this into ZimaOS → App Store → Custom Install → Import. The secret is in it and is shown once.', res.compose);
+    flash(f, res.galaxies.find((g) => g.id === res.added)?.enabled ? 'Added' : 'Added, but it stays off until the domain is set under Secure connection');
+  } catch (err) { flash(f, err.message, false); }
 });
 
 $('#tls-form').addEventListener('submit', async (e) => {

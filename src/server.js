@@ -21,6 +21,7 @@ const { DriveHealth } = require('./smart');
 const { OutsideServices } = require('./outside');
 const remoteAccess = require('./remote');
 const { Coffee, validSecret, newSecret } = require('./coffee');
+const galaxies = require('./galaxies');
 const wireguard = require('./wireguard');
 const templates = require('./templates');
 const { cleanSchedule, isDue } = require('./schedule');
@@ -217,7 +218,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     // Coffee Galaxy answers on nova.<domain>, so that name needs the same record.
     extraNames: () => {
       const { domain } = store.db.settings.tls || {};
-      return domain && (store.db.settings.coffee || {}).enabled ? [`nova.${domain}`] : [];
+      const on = (store.db.settings.coffee || {}).enabled || (store.db.settings.galaxies || []).some((g) => g.enabled);
+      return domain && on ? [`nova.${domain}`] : [];
     },
     ...remoteOptions,
   });
@@ -442,7 +444,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // With the Coffee Galaxy gateway on, the sign-in cookie covers every name under
   // the domain, so signing in once works on nova.<domain> too (and signing out clears both).
   function cookieDomain(req) {
-    const domain = coffee.enabled() ? (db().settings.tls || {}).domain : '';
+    const domain = coffee.enabled() || galaxyList().some((g) => g.enabled && g.secret) ? (db().settings.tls || {}).domain : '';
     const host = requestHost(req).toLowerCase();
     return domain && (host === domain || host.endsWith(`.${domain}`)) ? domain : '';
   }
@@ -627,7 +629,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // Settings for the admin page. The mail password never leaves the server.
   function settingsView() {
     // The Cloudflare token (in tls) stays on the server.
-    const { mail: _mail, jellyfin: _jellyfin, tls: _tls, coffee: _coffee, wireguard: _wireguard, ...rest } = db().settings;
+    const { mail: _mail, jellyfin: _jellyfin, tls: _tls, coffee: _coffee, wireguard: _wireguard, galaxies: _galaxies, ...rest } = db().settings;
     return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()) };
   }
 
@@ -1031,7 +1033,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const user = requireUser(req);
       // With the Jellyfin link on, the card opens Jellyfin through Roost,
       // already signed in.
-      const apps = visibleApps(db(), user).map((a) => (a.id === 'jellyfin' && jellyfin.enabled() ? { ...a, openUrl: `${JELLYFIN_PREFIX}/` } : a));
+      const apps = visibleApps(db(), user).map((a) => (a.id === 'jellyfin' && jellyfin.enabled() ? { ...a, openUrl: `${JELLYFIN_PREFIX}/` } : galaxyOpenUrl(a)));
       send(res, 200, { apps, searchable: search.apps(user) });
     },
 
@@ -1098,7 +1100,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const host = requestHost(req);
       if (localHost(host)) uptime.setHost(host);
       const entries = await Promise.all(
-        visibleApps(db(), user).map(async (a) => [a.id, (await appProbe(a, host, probeTimeoutMs)).state]),
+        visibleApps(db(), user).map(async (a) => [a.id, (await galaxyState(a)) || (await appProbe(a, host, probeTimeoutMs)).state]),
       );
       send(res, 200, { status: Object.fromEntries(entries) });
     },
@@ -1723,6 +1725,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         tls: certs.status(),
         remote: remote.view(),
         coffee: coffeeView(),
+        galaxies: galaxiesView(),
         ticked: db().settings.setupTicked || [],
         backup: backup.readStatus(dataDir),
         update: selfUpdate.summarize(selfUpdate.readStatus(dataDir)),
@@ -2025,6 +2028,100 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 200, coffeeView());
     },
 
+    // ---------- Galaxies (Docker, on this box) ----------
+
+    'GET /api/admin/galaxies': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, galaxiesView());
+    },
+
+    // Adds a galaxy: a name and where its container listens. The shared secret
+    // is made here and shown once, inside a ready-to-paste ZimaOS compose file.
+    'POST /api/admin/galaxies': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const list = galaxyList();
+      if (list.length >= galaxies.MAX) throw new HttpError(400, `Up to ${galaxies.MAX} galaxies`);
+      const name = str(body.name, 40);
+      if (!name) throw new HttpError(400, 'Give the galaxy a name');
+      const id = galaxies.slug(str(body.id, 24) || name);
+      if (!id) throw new HttpError(400, 'The name needs 2 to 24 letters, digits or dashes, starting with a letter');
+      if (galaxies.RESERVED.has(id) || list.some((g) => g.id === id) || db().apps.some((a) => a.id === galaxies.appId(id))) throw new HttpError(409, 'That name is taken');
+      const address = galaxyAddress(body);
+      const image = galaxyImage(body);
+      const g = { id, name, image, address, enabled: Boolean((db().settings.tls || {}).domain), secret: galaxies.newSecret(), createdAt: Date.now() };
+      db().settings.galaxies = [...list, g];
+      db().apps = [...db().apps, galaxies.card(g)];
+      store.save();
+      record(req, 'settings-changed', { actor: admin.username, detail: `galaxy ${name} added` });
+      send(res, 201, { ...galaxiesView(), added: g.id, secret: g.secret, compose: galaxies.compose(g, g.secret) });
+    },
+
+    'PUT /api/admin/galaxies/:id': async (req, res, id) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const g = findGalaxy(id);
+      const changes = [];
+      if (body.name !== undefined) {
+        const name = str(body.name, 40);
+        if (!name) throw new HttpError(400, 'Give the galaxy a name');
+        if (name !== g.name) changes.push('renamed');
+        g.name = name;
+        const c = db().apps.find((a) => a.id === galaxies.appId(g.id));
+        if (c) c.name = name;
+      }
+      if (body.address !== undefined || body.port !== undefined) {
+        const address = galaxyAddress(body);
+        if (address !== g.address) changes.push('address changed');
+        g.address = address;
+      }
+      if (body.image !== undefined) g.image = galaxyImage(body);
+      if (body.enabled !== undefined) {
+        const enabled = body.enabled === true;
+        if (enabled && !(db().settings.tls || {}).domain) throw new HttpError(400, 'Set the domain under Secure connection first');
+        if (enabled !== Boolean(g.enabled)) changes.push(enabled ? 'switched on' : 'switched off');
+        g.enabled = enabled;
+      }
+      store.save();
+      if (changes.length) record(req, 'settings-changed', { actor: admin.username, detail: `galaxy ${g.name} ${changes.join(', ')}` });
+      send(res, 200, galaxiesView());
+    },
+
+    'POST /api/admin/galaxies/:id/secret': (req, res, id) => {
+      const admin = requireAdmin(req);
+      const g = findGalaxy(id);
+      g.secret = galaxies.newSecret();
+      store.save();
+      record(req, 'settings-changed', { actor: admin.username, detail: `galaxy ${g.name} shared secret made` });
+      send(res, 200, { ...galaxiesView(), secret: g.secret, compose: galaxies.compose(g, g.secret) });
+    },
+
+    // The same file with a stand-in for the secret, which Roost never shows again.
+    'GET /api/admin/galaxies/:id/compose': (req, res, id) => {
+      requireAdmin(req);
+      send(res, 200, { compose: galaxies.compose(findGalaxy(id)) });
+    },
+
+    'POST /api/admin/galaxies/:id/check': async (req, res, id) => {
+      requireAdmin(req);
+      const g = findGalaxy(id);
+      g.check = await galaxyGateway(g).health(coffeeOptions.fetchImpl);
+      store.saveSoon();
+      send(res, 200, galaxiesView());
+    },
+
+    'DELETE /api/admin/galaxies/:id': (req, res, id) => {
+      const admin = requireAdmin(req);
+      const g = findGalaxy(id);
+      db().settings.galaxies = galaxyList().filter((x) => x.id !== g.id);
+      const appKey = galaxies.appId(g.id);
+      db().apps = db().apps.filter((a) => a.id !== appKey);
+      for (const u of db().users) if (Array.isArray(u.apps)) u.apps = u.apps.filter((a) => a !== appKey);
+      store.save();
+      record(req, 'settings-changed', { actor: admin.username, detail: `galaxy ${g.name} removed` });
+      send(res, 200, galaxiesView());
+    },
+
     // ---------- HTTPS certificate ----------
 
     'GET /api/admin/tls': (req, res) => {
@@ -2173,7 +2270,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/setup|storage\/users|links|me\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/setup|admin\/galaxies|storage\/users|links|me\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart|\/secret|\/compose|\/check)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }
@@ -2244,32 +2341,114 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     };
   }
 
-  // Every request to nova.<domain>: only /coffee exists there, and everything
-  // except a few open paths needs a signed-in Roost person who has the app.
-  function serveCoffee(req, res, pathname, search) {
-    if (pathname === '/' || pathname === '/coffee') {
-      res.writeHead(302, { Location: `/coffee/${search}`, 'Cache-Control': 'no-store' });
-      return res.end();
+  // ---------- Galaxies ----------
+
+  const galaxyList = () => db().settings.galaxies || [];
+
+  function findGalaxy(id) {
+    const g = galaxyList().find((x) => x.id === id);
+    if (!g) throw new HttpError(404, 'No such galaxy');
+    return g;
+  }
+
+  function galaxyAddress(body) {
+    const a = galaxies.parseAddress(body.address !== undefined && body.address !== '' ? body.address : body.port);
+    if (!a) throw new HttpError(400, `Where it listens should look like ${galaxies.HOST}:8200 or just the port (not 8080, which is Roost)`);
+    return `${a.host}:${a.port}`;
+  }
+
+  function galaxyImage(body) {
+    const image = galaxies.cleanImage(body.image);
+    if (image === null) throw new HttpError(400, 'The image name looks wrong (for example ghcr.io/you/books:latest)');
+    return image;
+  }
+
+  function galaxyGateway(g) {
+    return galaxies.gatewayFor(g, () => (db().settings.tls || {}).domain);
+  }
+
+  function galaxiesView() {
+    const domain = (db().settings.tls || {}).domain || '';
+    return { domain, hostName: galaxies.HOST, galaxies: galaxyList().map((g) => galaxies.view(g, domain)) };
+  }
+
+  // Whether the gateway behind a galaxy card is answering, asked live and briefly.
+  // Null for every other card, which the usual probe handles.
+  async function galaxyState(a) {
+    let gw = null;
+    if (a.id === 'nova' && coffee.enabled()) gw = coffee;
+    else {
+      const g = galaxyList().find((x) => galaxies.appId(x.id) === a.id && x.enabled && x.secret);
+      if (g) gw = galaxyGateway(g);
     }
-    const found = coffee.route(pathname);
-    if (!found) throw new HttpError(404, 'Not found');
+    if (!gw) return null;
+    const out = await gw.health(coffeeOptions.fetchImpl, probeTimeoutMs);
+    return out.ok ? 'online' : 'offline';
+  }
+
+  // A galaxy's homepage card opens its address (Coffee Galaxy's too).
+  function galaxyOpenUrl(a) {
+    const domain = (db().settings.tls || {}).domain;
+    if (!domain) return a;
+    if (a.id === 'nova' && coffee.enabled()) return { ...a, openUrl: `https://nova.${domain}/coffee/` };
+    const g = galaxyList().find((x) => galaxies.appId(x.id) === a.id && x.enabled && x.secret);
+    return g ? { ...a, openUrl: `https://nova.${domain}/${g.id}/` } : a;
+  }
+
+  // Is this request for nova.<domain>, with at least one gateway behind it on?
+  function novaMatches(req) {
+    if (coffee.matches(req)) return true;
+    const domain = (db().settings.tls || {}).domain;
+    if (!domain || !galaxyList().some((g) => g.enabled && g.secret)) return false;
+    return String(req.headers.host || '').toLowerCase().replace(/:\d+$/, '') === `nova.${domain}`;
+  }
+
+  // Every request to nova.<domain>: /coffee is Coffee Galaxy, /<name> a Docker
+  // galaxy, and everything except a few open paths needs a signed-in Roost
+  // person who has the app.
+  function serveNova(req, res, pathname, search) {
+    const domain = (db().settings.tls || {}).domain;
+    const redirect = (to) => {
+      res.writeHead(302, { Location: to, 'Cache-Control': 'no-store' });
+      return res.end();
+    };
+    const live = galaxyList().filter((g) => g.enabled && g.secret);
+    if (pathname === '/') {
+      if (coffee.enabled()) return redirect(`/coffee/${search}`);
+      return live.length ? redirect(`/${live[0].id}/${search}`) : send(res, 404, { error: 'Not found' });
+    }
+    const first = pathname.split('/')[1];
+    if (coffee.enabled() && first === 'coffee') {
+      if (pathname === '/coffee') return redirect(`/coffee/${search}`);
+      const found = coffee.route(pathname);
+      if (!found) throw new HttpError(404, 'Not found');
+      return gate(req, res, { gw: coffee, found, appKey: 'nova', label: 'Coffee Galaxy', next: 'coffee', search, domain });
+    }
+    const g = live.find((x) => x.id === first);
+    if (!g) throw new HttpError(404, 'Not found');
+    if (pathname === `/${g.id}`) return redirect(`/${g.id}/${search}`);
+    const gw = galaxyGateway(g);
+    return gate(req, res, { gw, found: gw.route(pathname), appKey: galaxies.appId(g.id), label: g.name, next: g.id, search, domain });
+  }
+
+  function gate(req, res, { gw, found, appKey, label, next, search, domain }) {
     const ip = clientIp(req, trustProxy);
     if (found.open) {
-      if (found.helper && !coffee.helperAllowed(ip)) throw new HttpError(429, 'Too many requests, wait a minute');
-      return coffee.forward(req, res, { path: found.path, search, identity: null, ip, secure: secure(req) });
+      if (found.helper && !gw.helperAllowed(ip)) throw new HttpError(429, 'Too many requests, wait a minute');
+      return gw.forward(req, res, { path: found.path, search, identity: null, ip, secure: secure(req) });
     }
     const user = currentUser(req);
     if (!user) {
       if (req.method === 'GET' && String(req.headers.accept || '').includes('text/html')) {
-        res.writeHead(302, { Location: `https://${(db().settings.tls || {}).domain}/?next=coffee`, 'Cache-Control': 'no-store' });
+        res.writeHead(302, { Location: `https://${domain}/?next=${next}`, 'Cache-Control': 'no-store' });
         return res.end();
       }
       throw new HttpError(401, 'Sign in to Roost first');
     }
-    if (!visibleApps(db(), user).some((a) => a.id === 'nova')) throw new HttpError(403, 'You don’t have access to Coffee Galaxy');
-    const identity = coffee.identity(user.username, user.role === 'admin' && !twoStepNeeded(db(), user));
-    if (!identity) throw new HttpError(403, 'This username can’t be used with Coffee Galaxy');
-    coffee.forward(req, res, { path: found.path, search, identity, ip, secure: secure(req) });
+    if (!visibleApps(db(), user).some((a) => a.id === appKey)) throw new HttpError(403, `You don’t have access to ${label}`);
+    const identity = gw.identity(user.username, user.role === 'admin' && !twoStepNeeded(db(), user));
+    if (!identity) throw new HttpError(403, `This username can’t be used with ${label}`);
+    gw.forward(req, res, { path: found.path, search, identity, ip, secure: secure(req) });
   }
 
   // Runs first on every request: believes the visitor's real address only when
@@ -2299,8 +2478,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     try {
       const { pathname, searchParams } = new URL(req.url, 'http://roost');
       traffic.track(req, res, trafficApp(pathname), clientIp(req, trustProxy));
-      if (coffee.matches(req)) {
-        serveCoffee(req, res, pathname, new URL(req.url, 'http://roost').search);
+      if (novaMatches(req)) {
+        serveNova(req, res, pathname, new URL(req.url, 'http://roost').search);
       } else if (pathname === JELLYFIN_PREFIX || pathname.startsWith(`${JELLYFIN_PREFIX}/`)) {
         serveJellyfin(req, res, pathname);
       } else if (pathname.startsWith('/api/nest/')) {

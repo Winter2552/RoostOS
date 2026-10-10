@@ -542,6 +542,20 @@
         </div>
         <div class="msg" role="status"></div>
       </form>
+      <form class="card panel" id="galaxies-panel">
+        <h3>Galaxies</h3><span class="mono muted">Other galaxies run as Docker containers on this server, opened through Roost at nova.&lt;your domain&gt;/&lt;name&gt;. Coffee Galaxy has its own card above.</span>
+        <div id="galaxies-list"></div>
+        <p class="mono muted tls-help" id="galaxy-new" hidden></p>
+        <div class="form-grid">
+          <label class="field"><span>Name</span><input type="text" name="name" maxlength="40" placeholder="Books" autocomplete="off"></label>
+          <label class="field"><span>Port it listens on</span><input type="text" name="port" inputmode="numeric" placeholder="8200" autocomplete="off"></label>
+          <label class="field"><span>Image (optional)</span><input type="text" name="image" placeholder="ghcr.io/you/books:latest" autocomplete="off" spellcheck="false" autocapitalize="none"></label>
+        </div>
+        <div class="row">
+          <button class="btn" type="submit">Add a galaxy</button>
+        </div>
+        <div class="msg" role="status"></div>
+      </form>
       <form class="card panel" id="mail-form">
         <h3>Email</h3><span class="mono muted">For "Forgot password?" and emailed invites. Roost hands mail to a relay such as Resend or Brevo; see the README.</span>
         <div class="form-grid">
