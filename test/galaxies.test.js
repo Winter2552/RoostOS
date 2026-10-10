@@ -143,6 +143,15 @@ test('with the domain set it switches on, and Check reaches the container', asyn
   const checked = await call('POST', '/api/admin/galaxies/books/check', null, admin);
   assert.equal(checked.body.galaxies[0].check.ok, true);
   assert.equal((await call('POST', '/api/admin/galaxies/nope/check', null, admin)).status, 404);
+  // The Nova card becomes the way into a Galaxies page; galaxy cards are marked so the dashboard leaves them out.
+  const listed = (await call('GET', '/api/apps', null, admin)).body.apps;
+  assert.equal(listed.find((a) => a.id === 'nova').url, '#/galaxies');
+  assert.equal(listed.find((a) => a.id === 'nova').coffeeUrl, '');
+  assert.equal(listed.find((a) => a.id === 'galaxy-books').galaxy, true);
+  assert.equal((await call('GET', '/api/apps/status', null, admin)).body.status.nova, 'online');
+  // Saving the app list back does not store that link.
+  await call('PUT', '/api/admin/apps', { apps: listed }, admin);
+  assert.equal((await call('GET', '/api/admin/settings', null, admin)).status, 200);
   // The card's dot says whether it is answering.
   assert.equal((await call('GET', '/api/apps/status', null, admin)).body.status['galaxy-books'], 'online');
   // The homepage card opens it.
@@ -158,6 +167,15 @@ test('signed-out browsers go to Roost and come back to the galaxy', async () => 
   assert.equal((await nova('/books')).headers.location, '/books/');
   assert.equal((await nova('/nope/')).status, 404);
   assert.equal((await nova('/coffee/')).status, 404);
+});
+
+test('someone given a galaxy but not Nova still gets Nova as the way in, without Coffee\'s link', async () => {
+  await call('POST', '/api/admin/users', { username: 'lou', password: 'password1', apps: ['galaxy-books'] }, admin);
+  const lou = await login('lou');
+  const apps = (await call('GET', '/api/apps', null, lou)).body.apps;
+  assert.deepEqual(apps.map((a) => a.id).sort(), ['galaxy-books', 'nova']);
+  assert.equal(apps.find((a) => a.id === 'nova').coffeeUrl, '');
+  assert.equal((await call('GET', '/api/apps/status', null, lou)).body.status.nova, 'online');
 });
 
 test('only people with the galaxy get through, with a signed header and the prefix stripped', async () => {

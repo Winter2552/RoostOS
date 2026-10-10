@@ -577,6 +577,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const schedule = cleanSchedule(a.restartSchedule);
       if (schedule instanceof Error) throw new HttpError(400, `${app.name || 'App'}: ${schedule.message}`);
       if (schedule) app.restartSchedule = schedule;
+      // The Nova card's link to the Galaxies page is added when apps are listed, not saved.
+      if (app.id === 'nova' && app.url === '#/galaxies') app.url = '';
       if (!app.name) throw new HttpError(400, 'Every app needs a name');
       if (!/^[a-z0-9-]+$/i.test(app.id) || seen.has(app.id)) throw new HttpError(400, 'Bad app id');
       if (!validAppUrl(app.url)) throw new HttpError(400, `${app.name}: link must start with http:// or https://`);
@@ -1033,7 +1035,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const user = requireUser(req);
       // With the Jellyfin link on, the card opens Jellyfin through Roost,
       // already signed in.
-      const apps = visibleApps(db(), user).map((a) => (a.id === 'jellyfin' && jellyfin.enabled() ? { ...a, openUrl: `${JELLYFIN_PREFIX}/` } : galaxyOpenUrl(a)));
+      const apps = appsFor(user).map((a) => (a.id === 'jellyfin' && jellyfin.enabled() ? { ...a, openUrl: `${JELLYFIN_PREFIX}/` } : galaxyOpenUrl(a, user)));
       send(res, 200, { apps, searchable: search.apps(user) });
     },
 
@@ -1100,9 +1102,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const host = requestHost(req);
       if (localHost(host)) uptime.setHost(host);
       const entries = await Promise.all(
-        visibleApps(db(), user).map(async (a) => [a.id, (await galaxyState(a)) || (await appProbe(a, host, probeTimeoutMs)).state]),
+        appsFor(user).map(async (a) => [a.id, (await galaxyState(a)) || (await appProbe(a, host, probeTimeoutMs)).state]),
       );
-      send(res, 200, { status: Object.fromEntries(entries) });
+      const status = Object.fromEntries(entries);
+      // Coffee Galaxy's own dot, for its square on the Galaxies page.
+      if (coffee.enabled() && entries.some(([id]) => id === 'nova')) status.coffee = (await coffee.health(coffeeOptions.fetchImpl, probeTimeoutMs)).ok ? 'online' : 'offline';
+      send(res, 200, { status });
     },
 
     'GET /api/system': (req, res) => {
@@ -2373,26 +2378,38 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   }
 
   // Whether the gateway behind a galaxy card is answering, asked live and briefly.
-  // Null for every other card, which the usual probe handles.
+  // Null for every other card, which the usual probe handles. The Nova card
+  // itself is a menu, so it is simply "online" while there is something in it.
   async function galaxyState(a) {
-    let gw = null;
-    if (a.id === 'nova' && coffee.enabled()) gw = coffee;
-    else {
-      const g = galaxyList().find((x) => galaxies.appId(x.id) === a.id && x.enabled && x.secret);
-      if (g) gw = galaxyGateway(g);
-    }
-    if (!gw) return null;
-    const out = await gw.health(coffeeOptions.fetchImpl, probeTimeoutMs);
+    if (a.id === 'nova') return novaHasGalaxies() ? 'online' : null;
+    const g = galaxyList().find((x) => galaxies.appId(x.id) === a.id && x.enabled && x.secret);
+    if (!g) return null;
+    const out = await galaxyGateway(g).health(coffeeOptions.fetchImpl, probeTimeoutMs);
     return out.ok ? 'online' : 'offline';
   }
 
-  // A galaxy's homepage card opens its address (Coffee Galaxy's too).
-  function galaxyOpenUrl(a) {
+  const novaHasGalaxies = () => coffee.enabled() || galaxyList().some((g) => g.enabled && g.secret);
+
+  // The apps a person sees on the dashboard: theirs, plus Nova as the way in
+  // when they were given a galaxy but not Nova itself.
+  function appsFor(user) {
+    const mine = visibleApps(db(), user);
+    const nova = db().apps.find((a) => a.id === 'nova');
+    return nova && !mine.includes(nova) && mine.some((a) => a.id.startsWith('galaxy-')) ? [...mine, nova] : mine;
+  }
+
+  // Cards for the Galaxies page. The Nova card opens that page; Coffee Galaxy is
+  // an entry in it (coffeeUrl), and every other galaxy keeps its own card, which
+  // the dashboard leaves out (galaxy: true).
+  function galaxyOpenUrl(a, user) {
     const domain = (db().settings.tls || {}).domain;
-    if (!domain) return a;
-    if (a.id === 'nova' && coffee.enabled()) return { ...a, openUrl: `https://nova.${domain}/coffee/` };
-    const g = galaxyList().find((x) => galaxies.appId(x.id) === a.id && x.enabled && x.secret);
-    return g ? { ...a, openUrl: `https://nova.${domain}/${g.id}/` } : a;
+    if (a.id === 'nova') {
+      const has = visibleApps(db(), user).some((x) => x.id === 'nova');
+      return { ...a, url: a.url || '#/galaxies', coffeeUrl: has && domain && coffee.enabled() ? `https://nova.${domain}/coffee/` : '' };
+    }
+    const g = galaxyList().find((x) => galaxies.appId(x.id) === a.id);
+    if (!g) return a;
+    return { ...a, galaxy: true, ...(domain && g.enabled && g.secret ? { openUrl: `https://nova.${domain}/${g.id}/` } : {}) };
   }
 
   // Is this request for nova.<domain>, with at least one gateway behind it on?

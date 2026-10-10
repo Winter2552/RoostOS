@@ -720,9 +720,10 @@ function renderUser() {
   $('#profile-form').email.value = u.email || '';
 }
 
-const VIEWS = ['apps', 'nest', 'glint', 'status', 'profile', 'admin'];
+const VIEWS = ['apps', 'galaxies', 'nest', 'glint', 'status', 'profile', 'admin'];
 
 const hasNest = () => state.apps.some((a) => a.id === 'nest' && a.url === '#/nest');
+const hasGalaxies = () => state.apps.some((a) => a.id === 'nova' && a.url === '#/galaxies');
 const hasGlint = () => state.apps.some((a) => a.id === 'glint' && a.url === '#/glint');
 
 function route() {
@@ -730,7 +731,7 @@ function route() {
   if (!state.user || needsSecureStep(state.user)) return;
   const [first, ...rest] = location.hash.replace(/^#\/?/, '').split('/');
   let view = first || 'apps';
-  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'status' && isGuest(state.user)) || (view === 'nest' && !hasNest()) || (view === 'glint' && !hasGlint())) view = 'apps';
+  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'status' && isGuest(state.user)) || (view === 'galaxies' && !hasGalaxies()) || (view === 'nest' && !hasNest()) || (view === 'glint' && !hasGlint())) view = 'apps';
   for (const v of VIEWS) $(`#view-${v}`).classList.toggle('hidden', v !== view);
   document.querySelectorAll('#account-menu a').forEach((a) => {
     if (a.dataset.view === view) a.setAttribute('aria-current', 'page');
@@ -742,6 +743,7 @@ function route() {
   if (view === 'admin') { loadAdmin(); loadJellyfin(); }
   if (view === 'profile') { if (!isGuest(state.user)) loadStorage(); loadTwoStep(); loadDevices(); }
   if (view === 'status') loadStatus();
+  if (view === 'galaxies') renderGalaxyPage();
   if (view === 'nest') window.nestOpen(rest);
   if (view === 'glint') window.glintOpen(rest);
   else if (view !== 'nest') document.title = state.serverName;
@@ -845,7 +847,8 @@ async function loadApps() {
 function layoutApps(order, favs) {
   const pos = new Map(order.map((id, i) => [id, i]));
   const rank = (app, i) => (pos.has(app.id) ? pos.get(app.id) : order.length + i);
-  return state.apps
+  // Galaxy squares live on their own page, behind the Nova card.
+  return state.apps.filter((a) => !a.galaxy)
     .map((app, i) => ({ app, fav: favs.has(app.id), rank: rank(app, i) }))
     .sort((a, b) => b.fav - a.fav || a.rank - b.rank);
 }
@@ -863,7 +866,8 @@ function renderAppBar() {
 
 function renderApps() {
   const list = $('#apps');
-  const total = state.apps.length;
+  const total = state.apps.filter((a) => !a.galaxy).length;
+  if (!$('#view-galaxies').classList.contains('hidden')) renderGalaxyPage();
   renderArrangeActions();
   if (!total) {
     list.replaceChildren(el('div', { class: 'empty mono', text: 'No apps yet. Ask an admin to give you access.' }));
@@ -910,6 +914,24 @@ function renderApps() {
       ? el('a', builtIn ? { class: 'card app-card', href: app.url } : { class: 'card app-card', href: app.openUrl || resolveUrl(app.url), target: '_blank', rel: 'noopener' }, children)
       : el('div', { class: 'card app-card disabled' }, children);
   }));
+}
+
+// ---------- the Galaxies page (opened from the Nova card) ----------
+
+function renderGalaxyPage() {
+  const nova = state.apps.find((a) => a.id === 'nova');
+  const squares = [
+    ...(nova && nova.coffeeUrl ? [{ id: 'coffee', name: 'Coffee Galaxy', description: 'Your coffee machine library and Nova, opened through Roost.', icon: nova.icon, href: nova.coffeeUrl, status: state.status.coffee || 'checking' }] : []),
+    ...state.apps.filter((a) => a.galaxy && a.openUrl).map((a) => ({ id: a.id, name: a.name, description: a.description, icon: a.icon, href: a.openUrl, status: state.status[a.id] || 'checking' })),
+  ];
+  const label = { online: 'Online', offline: 'Offline', checking: 'Checking' };
+  $('#galaxy-apps').replaceChildren(...(squares.length ? squares.map((g) =>
+    el('a', { class: 'card app-card', href: g.href, target: '_blank', rel: 'noopener' },
+      icon(g.icon),
+      el('div', {}, el('div', { class: 'mono muted', text: 'Galaxy' }), el('h3', { text: g.name })),
+      el('p', { text: g.description }),
+      el('div', { class: 'app-foot mono' }, el('span', {}, el('span', { class: `dot ${g.status}` }), label[g.status]), el('span', { text: 'Open →' }))))
+    : [el('div', { class: 'empty mono', text: state.user.role === 'admin' ? 'No galaxies are switched on yet. Add one under Admin → Galaxies.' : 'No galaxies yet. Ask an admin to give you access.' })]));
 }
 
 // ---------- continue watching ----------
