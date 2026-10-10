@@ -4,5 +4,5 @@
 FROM node:22-alpine
 RUN apk add --no-cache git docker-cli docker-cli-compose
 WORKDIR /app
-COPY update-service.js ./
+COPY update-service.js override.js ./
 CMD ["node", "update-service.js"]

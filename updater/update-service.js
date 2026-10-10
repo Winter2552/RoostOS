@@ -25,10 +25,15 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { mergeOverride } = require('./override');
 
 const REQUEST_FILE = 'update-request.json';
 const STATUS_FILE = 'update-status.json';
 const ACTIONS = new Set(['check', 'apply']);
+const DRIVE_REQUEST_FILE = 'nest-drive-request.json';
+const DRIVE_STATUS_FILE = 'nest-drive-status.json';
+const OVERRIDE_FILE = 'docker-compose.override.yml';
+const DRIVE_NAME = /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$/;
 // The services an update rebuilds and restarts. The others (Docker window,
 // drive health, this updater) keep running as they are.
 const SERVICES = ['roost', 'roost-backup'];
@@ -110,7 +115,45 @@ function takeRequest(dataDir) {
   return ACTIONS.has(action) ? action : null;
 }
 
-function create({ dataDir, srcDir, exec = run, now = () => Date.now(), wait = sleep, healthWaitMs = HEALTH_WAIT_MS, composeProject = PROJECT }) {
+function takeDriveRequest(dataDir) {
+  const file = path.join(dataDir, DRIVE_REQUEST_FILE);
+  let req = null;
+  try {
+    req = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+  }
+  fs.rmSync(file, { force: true });
+  if (!req || (req.action !== 'list' && req.action !== 'move')) return null;
+  return { action: req.action, drive: typeof req.drive === 'string' ? req.drive : '' };
+}
+
+// Drives plugged into the server: the folders under /media that are their own
+// mount (a different device number from /media itself), with free space.
+function listDrives(mediaDir) {
+  let rootDev;
+  try {
+    rootDev = fs.statSync(mediaDir).dev;
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const name of fs.readdirSync(mediaDir)) {
+    if (!DRIVE_NAME.test(name)) continue;
+    try {
+      const dir = path.join(mediaDir, name);
+      const st = fs.statSync(dir);
+      if (!st.isDirectory() || st.dev === rootDev) continue;
+      const fsStat = fs.statfsSync(dir);
+      out.push({ name, totalBytes: fsStat.blocks * fsStat.bsize, freeBytes: fsStat.bavail * fsStat.bsize });
+    } catch {
+      // Not readable: not offered.
+    }
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function create({ dataDir, srcDir, exec = run, now = () => Date.now(), wait = sleep, healthWaitMs = HEALTH_WAIT_MS, composeProject = PROJECT, mediaDir = '/hostmedia', mediaHost = '/media', drives = listDrives }) {
   const statusFile = path.join(dataDir, STATUS_FILE);
   let status = { state: 'idle', phase: null, behind: 0, commits: [], dirty: [], last: null };
   try {
@@ -305,6 +348,124 @@ function create({ dataDir, srcDir, exec = run, now = () => Date.now(), wait = sl
     return (await waitHealthy('roost')).ok;
   }
 
+
+  // ----- Nest's drive: which drive Nest and Glint keep their files on -----
+
+  const driveFile = path.join(dataDir, DRIVE_STATUS_FILE);
+  let driveStatus = { last: null };
+  try {
+    driveStatus = { ...driveStatus, ...JSON.parse(fs.readFileSync(driveFile, 'utf8')) };
+  } catch {
+    // First run.
+  }
+  const saveDrive = () => {
+    driveStatus.updatedAt = new Date(now()).toISOString();
+    try {
+      writeJson(driveFile, driveStatus);
+    } catch (err) {
+      console.error('Roost updater: could not write the drive status:', err.message);
+    }
+  };
+
+  // Where /nest comes from on the host right now.
+  async function nestSource() {
+    const r = await docker(['inspect', '-f', '{{json .Mounts}}', 'roost']);
+    try {
+      const m = JSON.parse(r.out).find((x) => x.Destination === '/nest');
+      return m ? m.Source : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function refreshDrives() {
+    driveStatus.drives = drives(mediaDir);
+    driveStatus.current = await nestSource();
+    saveDrive();
+  }
+
+  // Nest is empty (Roost checked before asking), so nothing is copied: the
+  // mounts are pointed at a new folder on the chosen drive and Roost restarts.
+  async function moveNest(name) {
+    const result = { at: new Date(now()).toISOString(), drive: name };
+    driveStatus.state = 'moving';
+    saveDrive();
+    const overrideFile = path.join(srcDir, OVERRIDE_FILE);
+    let before = null;
+    let wrote = false;
+    try {
+      try {
+        const b = JSON.parse(fs.readFileSync(path.join(dataDir, 'backup-status.json'), 'utf8'));
+        if (b.running && now() - Date.parse(b.updatedAt) < 15 * 60 * 1000) throw new Stop('A backup is running. Try again when it has finished.');
+      } catch (err) {
+        if (err instanceof Stop) throw err;
+      }
+      if (!DRIVE_NAME.test(name)) throw new Stop("That isn't a drive name.");
+      driveStatus.drives = drives(mediaDir);
+      const drive = driveStatus.drives.find((d) => d.name === name);
+      if (!drive) throw new Stop(`Couldn't find a drive called “${name}” plugged into the server.`);
+      const owner = await docker(['inspect', '-f', '{{index .Config.Labels "com.docker.compose.project"}}', 'roost']);
+      if (owner.code !== 0 || owner.out !== composeProject) throw new Stop("Roost wasn't started from this folder's compose file, so it can't be moved safely from here.", tail(owner.out));
+      const hostDrive = path.posix.join(mediaHost, name);
+      const hostNest = path.posix.join(hostDrive, 'roost-nest');
+      driveStatus.current = await nestSource();
+      if (driveStatus.current === hostNest) throw new Stop('Nest is already on that drive.');
+
+      phase2('folder');
+      fs.mkdirSync(path.join(mediaDir, name, 'roost-nest'), { recursive: true });
+      try {
+        before = fs.readFileSync(overrideFile, 'utf8');
+      } catch (err) {
+        if (err.code !== 'ENOENT') throw err;
+      }
+      phase2('settings');
+      let merged;
+      try {
+        merged = mergeOverride(before, hostDrive, hostNest);
+      } catch (err) {
+        throw new Stop(err.message);
+      }
+      fs.writeFileSync(overrideFile, merged);
+      wrote = true;
+      const cfg = await compose(['config', '-q']);
+      if (cfg.code !== 0) throw new Stop("The new settings didn't pass Docker's check, so nothing was changed.", tail(cfg.out));
+
+      phase2('restart');
+      const up = await compose(['up', '-d', '--no-deps', ...SERVICES], { timeoutMs: BUILD_TIMEOUT_MS });
+      if (up.code !== 0) throw new Stop("Roost couldn't be restarted with Nest on that drive.", tail(up.out));
+      phase2('health');
+      const ok = await waitHealthy('roost');
+      if (!ok.ok) throw new Stop(`Roost didn't start properly on the new drive (${ok.seen || 'no answer'}).`, tail((await docker(['logs', '--tail', '15', 'roost'])).out));
+      if ((await nestSource()) !== hostNest) throw new Stop("Roost started, but Nest isn't on the new drive.");
+      result.ok = true;
+      result.to = hostNest;
+    } catch (err) {
+      const stop = err instanceof Stop ? err : new Stop(`Something went wrong: ${err.message}`);
+      result.ok = false;
+      result.error = stop.message;
+      result.detail = stop.detail;
+      if (wrote) {
+        phase2('rollback');
+        if (before === null) fs.rmSync(overrideFile, { force: true });
+        else fs.writeFileSync(overrideFile, before);
+        const up = await compose(['up', '-d', '--no-deps', '--no-build', ...SERVICES], { timeoutMs: BUILD_TIMEOUT_MS });
+        result.rolledBack = up.code === 0 && (await waitHealthy('roost')).ok;
+      }
+    } finally {
+      result.finishedAt = new Date(now()).toISOString();
+      driveStatus.last = result;
+      driveStatus.state = 'idle';
+      driveStatus.phase = null;
+      driveStatus.current = await nestSource();
+      driveStatus.drives = drives(mediaDir);
+      saveDrive();
+    }
+  }
+  function phase2(name) {
+    driveStatus.phase = name;
+    saveDrive();
+  }
+
   // ----- the loop -----
 
   let nextAuto = now() + START_CHECK_MS;
@@ -312,6 +473,12 @@ function create({ dataDir, srcDir, exec = run, now = () => Date.now(), wait = sl
     if (busy) return;
     busy = true;
     try {
+      const driveRequest = takeDriveRequest(dataDir);
+      if (driveRequest) {
+        if (driveRequest.action === 'move') await moveNest(driveRequest.drive);
+        else await refreshDrives();
+        return;
+      }
       const request = takeRequest(dataDir);
       if (request === 'apply') {
         await apply();
@@ -329,6 +496,7 @@ function create({ dataDir, srcDir, exec = run, now = () => Date.now(), wait = sl
   }
 
   save();
+  refreshDrives().catch(() => {});
   return { tick, check, apply, status: () => status };
 }
 
@@ -341,4 +509,4 @@ if (require.main === module) {
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => process.exit(0));
 }
 
-module.exports = { create, run, repoOf, takeRequest, REQUEST_FILE, STATUS_FILE, SERVICES };
+module.exports = { create, run, repoOf, takeRequest, takeDriveRequest, listDrives, DRIVE_REQUEST_FILE, DRIVE_STATUS_FILE, REQUEST_FILE, STATUS_FILE, SERVICES };

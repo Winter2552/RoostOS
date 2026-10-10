@@ -154,6 +154,9 @@ services:
       # https://github.com/Winter2552/RoostOS). Point the left side at it.
       - /DATA/AppData/roost-src:/src
       - /var/run/docker.sock:/var/run/docker.sock
+      # The drives plugged into the server, so Admin → Storage can list them and
+      # make Nest's folder on the one you pick. Nothing else in here is touched.
+      - /media:/hostmedia
 
 volumes:
   smart:
