@@ -14,6 +14,7 @@ const mail = require('./mail');
 const setup = require('./setup');
 const backup = require('./backup');
 const selfUpdate = require('./self-update');
+const nestDrive = require('./nest-drive');
 const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor, restartContainer } = require('./docker');
 const { DriveHealth } = require('./smart');
@@ -1534,6 +1535,41 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (summary.conflicts.length) throw new HttpError(409, `You changed ${summary.conflicts.join(', ')} on the server, and this update changes it too. Move your own settings into docker-compose.override.yml first.`);
       selfUpdate.writeRequest(dataDir, 'apply');
       record(req, 'settings-changed', { actor: admin.username, detail: `Roost update started (${summary.behind} ${summary.behind === 1 ? 'change' : 'changes'})` });
+      send(res, 202, { ok: true });
+    },
+
+    // ---------- which drive Nest keeps its files on ----------
+    // Admin → Storage. Roost leaves a request for the roost-updater service,
+    // which lists the plugged-in drives and switches Nest's folder over.
+
+    'GET /api/admin/nest-drive': (req, res) => {
+      requireAdmin(req);
+      const status = nestDrive.readStatus(dataDir);
+      const updater = selfUpdate.summarize(selfUpdate.readStatus(dataDir)).state;
+      // Keep the drive list fresh without polling: look again when the card is opened.
+      if (updater !== 'off' && updater !== 'stopped' && nestDrive.stale(status) && !nestDrive.hasRequest(dataDir)) {
+        nestDrive.writeRequest(dataDir, { action: 'list' });
+      }
+      const summary = nestDrive.summarize(status, nestDir || path.join(dataDir, 'nest'));
+      send(res, 200, { ...summary, updater, requested: nestDrive.hasRequest(dataDir) });
+    },
+
+    'POST /api/admin/nest-drive/move': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      if (body.confirm !== true) throw new HttpError(400, 'Confirm the move first');
+      const drive = String(body.drive || '');
+      const updater = selfUpdate.summarize(selfUpdate.readStatus(dataDir)).state;
+      if (updater === 'off' || updater === 'stopped') throw new HttpError(409, 'The updater isn’t running. Check that roost-updater is started.');
+      if (updater === 'applying') throw new HttpError(409, 'Roost is being updated right now');
+      const status = nestDrive.readStatus(dataDir);
+      if (nestDrive.hasRequest(dataDir) || (status && status.state === 'moving')) throw new HttpError(409, 'A move is already on its way');
+      const summary = nestDrive.summarize(status, nestDir || path.join(dataDir, 'nest'));
+      if (summary.state === 'off') throw new HttpError(409, 'Roost hasn’t seen the drives yet. Try again in a moment.');
+      if (!summary.empty) throw new HttpError(409, 'Nest already has files in it, so they would need copying across first. See the guide in the README.');
+      if (!summary.drives.some((d) => d.name === drive)) throw new HttpError(404, 'That drive isn’t plugged in');
+      nestDrive.writeRequest(dataDir, { action: 'move', drive });
+      record(req, 'settings-changed', { actor: admin.username, target: 'nest', detail: `Moving Nest to the drive “${drive}”` });
       send(res, 202, { ok: true });
     },
 

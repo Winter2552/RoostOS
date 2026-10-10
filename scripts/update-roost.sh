@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Updates Roost on the server, from SSH. Run it as the user you use for docker:
 #
-#   curl -fsSL https://raw.githubusercontent.com/Winter2552/RoostOS/main/scripts/update-roost.sh -o update-roost.sh
-#   bash update-roost.sh            # shows what is new, asks, then updates
+#   curl -fsSL https://raw.githubusercontent.com/Winter2552/RoostOS/main/scripts/update-roost.sh -o /tmp/update-roost.sh
+#   bash /tmp/update-roost.sh            # shows what is new, asks, then updates
 #
 # Options:  -y  don't ask         --check  only show what is new
 # Optional: a folder as the first word (default: the folder you are in if it is

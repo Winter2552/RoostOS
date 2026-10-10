@@ -225,12 +225,14 @@ Connect Jellyfin under **Admin → Jellyfin sign-in**: its address as Roost reac
 
 If the new version doesn't start, the previous image and code are put back and the card says why (with the last lines of Roost's log under "Technical details"). Updates are written to Admin → Activity. An update is refused while a backup is running, and when the server's copy of the code has changes of its own that the update also changes: keep your own compose edits (drive folders, time zone) in `docker-compose.override.yml` next to `docker-compose.yml`, which Docker merges in and git never touches.
 
-**From SSH** (the first time, or whenever Roost itself is down), `scripts/update-roost.sh` does the same job by hand:
+**From SSH** (the first time, or whenever Roost itself is down), `scripts/update-roost.sh` does the same job by hand. It is saved in `/tmp` because some home folders, ZimaOS included, refuse downloads:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/Winter2552/RoostOS/main/scripts/update-roost.sh -o update-roost.sh
-bash update-roost.sh              # lists what's new, asks, then updates (-y skips the question, --check only looks)
+curl -fsSL https://raw.githubusercontent.com/Winter2552/RoostOS/main/scripts/update-roost.sh -o /tmp/update-roost.sh
+bash /tmp/update-roost.sh              # lists what's new, asks, then updates (-y skips the question, --check only looks)
 ```
+
+**Putting Nest on another drive.** While Nest is still empty, Admin → Storage → "Where Nest keeps its files" lists the drives plugged into the server (the `roost-updater` service needs its `/media:/hostmedia` line, so redeploy once after updating). Pick one and press Move Nest here: the updater makes a `roost-nest` folder on it, adds the Nest, backup and status-page lines to `docker-compose.override.yml` (keeping the rest of that file), restarts Roost and its backups, and checks Nest is really on the new drive. If anything fails the old file and setting are put back. Nothing is copied, so with files already in Nest the button refuses; copy them by hand first.
 
 It finds Docker and Roost's folder (cloning it first if it isn't there), fast-forwards the code while keeping any edits you made by hand (a copy is saved next to the folder), rebuilds and restarts with `docker compose`, waits for Roost to report healthy, and puts the old version back if it doesn't. It also starts the `roost-updater` service the first time, so Admin → Updates works afterwards. Your accounts and files live outside the folder and aren't touched.
 

@@ -377,6 +377,26 @@
         <div id="storage-requests-admin"></div>
       </div>
 
+      <div class="card panel hidden" id="nestdrive-panel">
+        <h3>Where Nest keeps its files</h3><span class="mono muted" id="nestdrive-sub">Nest and Glint store everyone's files on one drive.</span>
+        <p class="tls-state" id="nestdrive-state"><span class="dot"></span><span>Checking…</span></p>
+        <p class="mono muted tls-help hidden" id="nestdrive-note"></p>
+        <details class="update-tech mono muted hidden" id="nestdrive-tech"><summary>Technical details</summary><pre id="nestdrive-tech-text"></pre></details>
+        <div class="row hidden" id="nestdrive-pick">
+          <select id="nestdrive-select" aria-label="Drive for Nest"></select>
+          <button class="btn" type="button" id="nestdrive-move">Move Nest here</button>
+        </div>
+        <div class="update-confirm hidden" id="nestdrive-confirm" role="alertdialog" aria-labelledby="nestdrive-confirm-text">
+          <p class="mono" id="nestdrive-confirm-text"></p>
+          <div class="row">
+            <button class="btn" type="button" id="nestdrive-yes">Move now</button>
+            <button class="btn ghost small" type="button" id="nestdrive-no">Not now</button>
+          </div>
+        </div>
+        <button class="link-btn mono hidden" type="button" id="nestdrive-change">Change drive</button>
+        <div class="msg" role="status"></div>
+      </div>
+
       <form class="card panel" id="notice-form">
         <h3>Notice</h3><span class="mono muted">A short message at the top of everyone's dashboard, e.g. for maintenance</span>
         <div class="form-grid">
