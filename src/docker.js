@@ -86,6 +86,9 @@ async function readContainers(dockerHost, timeoutMs) {
         id: c.Id.slice(0, 12),
         name: String((c.Names && c.Names[0]) || c.Id).replace(/^\//, ''),
         image: c.Image,
+        // For update checks: the tag it was started from and the image it runs.
+        imageRef: (info.Config && info.Config.Image) || c.Image,
+        imageId: info.Image || c.ImageID || '',
         project: (c.Labels && c.Labels['com.docker.compose.project']) || '',
         state: st.Status || c.State, // running, exited, restarting, paused, created, dead
         health: (st.Health && st.Health.Status) || null, // healthy, unhealthy, starting
@@ -99,6 +102,20 @@ async function readContainers(dockerHost, timeoutMs) {
     return { containers, restartable: await restartable };
   } catch (err) {
     return { error: err.message };
+  }
+}
+
+// The image a tag points at now, and the registry digests it was pulled as.
+// → { id, repoDigests } or null (no such image, or images can't be read).
+async function inspectImage(dockerHost, ref, timeoutMs = 2500) {
+  const t = target(dockerHost);
+  // Tags are plain names; anything else could reach another API path.
+  if (!t || !/^[\w][\w./:-]*$/.test(String(ref)) || ref.includes('..')) return null;
+  try {
+    const img = await getJson(t, `/images/${ref}/json`, timeoutMs);
+    return { id: img.Id, repoDigests: img.RepoDigests || [] };
+  } catch {
+    return null;
   }
 }
 
@@ -131,4 +148,4 @@ async function restartContainer(dockerHost, name, timeoutMs = 60 * 1000) {
   }
 }
 
-module.exports = { listContainers, containersFor, restartContainer, target };
+module.exports = { listContainers, containersFor, restartContainer, inspectImage, target };

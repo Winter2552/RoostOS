@@ -5,6 +5,7 @@
 //   GET  /containers/json             the container list
 //   GET  /containers/<id or name>/json one container's state and restart count
 //                                      only (never its environment, which can hold secrets)
+//   GET  /images/<name:tag>/json       an image's id and registry digests only, for "update available"
 //   GET  /events                       container start/stop/crash events, for the uptime history
 //   POST /containers/<name>/restart   only for names in ROOST_RESTARTABLE
 //   GET  /roost/restartable           that list, so Roost knows which to offer
@@ -18,6 +19,8 @@ const SOCKET = '/var/run/docker.sock';
 const STOP_WAIT_S = 10;
 const EVENT_FILTERS = encodeURIComponent(JSON.stringify({ type: ['container'] }));
 const NAME = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
+// An image name as docker pull takes it (registry/path:tag or @sha256:...).
+const IMAGE = /^[a-zA-Z0-9][a-zA-Z0-9_.:/@-]{0,255}$/;
 
 function parseNames(spec) {
   return [...new Set(String(spec || '').split(',').map((s) => s.trim()).filter((s) => NAME.test(s)))];
@@ -39,9 +42,13 @@ function allowed(method, rawUrl, restartable) {
   }
   // Always the same filter and never since/until, whatever the caller asked for.
   if (method === 'GET' && path === '/events') return { path: `/events?filters=${EVENT_FILTERS}`, stream: true };
+  const im = path.match(/^\/images\/(.+)\/json$/);
+  if (method === 'GET' && im && IMAGE.test(im[1]) && !im[1].includes('..')) {
+    return { path: `/images/${im[1]}/json`, trim: 'image' };
+  }
   const m = path.match(/^\/containers\/([^/]+)\/(json|restart)$/);
   if (!m || !NAME.test(m[1])) return null;
-  if (method === 'GET' && m[2] === 'json') return { path: `/containers/${m[1]}/json`, trim: true };
+  if (method === 'GET' && m[2] === 'json') return { path: `/containers/${m[1]}/json`, trim: 'container' };
   if (method === 'POST' && m[2] === 'restart' && restartable.includes(m[1])) {
     return { path: `/containers/${m[1]}/restart?t=${STOP_WAIT_S}`, method: 'POST' };
   }
@@ -60,13 +67,15 @@ function createHelper({ socketPath = SOCKET, restartable = [] } = {}) {
     if (!to) return json(403, { message: 'Roost\'s Docker helper does not allow that' });
     const up = http.request({ socketPath, path: to.path, method: to.method || 'GET' }, (dr) => {
       if (to.trim && dr.statusCode === 200) {
-        // Inspect output carries every setting and environment variable; Roost needs two fields.
+        // Inspect output carries every setting and environment variable; Roost needs a few fields.
         const chunks = [];
         dr.on('data', (c) => chunks.push(c));
         dr.on('end', () => {
           try {
-            const { State, RestartCount } = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-            json(200, { State, RestartCount });
+            const info = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            if (to.trim === 'image') return json(200, { Id: info.Id, RepoDigests: info.RepoDigests });
+            // Image and Config.Image are the image name Roost's update badges look up, nothing else of Config.
+            json(200, { State: info.State, RestartCount: info.RestartCount, Image: info.Image, Config: { Image: info.Config && info.Config.Image } });
           } catch {
             json(502, { message: 'Docker answered something unreadable' });
           }
