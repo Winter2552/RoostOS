@@ -1,15 +1,92 @@
+<p align="center"><img src="public/logo.svg" alt="Roost" width="96"></p>
+
 # Roost
 
-Roost is the home-server suite: one homepage that signs you in and shows the apps you can use.
+**One home server, one front door.** Roost puts your films, files, photos and your own apps behind a single sign-in, on hardware you own. Everything is built in-house, in plain Node.js with no npm dependencies and no outside services you have to rely on.
 
 ![The Roost dashboard on a desktop browser and a phone](docs/screenshots/dashboard.png)
 
-| App | What it is |
-| --- | --- |
-| Jellyfin | Media (films, shows, music) |
-| Nova | The galaxies, starting with Coffee Galaxy (own repo for now, merging in later) |
-| Nest | File storage, built into Roost (the Files page) |
-| Glint | Photos and videos, built into Roost (the Photos page) |
+> **Status:** Roost is running day to day on one home server (ZimaOS, Docker). Everything described below is on `main` and in use. It is built for one household first; a version that is easy for anyone to clone and set up is planned, and the [setup checklist](#setup-checklist) is the first step toward it.
+
+## What's in the box
+
+| | What it is | In one line |
+| --- | --- | --- |
+| **Jellyfin / Roostflix** | Films, shows and music | Jellyfin does the media; Roost signs you in and gives it a black-and-cream skin |
+| **Nova** | Your own apps ("galaxies") | Other apps run on the server or elsewhere and open under one address and one sign-in |
+| **Nest** | File storage | Folders, uploads, trash, undo and zip downloads, built like Google Drive |
+| **Glint** | Photos and videos | A timeline, albums and favourites, stored in Nest |
+| **Backups** | Nightly copies | To a USB drive, with a "get files back" browser |
+| **Everything else** | Sign-in, setup wizard, updates, guests, status, HTTPS | Below |
+
+## See it
+
+### Files with Nest
+Drag in files or whole folders, select several, move, copy, zip, undo. Big uploads go in pieces and pick up where they stopped. It works with a mouse and with a thumb.
+
+![Nest on a desktop: two files selected with actions and an upload panel](docs/screenshots/nest-desktop.png)
+
+<p align="center"><img src="docs/screenshots/nest-phone.png" alt="Nest on a phone" width="300"></p>
+
+### Photos with Glint
+Glint is the Photos page: everything newest first with a heading per month, favourites, albums, full-screen viewing with swipe, and the same trash and storage limit as Nest. Uploads are a tap on **+** (no background auto-backup, no face recognition). The browser makes the thumbnails, so the server does no image work.
+
+### Media with Roostflix
+Connect Jellyfin once and everyone with access gets a Jellyfin account with their Roost username and password. The Jellyfin card opens it already signed in, restyled as Roostflix: a hero banner, continue watching and rounded posters. Nothing is installed in Jellyfin, and you can switch the look off. *The image below is a design mockup with placeholder titles; the skin is live on the server.*
+
+![Roostflix: hero banner and continue watching row](docs/screenshots/roostflix.png)
+
+### Your own apps with Nova
+Nova lists your galaxies (Coffee Galaxy today, others as Docker containers) with live online/offline status. Each opens at `nova.<your-domain>/<name>`, behind Roost's sign-in. Roost sends the galaxy a signed header saying who you are, so the app needs no login of its own. Adding one gives you a ready-to-paste compose file.
+
+![The Nova galaxies page](docs/screenshots/nova-galaxies.png)
+
+### Set up, with help
+**Admin → Setup** is a checklist that walks through everything Roost needs: the data drive, domain, email, two-step sign-in. It checks most steps itself and ticks them off. It also works as a to-do list for anyone installing Roost on their own box.
+
+![The setup wizard](docs/screenshots/setup-wizard.png)
+
+<p align="center"><img src="docs/screenshots/setup-phone.png" alt="The setup wizard on a phone" width="260"></p>
+
+### Guests, invites and one sign-in
+Invite someone with a one-time link, no email needed. Give them only the apps you choose and a storage limit. A **guest pass** gives temporary access that ends by itself (extend it with **Add a week** or end it now). Everyone signs in once, optionally with two-step codes from any authenticator app, and sees only what they're allowed.
+
+![Admin users: admin, active guest and expired guest](docs/screenshots/guests.png)
+
+### Backups you can restore from
+Every night Roost copies Nest, app settings and its own data to a USB drive, keeping the last 7 nights and 4 weeks. Unchanged files cost no space. Browse any backup and restore to Nest without overwriting anything.
+
+![The backups page](docs/screenshots/backups.png)
+
+### Updates in one button
+Roost shows what's new on GitHub and updates with one press. Nothing updates by itself, the new version is built while the old one keeps running, and if it won't start the old one is put back.
+
+![The updates page](docs/screenshots/updates.png)
+
+## Also included
+
+- **Status page** with container health, a 30-day uptime strip per app, drive health (temperature, wear) and a Restart button for apps.
+- **Own HTTPS**: Roost gets and renews its own Let's Encrypt certificate (via a Cloudflare DNS token you provide).
+- **Away from home**: remote access behind Cloudflare with no extra software.
+- **Search** across everything you can open, with no separate index.
+- **Light on upload**: aggressive caching, so a slow home connection goes further.
+- **Installable on a phone**, with a layout designed for iPhone, Android and Windows browsers.
+
+## What it isn't yet
+
+Roost is not a one-click install for strangers yet: it assumes you can copy a folder to a server, run Docker and edit a compose file, and some steps (domain, email relay, router) happen outside Roost. Not built: automatic phone photo backup, face or object recognition, Jellyfin streaming from outside the house through Cloudflare, and search inside Jellyfin and Glint. Roost depends on Jellyfin for media, on Cloudflare only if you choose its HTTPS and remote access features, and on an SMTP relay only if you want email.
+
+## Design rules
+
+1. Smooth, thought-through UI: clean, uncluttered, black and white.
+2. Efficient: no needless background work, polling or wasted power.
+3. One stop, built in-house: few outside dependencies, and a reason for each one.
+
+## Try it
+
+[Run it on ZimaOS](#run-it-on-zimaos) or `npm start` ([Develop](#develop)), then open Admin → Setup. The rest of this page is the detailed reference.
+
+---
 
 ## Setup checklist
 
