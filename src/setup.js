@@ -445,6 +445,21 @@ const STEPS = [
     check: (ctx) => ctx.ticked.includes('phone-photos'),
   },
   {
+    id: 'phone-alerts',
+    group: 'People',
+    title: 'Get alerts on your phone',
+    why: 'Roost taps your phone when an app stops or a drive is nearly full, without you opening it.',
+    how: [
+      'Roost needs its https address first (the certificate step above); phones only allow alerts on https.',
+      'iPhone: add Roost to the Home Screen first (iOS 16.4 or newer) and open it from there.',
+      'Under Admin → Alerts on your phone, press Turn on alerts on this device and allow notifications when asked.',
+      'Press Send a test alert to check it arrives. Repeat on each phone or PC you want alerts on.',
+    ],
+    action: { label: 'Turn on alerts', view: 'admin', focus: 'push-panel' },
+    optional: true,
+    check: (ctx) => ((ctx.db.push || {}).devices || []).some((d) => ctx.db.users.some((u) => u.id === d.userId && u.role === 'admin')),
+  },
+  {
     id: 'guest-pass',
     group: 'People',
     title: 'Give a visitor a guest pass',
@@ -463,6 +478,9 @@ const STEPS = [
 
 // Settings with no step, and why. Anything else a change adds needs a step above.
 const NO_STEP = {
+  alertApps: 'on by default, switched under Admin → Alerts',
+  alertDisks: 'on by default, switched under Admin → Alerts',
+  alertDiskPct: 'starts at 90%, changed under Admin → Alerts',
   PORT: 'fixed by the compose file',
   DATA_DIR: 'fixed by the compose file',
   ROOST_CONTAINER: 'only if the Roost container is renamed',

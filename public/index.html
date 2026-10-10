@@ -115,6 +115,17 @@
     <header class="topbar">
       <a class="brand" href="#/apps"><span data-server-name>Roost</span><svg class="brand-cursor" viewBox="58 44 44 48" aria-hidden="true"><path d="M58 92 V44 H76 A26 26 0 0 1 102 70 V92 Z" fill="currentColor"/><circle cx="86" cy="60" r="5" fill="var(--bg)"/></svg></a>
       <nav class="nav app-bar" id="app-bar" aria-label="Apps"></nav>
+      <div class="bell-wrap admin-only">
+        <button class="bell" id="bell" type="button" aria-label="Alerts" aria-expanded="false" aria-controls="alerts-panel">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/></svg>
+          <span class="bell-count hidden" id="bell-count"></span>
+        </button>
+        <div class="card alerts-panel hidden" id="alerts-panel" role="dialog" aria-label="Alerts">
+          <div class="alerts-head"><h3>Alerts</h3><span class="mono muted" id="alerts-checked"></span></div>
+          <div id="alerts-list"></div>
+          <a class="more-link mono" href="#/admin" id="alerts-settings-link">Alert settings →</a>
+        </div>
+      </div>
       <div class="who" id="who">
         <button class="avatar-btn" id="account-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu">
           <span class="avatar" id="avatar" aria-hidden="true"></span>
@@ -489,6 +500,35 @@
         <div class="row"><button class="btn" type="submit" id="jellyfin-save">Connect</button><button class="btn ghost small hidden" type="button" id="jellyfin-off">Turn off</button></div>
         <div class="msg" role="status"></div>
       </form>
+
+      <form class="card panel" id="alerts-form">
+        <h3>Alerts</h3><span class="mono muted">Roost checks every minute. A problem has to last 2 minutes before it shows on the bell, so restarts and updates stay quiet.</span>
+        <div class="checks alert-checks">
+          <label><input type="checkbox" name="alertApps"> Apps that stop, crash or turn unhealthy</label>
+          <label><input type="checkbox" name="alertDisks"> Drives that fill up or go missing</label>
+        </div>
+        <div class="field alert-level">
+          <span>Warn when a drive is this full</span>
+          <div class="gb-picker">
+            <input type="range" name="alertDiskPct" min="50" max="99" step="1" aria-label="Drive alert level">
+            <div class="gb-picker-row"><b id="alert-pct-value"></b><span class="mono muted">Clears 3% below</span></div>
+          </div>
+        </div>
+        <div class="row"><button class="btn" type="submit">Save</button></div>
+        <div class="msg" role="status"></div>
+      </form>
+
+      <div class="card panel" id="push-panel">
+        <h3>Alerts on your phone</h3><span class="mono muted">Roost sends the alert itself and your phone or PC shows it, even when Roost is closed. Turn it on once per device.</span>
+        <p class="push-note" id="push-note"></p>
+        <div class="row push-actions">
+          <button class="btn small hidden" type="button" id="push-on">Turn on alerts on this device</button>
+          <button class="btn ghost small hidden" type="button" id="push-off">Turn off on this device</button>
+          <button class="btn ghost small hidden" type="button" id="push-test">Send a test alert</button>
+        </div>
+        <div class="msg" role="status" id="push-msg"></div>
+        <div id="push-devices"></div>
+      </div>
 
       <form class="card panel" id="settings-form">
         <h3>Server</h3><span class="mono muted">The name shown across Roost, the storage new users start with, the address invite links use, and sign-in rules</span>
