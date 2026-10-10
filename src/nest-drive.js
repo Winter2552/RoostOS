@@ -33,6 +33,18 @@ function hasRequest(dataDir) {
   return fs.existsSync(path.join(dataDir, REQUEST_FILE));
 }
 
+// How long the waiting request has gone unanswered, in ms, or 0 when none waits.
+// The updater takes a request within seconds, so a long wait means it is not
+// reading them (typically an older updater that was never redeployed).
+function requestAge(dataDir, now = Date.now()) {
+  try {
+    const at = Date.parse(JSON.parse(fs.readFileSync(path.join(dataDir, REQUEST_FILE), 'utf8')).at);
+    return Number.isFinite(at) ? Math.max(1, now - at) : 1;
+  } catch {
+    return hasRequest(dataDir) ? 1 : 0;
+  }
+}
+
 // True when anything but empty folders is in Nest's folder (stops at the first file).
 function hasFiles(dir) {
   let entries;
@@ -60,10 +72,12 @@ function summarize(status, nestDir) {
     drives: status.drives || [],
     current,
     onDrive: Boolean(current && current.startsWith('/media/')),
+    error: status.error || null,
+    mediaSeen: status.mediaSeen !== false,
     phase: status.phase || null,
     last: status.last || null,
     empty: !hasFiles(nestDir),
   };
 }
 
-module.exports = { readStatus, writeRequest, hasRequest, hasFiles, summarize, stale, REQUEST_FILE, STATUS_FILE };
+module.exports = { readStatus, writeRequest, hasRequest, requestAge, hasFiles, summarize, stale, REQUEST_FILE, STATUS_FILE };

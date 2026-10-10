@@ -1551,7 +1551,16 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         nestDrive.writeRequest(dataDir, { action: 'list' });
       }
       const summary = nestDrive.summarize(status, nestDir || path.join(dataDir, 'nest'));
-      send(res, 200, { ...summary, updater, requested: nestDrive.hasRequest(dataDir) });
+      send(res, 200, { ...summary, updater, requested: nestDrive.hasRequest(dataDir), waitedMs: nestDrive.requestAge(dataDir) });
+    },
+
+    // "Look again", for when the first look got no answer.
+    'POST /api/admin/nest-drive/refresh': (req, res) => {
+      requireAdmin(req);
+      const updater = selfUpdate.summarize(selfUpdate.readStatus(dataDir)).state;
+      if (updater === 'off' || updater === 'stopped') throw new HttpError(409, 'The updater isn’t running. Check that roost-updater is started.');
+      nestDrive.writeRequest(dataDir, { action: 'list' });
+      send(res, 202, { ok: true });
     },
 
     'POST /api/admin/nest-drive/move': async (req, res) => {
