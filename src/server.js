@@ -62,7 +62,26 @@ function parseCookies(req) {
   const out = {};
   for (const part of (req.headers.cookie || '').split(';')) {
     const i = part.indexOf('=');
-    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    if (i > 0) out[part.slice(0, i).trim()] = cookieValue(part.slice(i + 1));
+  }
+  return out;
+}
+
+function cookieValue(raw) {
+  try {
+    return decodeURIComponent(raw.trim());
+  } catch {
+    return raw.trim();
+  }
+}
+
+// Every value sent for one cookie name. A browser can hold the same cookie
+// twice (one for the exact address, one for the whole domain) and sends both.
+function cookieValues(req, name) {
+  const out = [];
+  for (const part of (req.headers.cookie || '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0 && part.slice(0, i).trim() === name) out.push(cookieValue(part.slice(i + 1)));
   }
   return out;
 }
@@ -309,7 +328,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // Bearer token.
   function tokenOf(req) {
     const auth = String(req.headers.authorization || '');
-    return auth.startsWith('Bearer ') ? auth.slice(7).trim() : parseCookies(req)[COOKIE];
+    if (auth.startsWith('Bearer ')) return auth.slice(7).trim();
+    // If the browser sent two sign-in cookies (an old one for this exact
+    // address next to a newer one for the whole domain), use the one that is
+    // still a live sign-in rather than whichever came last.
+    const all = cookieValues(req, COOKIE);
+    return all.find((t) => sessions.get(t)) || all[all.length - 1];
   }
 
   // Uptime history: containers are re-read when Docker reports a change, and
@@ -485,7 +509,24 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     }
     const token = sessions.create(user.id, { name: deviceName(req.headers['user-agent']) });
     if (password !== null) linkJellyfin(sessions.get(token), user, password);
-    send(res, status, { user: publicUser(db(), user) }, { 'Set-Cookie': [sessionCookie(token, secure(req), cookieDomain(req)), ...cookies] });
+    send(res, status, { user: publicUser(db(), user) }, { 'Set-Cookie': [...sessionCookies(req, token), ...cookies] });
+  }
+
+  // The sign-in cookie for this address, plus an expiring copy of the other
+  // kind (exact address vs. whole domain) so an old one can't shadow it.
+  function sessionCookies(req, token) {
+    const sec = secure(req);
+    const domain = cookieDomain(req);
+    const other = domain ? '' : knownDomain(req);
+    return [sessionCookie(token, sec, domain), ...(domain || other ? [sessionCookie('', sec, domain ? '' : other)] : [])];
+  }
+
+  // The domain a Domain cookie would have used for this request, even if the
+  // gateway that sets it is now off.
+  function knownDomain(req) {
+    const domain = (db().settings.tls || {}).domain;
+    const host = requestHost(req).toLowerCase();
+    return domain && (host === domain || host.endsWith(`.${domain}`)) ? domain : '';
   }
 
   // ---------- Jellyfin ----------
@@ -943,7 +984,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const user = currentUser(req);
       if (user) record(req, 'sign-out', { actor: user.username });
       sessions.destroy(tokenOf(req));
-      send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie('', secure(req), cookieDomain(req)) });
+      send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookies(req, '') });
     },
 
     'PATCH /api/me': async (req, res) => {

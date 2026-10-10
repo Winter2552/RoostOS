@@ -234,6 +234,29 @@ test('the sign-in cookie covers the whole domain on that domain, and only there'
   assert.doesNotMatch(await signIn('roostos.network.evil.example'), /Domain=/);
 });
 
+test('a stale sign-in cookie next to a live one does not lock the person out', async () => {
+  const raw = (host, headers = {}, method = 'POST', path = '/api/login', body = { username: 'mia', password: 'password1' }) => new Promise((resolve, reject) => {
+    const req = http.request(`${base}${path}`, { method, headers: { host, 'content-type': 'application/json', ...headers } }, (res) => {
+      let text = '';
+      res.on('data', (c) => { text += c; });
+      res.on('end', () => resolve({ status: res.statusCode, setCookie: res.headers['set-cookie'] || [], body: text }));
+    });
+    req.on('error', reject);
+    req.end(method === 'POST' ? JSON.stringify(body) : undefined);
+  });
+  const live = (await raw(DOMAIN)).setCookie[0].split(';')[0];
+  // Browsers send the older cookie first; a stale one coming last used to win.
+  const both = `${live}; roost_session=stale`;
+  assert.equal((await raw(DOMAIN, { cookie: both }, 'GET', '/api/me/devices')).status, 200);
+  // Signing in on the domain also expires any cookie kept for the exact address, and the other way round.
+  const onDomain = (await raw(DOMAIN)).setCookie;
+  assert.ok(onDomain.some((c) => /^roost_session=;/.test(c) && /Max-Age=0/.test(c) && !/Domain=/.test(c)));
+  const onLan = (await raw(`roost.${DOMAIN}`)).setCookie;
+  assert.match(onLan[0], new RegExp(`Domain=${DOMAIN}`));
+  const lan = (await raw('192.168.4.35')).setCookie;
+  assert.equal(lan.length, 1);
+});
+
 test('a signed-out browser is sent to Roost and back; an app call just gets 401', async () => {
   const page = await nova('/coffee/', { headers: { accept: 'text/html' } });
   assert.equal(page.status, 302);
