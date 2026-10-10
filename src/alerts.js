@@ -54,7 +54,7 @@ function findProblems({ apps, docker, disks, settings, open }) {
     if (docker.error) {
       // No DOCKER_HOST means Roost was set up without container checks.
       if (docker.error !== 'not configured') {
-        found.set('docker', { title: "Roost can't reach Docker", detail: 'App checks are paused until it answers again' });
+        found.set('docker', { title: "Roost can't reach Docker", detail: 'App checks are paused until it answers again', ok: 'Roost can reach Docker again' });
       }
     } else {
       for (const app of apps) {
@@ -65,11 +65,11 @@ function findProblems({ apps, docker, disks, settings, open }) {
           .sort((x, y) => (RANK[y.p] ?? 0) - (RANK[x.p] ?? 0))[0];
         const { c, p } = worst;
         if (p === 'stopped') {
-          found.set(`app:${app.id}`, { title: `${app.name} has stopped`, detail: `${c.name}${c.exitCode ? ` · exit code ${c.exitCode}` : ''}` });
+          found.set(`app:${app.id}`, { title: `${app.name} has stopped`, detail: `${c.name}${c.exitCode ? ` · exit code ${c.exitCode}` : ''}`, ok: `${app.name} is back` });
         } else if (p === 'restarting') {
-          found.set(`app:${app.id}`, { title: `${app.name} keeps restarting`, detail: `${c.name} · ${restartsText(c.restarts)}` });
+          found.set(`app:${app.id}`, { title: `${app.name} keeps restarting`, detail: `${c.name} · ${restartsText(c.restarts)}`, ok: `${app.name} is back` });
         } else if (p === 'unhealthy') {
-          found.set(`app:${app.id}`, { title: `${app.name} is unhealthy`, detail: `${c.name} · its health check is failing` });
+          found.set(`app:${app.id}`, { title: `${app.name} is unhealthy`, detail: `${c.name} · its health check is failing`, ok: `${app.name} is healthy again` });
         }
       }
     }
@@ -77,14 +77,14 @@ function findProblems({ apps, docker, disks, settings, open }) {
   if (settings.alertDisks) {
     for (const d of disks) {
       if (d.missing) {
-        found.set(`disk-missing:${d.label}`, { title: `${d.label} drive not found`, detail: d.path });
+        found.set(`disk-missing:${d.label}`, { title: `${d.label} drive not found`, detail: d.path, ok: `${d.label} drive is back` });
         continue;
       }
       const pct = d.total ? Math.round(((d.total - d.free) / d.total) * 100) : 0;
       const key = `disk:${d.label}`;
       const limit = open.has(key) ? settings.alertDiskPct - CLEAR_MARGIN : settings.alertDiskPct;
       if (pct >= limit) {
-        found.set(key, { title: `${d.label} drive is ${pct}% full`, detail: `${size(d.free)} free of ${size(d.total)}`, now: true });
+        found.set(key, { title: `${d.label} drive is ${pct}% full`, detail: `${size(d.free)} free of ${size(d.total)}`, ok: `${d.label} drive has space again`, now: true });
       }
     }
   }
@@ -145,7 +145,7 @@ class Watcher {
         continue;
       }
       this.pending.delete(key);
-      const alert = { id: this.newId(), key, title: p.title, detail: p.detail, startedAt: new Date(first).toISOString(), resolvedAt: null };
+      const alert = { id: this.newId(), key, title: p.title, detail: p.detail, okTitle: p.ok, startedAt: new Date(first).toISOString(), resolvedAt: null };
       alerts.push(alert);
       changed = true;
       this.onChange('raised', alert);

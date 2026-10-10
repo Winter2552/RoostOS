@@ -390,6 +390,18 @@
         <div class="msg" role="status"></div>
       </form>
 
+      <div class="card panel" id="push-panel">
+        <h3>Alerts on your phone</h3><span class="mono muted">Roost sends the alert itself and your phone or PC shows it, even when Roost is closed. Turn it on once per device.</span>
+        <p class="push-note" id="push-note"></p>
+        <div class="row push-actions">
+          <button class="btn small hidden" type="button" id="push-on">Turn on alerts on this device</button>
+          <button class="btn ghost small hidden" type="button" id="push-off">Turn off on this device</button>
+          <button class="btn ghost small hidden" type="button" id="push-test">Send a test alert</button>
+        </div>
+        <div class="msg" role="status" id="push-msg"></div>
+        <div id="push-devices"></div>
+      </div>
+
       <form class="card panel" id="settings-form">
         <h3>Server</h3><span class="mono muted">The name shown across Roost, the storage new users start with, the address invite links use, and sign-in rules</span>
         <div class="form-grid">

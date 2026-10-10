@@ -15,6 +15,7 @@ const setup = require('./setup');
 const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor } = require('./docker');
 const { Watcher, alertSettings, alertsOf } = require('./alerts');
+const { Push } = require('./push');
 const templates = require('./templates');
 const { CertManager, validDomain } = require('./tls');
 const twoStep = require('./twostep');
@@ -195,7 +196,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, tls: tlsOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000, alertIntervalMs = 60 * 1000, readContainers } = {}) {
+function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', appToken = '', trustProxy = false, tls: tlsOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000, alertIntervalMs = 60 * 1000, readContainers, push: pushOptions = {} } = {}) {
   const store = new Store(dataDir);
   const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
   const activity = new ActivityLog(dataDir, { saveDelayMs: activitySaveDelayMs });
@@ -280,8 +281,16 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   });
   // Alerts watch the same container read the uptime log uses, so with Docker
   // events coming through they add no Docker calls of their own.
+  // Phone alerts go out from Roost itself (src/push.js); nothing is polled.
+  const push = new Push({
+    store,
+    isAdmin: (id) => (db().users.find((u) => u.id === id) || {}).role === 'admin',
+    subject: () => (/^https:\/\//.test(db().settings.publicUrl || '') ? db().settings.publicUrl : undefined),
+    ...pushOptions,
+  });
   const watcher = new Watcher({
     store,
+    onChange: (kind, alert) => push.alert(kind, alert),
     readContainers: readContainers || (async () => (events.live() && !lastDocker.error ? lastDocker : listContainers(dockerHost, probeTimeoutMs))),
     readDisks: () => readDisks(diskList),
     newId: () => store.newId(),
@@ -476,6 +485,8 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
     if (!Number.isInteger(n) || n < 50 || n > 99) throw new HttpError(400, 'Drive alert level must be a whole number from 50 to 99');
     return n;
   }
+
+  const deviceView = (d) => ({ id: d.id, label: d.label, createdAt: d.createdAt });
 
   function alertView() {
     const alerts = alertsOf(db());
@@ -1271,6 +1282,48 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
 
     // ---------- alerts ----------
 
+    'GET /api/push/key': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, { publicKey: push.publicKey() });
+    },
+
+    'GET /api/push/devices': (req, res) => {
+      const admin = requireAdmin(req);
+      send(res, 200, { devices: push.devicesOf(admin.id).map(deviceView) });
+    },
+
+    // A phone or PC turning alerts on. Sending the same device again just
+    // refreshes it, so the page can safely re-send what the browser holds.
+    'POST /api/push/devices': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const before = push.devicesOf(admin.id).length;
+      let device;
+      try {
+        device = push.subscribe(admin.id, body.subscription, { userAgent: req.headers['user-agent'], host: requestHost(req) });
+      } catch (err) {
+        throw new HttpError(err.status || 400, err.message);
+      }
+      if (push.devicesOf(admin.id).length > before) record(req, 'settings-changed', { actor: admin.username, detail: `phone alerts on for ${device.label}` });
+      send(res, 200, { device: deviceView(device) });
+    },
+
+    'DELETE /api/push/devices/:id': (req, res, id) => {
+      const admin = requireAdmin(req);
+      const device = push.devicesOf(admin.id).find((d) => d.id === id);
+      if (!device || !push.remove(id, admin.id)) throw new HttpError(404, 'No such device');
+      record(req, 'settings-changed', { actor: admin.username, detail: `phone alerts off for ${device.label}` });
+      send(res, 200, { devices: push.devicesOf(admin.id).map(deviceView) });
+    },
+
+    'POST /api/push/test': async (req, res) => {
+      const admin = requireAdmin(req);
+      const devices = push.devicesOf(admin.id);
+      if (!devices.length) throw new HttpError(400, 'Turn on alerts on a device first');
+      const result = await push.sendAll(devices, { title: 'Roost alerts are on', body: 'This is a test from Roost.', tag: 'roost-test', url: '/#/admin' }, { ttl: 600 });
+      send(res, 200, { result, devices: push.devicesOf(admin.id).map(deviceView) });
+    },
+
     'GET /api/alerts': (req, res) => {
       requireAdmin(req);
       send(res, 200, alertView());
@@ -1454,7 +1507,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/invites|admin\/storage-requests|admin\/setup|storage\/users|links|alerts))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/dismiss)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/invites|admin\/storage-requests|admin\/setup|storage\/users|links|alerts|push\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/dismiss)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }
@@ -1548,6 +1601,7 @@ function createServer({ dataDir, nestDir, secureCookies = false, probeTimeoutMs 
   });
   server.nest = nest;
   server.watcher = watcher;
+  server.push = push;
   // Save anything still waiting, e.g. when the container is stopped.
   server.flushAll = () => {
     uptime.save();

@@ -212,6 +212,21 @@ const STEPS = [
     check: (ctx) => ctx.ticked.includes('install-app'),
   },
   {
+    id: 'phone-alerts',
+    group: 'People',
+    title: 'Get alerts on your phone',
+    why: 'Roost taps your phone when an app stops or a drive is nearly full, without you opening it.',
+    how: [
+      'Roost needs its https address first (the certificate step above); phones only allow alerts on https.',
+      'iPhone: add Roost to the Home Screen first (iOS 16.4 or newer) and open it from there.',
+      'Under Admin → Alerts on your phone, press Turn on alerts on this device and allow notifications when asked.',
+      'Press Send a test alert to check it arrives. Repeat on each phone or PC you want alerts on.',
+    ],
+    action: { label: 'Turn on alerts', view: 'admin', focus: 'push-panel' },
+    optional: true,
+    check: (ctx) => ((ctx.db.push || {}).devices || []).some((d) => ctx.db.users.some((u) => u.id === d.userId && u.role === 'admin')),
+  },
+  {
     id: 'guest-pass',
     group: 'People',
     title: 'Give a visitor a guest pass',

@@ -262,6 +262,15 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .alert-row.cleared .alert-text > div:first-child { color: var(--muted); }
 .alert-row .link-btn { font-size: 12px; padding: 2px 0 2px 8px; }
 
+.push-note { margin: 0 0 4px; line-height: 1.5; max-width: 60ch; }
+.push-note.muted { color: var(--muted); }
+.push-actions .btn { flex: none; }
+.push-device { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-top: 1px solid var(--line); }
+.push-device > div:first-child { flex: 1; min-width: 0; }
+.push-device .mono { font-size: 11px; text-transform: none; letter-spacing: 0; }
+#push-devices { margin-top: 12px; }
+#push-devices:empty { margin: 0; }
+
 .alert-checks { flex-direction: column; gap: 10px; }
 .alert-level { margin-top: 20px; max-width: 420px; }
 .alert-level b { font-size: 20px; font-weight: 500; }
