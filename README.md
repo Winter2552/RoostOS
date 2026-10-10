@@ -213,6 +213,7 @@ Connect Jellyfin under **Admin → Jellyfin sign-in**: its address as Roost reac
 - **Access follows Roost**: taking Jellyfin away from someone, or deleting them, switches their Jellyfin account off and ends their Jellyfin sign-ins. Giving it back switches it on again.
 - **Only for people Roost lets in**: `/jellyfin/` needs a Roost sign-in with Jellyfin access, so Jellyfin isn't reachable through Roost by anyone else.
 - **Jellyfin's own apps** (TV, phone) sign in with the same username and password once per device.
+- **Roostflix look**: Jellyfin opened through Roost is shown as Roostflix, a black, cream and rounded-poster skin with its own name, tab icon and wordmark. Roost adds one stylesheet and one script from `public/roostflix/` to Jellyfin's page; nothing is installed in Jellyfin. Untick it under Admin → Jellyfin sign-in to go back to Jellyfin's own look. It only applies through Roost (not Jellyfin's own port or its TV and phone apps). The CSS is written against Jellyfin 10.10's page; a Jellyfin update that renames something just stops one rule applying.
 - If Jellyfin is down or the link is off, Roost works as before and the card opens Jellyfin's own address.
 
 ## Updating Roost

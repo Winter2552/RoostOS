@@ -1,0 +1,142 @@
+/* Roostflix: Roost's skin for Jellyfin's web page. Black, cream, rounded
+   posters, a header that fades in. Written against Jellyfin 10.10's page; if
+   a Jellyfin update renames something, that rule just stops applying and
+   Jellyfin shows its own look there. No fonts or images are downloaded. */
+
+:root {
+  --rf-bg: #0a0a0a;
+  --rf-cream: #f2efe9;
+  --rf-dim: #a8a49c;
+  --rf-card: #161513;
+  --rf-mono: 'Space Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+
+html, body, .backgroundContainer, .backgroundContainer.withBackdrop, .mainDrawer, .dialog {
+  background: var(--rf-bg) !important;
+  color: var(--rf-cream);
+}
+
+/* ---- name and logo: the Roost wordmark, drawn by the browser ---- */
+.pageTitleWithDefaultLogo, .pageTitleWithLogo {
+  background: none !important;
+  width: auto !important;
+  display: flex;
+  align-items: center;
+}
+.pageTitleWithDefaultLogo::before, .pageTitleWithLogo::before {
+  content: 'Roostflix';
+  font: 700 1.55rem var(--rf-mono);
+  letter-spacing: -0.05em;
+  color: var(--rf-cream);
+}
+.pageTitleWithDefaultLogo::after, .pageTitleWithLogo::after {
+  content: '';
+  width: 0.42em;
+  height: 0.85em;
+  margin-left: 0.18em;
+  background: var(--rf-cream);
+  border-radius: 0 0.5em 0 0;
+  animation: rf-blink 1.2s steps(2, jump-none) infinite;
+}
+@keyframes rf-blink { 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) {
+  .pageTitleWithDefaultLogo::after, .pageTitleWithLogo::after { animation: none; }
+}
+
+/* ---- header: clear over the page, black once you scroll ---- */
+.skinHeader, .skinHeader.semiTransparent {
+  background: linear-gradient(rgba(0, 0, 0, 0.85), rgba(0, 0, 0, 0)) !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+.skinHeader.headerBackground, .skinHeader-withBackground {
+  background: var(--rf-bg) !important;
+}
+.headerTabs .emby-tab-button, .headerButton { color: var(--rf-cream); }
+.headerTabs .emby-tab-button-active { color: var(--rf-cream); border-color: var(--rf-cream); }
+
+/* ---- rows and posters ---- */
+.sectionTitle, .sectionTitle-cards {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.card .cardBox, .cardImageContainer, .cardScalable, .cardOverlayContainer {
+  border-radius: 8px;
+}
+.cardBox:not(.visualCardBox) .cardPadder { background: var(--rf-card); }
+.cardText { color: var(--rf-cream); }
+.cardText-secondary { color: var(--rf-dim); }
+@media (hover: hover) {
+  .card .cardBox { transition: transform 0.18s ease; }
+  .card:hover .cardBox { transform: scale(1.06); z-index: 2; position: relative; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .card .cardBox { transition: none; }
+  .card:hover .cardBox { transform: none; }
+}
+
+/* ---- buttons and progress: cream on black instead of Jellyfin blue ---- */
+.button-accent, .raised.button-submit, .emby-button.button-submit, .detailButton.button-accent {
+  background: var(--rf-cream) !important;
+  color: var(--rf-bg) !important;
+  border-radius: 6px;
+  font-weight: 700;
+}
+.itemProgressBarForeground, .mdl-slider-background-lower, .emby-slider-background-lower {
+  background: var(--rf-cream) !important;
+}
+.emby-input:focus, .emby-select:focus { border-color: var(--rf-cream) !important; }
+a { color: var(--rf-cream); }
+
+/* ---- hero carousel (built by skin.js) ---- */
+.rf-hero {
+  position: relative;
+  height: min(56vw, 640px);
+  min-height: 340px;
+  margin: -5rem 0 1.2rem;
+  overflow: hidden;
+  background: var(--rf-bg);
+}
+.rf-slide { position: absolute; inset: 0; opacity: 0; transition: opacity 0.7s ease; pointer-events: none; }
+.rf-slide.rf-active { opacity: 1; pointer-events: auto; }
+.rf-back, .rf-clip { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.rf-back { transform: scale(1.04); }
+.rf-slide.rf-active .rf-back { animation: rf-drift 12s ease-out forwards; }
+@keyframes rf-drift { to { transform: scale(1.12); } }
+.rf-clip { opacity: 0; transition: opacity 0.8s ease; }
+.rf-clip.rf-on { opacity: 1; }
+.rf-shade {
+  position: absolute; inset: 0;
+  background: linear-gradient(90deg, var(--rf-bg) 4%, rgba(10, 10, 10, 0.55) 40%, transparent 70%),
+    linear-gradient(transparent 55%, var(--rf-bg));
+}
+.rf-body { position: absolute; left: 4%; bottom: 20%; width: min(34em, 88%); }
+.rf-title { margin: 0 0 0.3em; font: 700 clamp(1.8rem, 4.6vw, 3.4rem) var(--rf-mono); letter-spacing: -0.04em; line-height: 1.05; }
+.rf-logo { max-width: min(20em, 80%); max-height: 7em; margin-bottom: 0.4em; }
+.rf-meta { margin: 0 0 0.5em; font: 0.85rem var(--rf-mono); color: var(--rf-dim); }
+.rf-overview {
+  margin: 0 0 1.1em; line-height: 1.5; color: rgba(242, 239, 233, 0.9);
+  display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.rf-play {
+  display: inline-block; padding: 0.7em 1.8em; border-radius: 6px;
+  background: var(--rf-cream); color: var(--rf-bg) !important; font-weight: 700; text-decoration: none;
+}
+.rf-dots { position: absolute; right: 4%; bottom: 20%; display: flex; gap: 8px; z-index: 2; }
+.rf-dot { width: 28px; height: 4px; padding: 0; border: 0; border-radius: 2px; background: rgba(255, 255, 255, 0.3); cursor: pointer; }
+.rf-dot.rf-current { background: var(--rf-cream); }
+/* Fingers need bigger targets than a 4px bar; the visible bar stays slim. */
+@media (pointer: coarse) {
+  .rf-dot { position: relative; }
+  .rf-dot::after { content: ''; position: absolute; inset: -20px -4px; }
+}
+@media (max-width: 600px) {
+  .rf-hero { height: 70vw; min-height: 300px; }
+  .rf-body { bottom: 22%; }
+  .rf-overview { -webkit-line-clamp: 2; line-clamp: 2; }
+  .rf-dots { right: auto; left: 4%; bottom: 14%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rf-slide { transition: none; }
+  .rf-slide.rf-active .rf-back { animation: none; }
+}

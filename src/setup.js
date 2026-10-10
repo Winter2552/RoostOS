@@ -176,6 +176,20 @@ const STEPS = [
     // saved link means it worked; no call to Jellyfin when this list opens.
     check: (ctx) => Boolean(ctx.db.settings.jellyfin && ctx.db.settings.jellyfin.url && ctx.db.settings.jellyfin.apiKey),
   },
+  {
+    id: 'roostflix',
+    group: 'Server',
+    title: 'Roostflix look for Jellyfin',
+    why: 'Jellyfin opens as Roostflix: a black, Netflix-style page with its own name and logo.',
+    how: [
+      'It is on by default once Jellyfin sign-in is connected. Untick it under Admin → Jellyfin sign-in to go back to Jellyfin\'s own look.',
+      'It only applies when Jellyfin is opened through Roost (the Roostflix card), not at port 8096.',
+    ],
+    action: { label: 'Roostflix setting', view: 'admin', focus: 'jellyfin-form', field: 'skin' },
+    optional: true,
+    covers: ['roostflix'],
+    check: (ctx) => Boolean(ctx.db.settings.jellyfin && ctx.db.settings.jellyfin.url) && ctx.db.settings.roostflix !== false,
+  },
 
   // ---------- reaching Roost from anywhere ----------
   {

@@ -38,6 +38,7 @@ const { Assets } = require('./assets');
 const { TrafficMeter } = require('./traffic');
 const { createSearch, nestSource } = require('./search');
 const { Jellyfin, PREFIX: JELLYFIN_PREFIX, OPENER_HTML } = require('./jellyfin');
+const roostflix = require('./roostflix');
 const { UptimeLog, watchDockerEvents } = require('./uptime');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -241,7 +242,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     }
   }
   if (linked) store.save();
-  const jellyfin = new Jellyfin(() => store.db.settings.jellyfin);
+  // Roostflix, the look Roost gives Jellyfin's page, is on unless switched off.
+  const jellyfin = new Jellyfin(
+    () => store.db.settings.jellyfin,
+    () => (store.db.settings.roostflix === false ? null : (html) => roostflix.skinPage(html, (f) => { const a = assets.load(f); return a && a.hash; })),
+  );
   // Jellyfin sign-ins still being made for a Roost sign-in, by its id.
   const jellyfinLinks = new Map();
   const sessions = new Sessions(path.join(dataDir, 'sessions.json'), (s) => {
@@ -551,11 +556,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
 
   async function jellyfinView() {
     const c = db().settings.jellyfin;
-    if (!c || !c.url) return { url: '', keySaved: false, connected: false };
+    const skin = db().settings.roostflix !== false;
+    if (!c || !c.url) return { url: '', keySaved: false, connected: false, skin };
     try {
-      return { url: c.url, keySaved: Boolean(c.apiKey), connected: true, ...(await jellyfin.check()) };
+      return { url: c.url, keySaved: Boolean(c.apiKey), connected: true, skin, ...(await jellyfin.check()) };
     } catch (err) {
-      return { url: c.url, keySaved: Boolean(c.apiKey), connected: false, error: err.status === 401 ? 'the API key was refused' : err.message };
+      return { url: c.url, keySaved: Boolean(c.apiKey), connected: false, skin, error: err.status === 401 ? 'the API key was refused' : err.message };
     }
   }
 
@@ -1031,7 +1037,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const user = requireUser(req);
       // With the Jellyfin link on, the card opens Jellyfin through Roost,
       // already signed in.
-      const apps = visibleApps(db(), user).map((a) => (a.id === 'jellyfin' && jellyfin.enabled() ? { ...a, openUrl: `${JELLYFIN_PREFIX}/` } : a));
+      const apps = visibleApps(db(), user).map((a) => (a.id === 'jellyfin' && jellyfin.enabled() ? { ...a, openUrl: `${JELLYFIN_PREFIX}/`, ...(db().settings.roostflix === false ? {} : { name: roostflix.NAME }) } : a));
       send(res, 200, { apps, searchable: search.apps(user) });
     },
 
@@ -1066,6 +1072,17 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     'GET /api/admin/jellyfin': async (req, res) => {
       requireAdmin(req);
       send(res, 200, await jellyfinView());
+    },
+
+    // Roostflix on or off. Takes effect the next time Jellyfin's page loads.
+    'PUT /api/admin/roostflix': async (req, res) => {
+      requireAdmin(req);
+      const body = await readJson(req);
+      const on = body.on === true;
+      if (on) delete db().settings.roostflix;
+      else db().settings.roostflix = false;
+      store.save();
+      send(res, 200, { skin: on });
     },
 
     'PUT /api/admin/jellyfin': async (req, res) => {
