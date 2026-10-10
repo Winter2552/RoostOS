@@ -484,6 +484,8 @@
           <label class="field"><span>API key</span><input type="password" name="apiKey" autocomplete="off" spellcheck="false"></label>
         </div>
         <p class="mono muted panel-note">Make a key in Jellyfin under Dashboard → API Keys. Accounts are matched by username; Jellyfin admin accounts are never changed.</p>
+        <label class="check-line" style="margin-top:14px"><input type="checkbox" name="skin"> Roostflix look: a black, Netflix-style skin with its own name and logo</label>
+        <p class="mono muted panel-note">Applies when people open Jellyfin through Roost. Untick to go back to Jellyfin's own look; the next page load changes.</p>
         <div class="row"><button class="btn" type="submit" id="jellyfin-save">Connect</button><button class="btn ghost small hidden" type="button" id="jellyfin-off">Turn off</button></div>
         <div class="msg" role="status"></div>
       </form>

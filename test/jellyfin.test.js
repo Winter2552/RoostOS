@@ -18,7 +18,7 @@ let jfUrl;
 let server;
 let base;
 let dataDir;
-const jf = { users: [], tokens: new Map(), seen: [], resume: {}, oldResume: false };
+const jf = { page: false, users: [], tokens: new Map(), seen: [], resume: {}, oldResume: false };
 
 function fakeJellyfin() {
   let n = 0;
@@ -29,7 +29,7 @@ function fakeJellyfin() {
     const auth = req.headers.authorization || '';
     const token = (auth.match(/Token="([^"]+)"/) || [])[1];
     const json = (status, data) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(data === undefined ? '' : JSON.stringify(data)); };
-    jf.seen.push({ method: req.method, url: req.url, cookie: req.headers.cookie, token });
+    jf.seen.push({ method: req.method, url: req.url, cookie: req.headers.cookie, token, enc: req.headers['accept-encoding'] });
     const isKey = token === KEY;
     if (req.url === '/System/Info') return isKey ? json(200, { ServerName: 'Home', Version: '10.10.7' }) : json(401);
     if (req.url === '/Users' && req.method === 'GET') return isKey ? json(200, jf.users) : json(401);
@@ -66,6 +66,10 @@ function fakeJellyfin() {
     if (req.url === '/redirect-me') {
       res.writeHead(302, { Location: '/web/' });
       return res.end();
+    }
+    if (req.url === '/web/index.html' && jf.page) {
+      res.writeHead(200, { 'Content-Type': 'text/html', ETag: '"jf"' });
+      return res.end('<html><head><title>Jellyfin</title><link rel="icon" href="favicon.ico"></head><body>home</body></html>');
     }
     if (req.url.startsWith('/web/')) {
       res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -120,7 +124,7 @@ after(() => {
 
 test('Jellyfin is off until an admin connects it', async () => {
   const view = await call('GET', '/api/admin/jellyfin', null, admin);
-  assert.deepEqual(view.body, { url: '', keySaved: false, connected: false });
+  assert.deepEqual(view.body, { url: '', keySaved: false, connected: false, skin: true });
   const apps = await call('GET', '/api/apps', null, admin);
   assert.equal(apps.body.apps.find((a) => a.id === 'jellyfin').openUrl, undefined);
   assert.equal((await call('GET', '/jellyfin/', null, admin)).location, '/');
@@ -137,7 +141,7 @@ test('a wrong API key is refused and not saved', async () => {
 test('connecting shows the server and never sends the key back', async () => {
   const ok = await call('PUT', '/api/admin/jellyfin', { url: `${jfUrl}/`, apiKey: KEY }, admin);
   assert.equal(ok.status, 200);
-  assert.deepEqual(ok.body, { url: jfUrl, keySaved: true, connected: true, serverName: 'Home', version: '10.10.7', accounts: 2 });
+  assert.deepEqual(ok.body, { url: jfUrl, keySaved: true, connected: true, skin: true, serverName: 'Home', version: '10.10.7', accounts: 2 });
   const settings = await call('GET', '/api/admin/settings', null, admin);
   assert.equal(JSON.stringify(settings.body).includes(KEY), false);
   assert.equal(await setupStep(), true);
@@ -198,6 +202,35 @@ test('Jellyfin is passed through only to people allowed to use it', async () => 
   const nofilms = (await call('POST', '/api/login', { username: 'nofilms', password: 'no films 12' })).cookie;
   assert.equal((await call('GET', '/jellyfin/web/index.html', null, nofilms)).location, '/');
   assert.equal((await call('GET', '/api/jellyfin/session', null, nofilms)).status, 403);
+});
+
+test("Roostflix adds its skin to Jellyfin's page, and can be switched off", async () => {
+  const sam = (await call('POST', '/api/login', { username: 'sam', password: 'sam pass 123' })).cookie;
+  jf.page = true;
+  try {
+    const on = await call('GET', '/jellyfin/web/index.html', null, sam);
+    assert.match(on.body, /<title>Roostflix<\/title>/);
+    assert.match(on.body, /<link rel="stylesheet" href="\/roostflix\/skin\.css\?v=[\w-]{12}">/);
+    assert.match(on.body, /<script defer src="\/roostflix\/skin\.js\?v=[\w-]{12}"><\/script><\/head>/);
+    assert.ok(!on.body.includes('favicon.ico'));
+    assert.equal(jf.seen.findLast((r) => r.url === '/web/index.html').enc, 'identity', 'Roost asks for the page uncompressed to add to it');
+    assert.equal((await fetch(`${base}/roostflix/skin.css`)).status, 200);
+    // The dashboard card takes the new name.
+    const apps = (await call('GET', '/api/apps', null, sam)).body.apps;
+    assert.equal(apps.find((a) => a.id === 'jellyfin').name, 'Roostflix');
+
+    assert.equal((await call('PUT', '/api/admin/roostflix', { on: false }, sam)).status, 403);
+    assert.equal((await call('PUT', '/api/admin/roostflix', { on: false }, admin)).body.skin, false);
+    assert.equal((await call('GET', '/api/admin/jellyfin', null, admin)).body.skin, false);
+    const off = await call('GET', '/jellyfin/web/index.html', null, sam);
+    assert.match(off.body, /<title>Jellyfin<\/title>/);
+    assert.ok(!off.body.includes('roostflix'));
+    assert.equal((await call('GET', '/api/apps', null, sam)).body.apps.find((a) => a.id === 'jellyfin').name, 'Jellyfin');
+
+    assert.equal((await call('PUT', '/api/admin/roostflix', { on: true }, admin)).body.skin, true);
+  } finally {
+    jf.page = false;
+  }
 });
 
 test("Jellyfin's own redirects stay under /jellyfin", async () => {
@@ -326,4 +359,13 @@ test('turning the link off restores the plain Jellyfin card', async () => {
   assert.equal(off.body.url, '');
   const apps = await call('GET', '/api/apps', null, admin);
   assert.equal(apps.body.apps.find((a) => a.id === 'jellyfin').openUrl, undefined);
+});
+
+test('the Roostflix script and stylesheet are served and the script parses', async () => {
+  const js = await fetch(`${base}/roostflix/skin.js`);
+  assert.equal(js.status, 200);
+  new (require('vm').Script)(await js.text());
+  const css = await fetch(`${base}/roostflix/skin.css`);
+  assert.match(await css.text(), /\.rf-hero/);
+  assert.equal((await fetch(`${base}/roostflix/icon.svg`)).status, 200);
 });

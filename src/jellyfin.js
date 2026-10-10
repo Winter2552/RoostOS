@@ -8,6 +8,7 @@
 
 const http = require('http');
 const https = require('https');
+const roostflix = require('./roostflix');
 
 const PREFIX = '/jellyfin';
 const TIMEOUT_MS = 5000;
@@ -65,8 +66,11 @@ function resumeItem(it) {
 
 class Jellyfin {
   // config() returns { url, apiKey } from Roost's settings, or null.
-  constructor(config) {
+  // skin() returns a function that adds the Roostflix look to Jellyfin's
+  // page, or null when it is switched off.
+  constructor(config, skin = () => null) {
     this.config = config;
+    this.skin = skin;
     this.cache = null;
     this.resumeCache = new Map();
     this.queue = Promise.resolve();
@@ -225,10 +229,29 @@ class Jellyfin {
 
   proxy(req, res) {
     const { mod, options } = this.target(req);
+    const skin = roostflix.isPage(req.method, req.url.slice(PREFIX.length)) ? this.skin() : null;
+    // Roostflix needs the page as plain text to add to it.
+    if (skin) options.headers = { ...options.headers, 'accept-encoding': 'identity' };
     const out = mod.request(options, (up) => {
       const headers = { ...up.headers };
       // Jellyfin's redirects point at its own root; keep them under /jellyfin.
       if (typeof headers.location === 'string' && headers.location.startsWith('/')) headers.location = PREFIX + headers.location;
+      if (skin && up.statusCode === 200 && /text\/html/.test(headers['content-type'] || '')) {
+        const chunks = [];
+        up.on('data', (c) => chunks.push(c));
+        up.on('end', () => {
+          const body = Buffer.from(skin(Buffer.concat(chunks).toString('utf8')));
+          delete headers['transfer-encoding'];
+          delete headers.etag;
+          delete headers['last-modified'];
+          headers['content-length'] = body.length;
+          headers['cache-control'] = 'no-cache';
+          res.writeHead(200, headers);
+          res.end(body);
+        });
+        up.on('error', () => res.destroy());
+        return;
+      }
       res.writeHead(up.statusCode, headers);
       up.pipe(res);
     });

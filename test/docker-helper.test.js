@@ -24,7 +24,10 @@ const docker = http.createServer((req, res) => {
   if (req.url.startsWith('/containers/json')) return res.end(JSON.stringify(containers));
   if (req.url.startsWith('/events')) return res.end('{"Type":"container"}\n');
   if (/^\/containers\/\w+\/json$/.test(req.url)) {
-    return res.end(JSON.stringify({ State: { Status: 'running', Running: true }, RestartCount: 1, Config: { Env: ['SECRET=hunter2'] }, HostConfig: {} }));
+    return res.end(JSON.stringify({ State: { Status: 'running', Running: true }, RestartCount: 1, Image: 'sha256:abc', Config: { Image: 'jellyfin/jellyfin:latest', Env: ['SECRET=hunter2'] }, HostConfig: {} }));
+  }
+  if (/^\/images\/[^?]+\/json$/.test(req.url)) {
+    return res.end(JSON.stringify({ Id: 'sha256:abc', RepoDigests: ['jellyfin/jellyfin@sha256:def'], Config: { Env: ['SECRET=hunter2'] }, RepoTags: ['x'] }));
   }
   if (req.method === 'POST' && req.url.includes('/restart')) {
     res.statusCode = 204;
@@ -62,9 +65,18 @@ test('the helper passes on reading containers and listed restarts', async () => 
   assert.deepEqual(list.names, ['jellyfin', 'roost']);
 });
 
-test('the helper hides everything but state from container details', async () => {
+test('the helper hides everything but state and the image name from container details', async () => {
   const info = await (await fetch(`${helperUrl}/containers/jellyfin/json`)).json();
-  assert.deepEqual(Object.keys(info).sort(), ['RestartCount', 'State']);
+  assert.deepEqual(Object.keys(info).sort(), ['Config', 'Image', 'RestartCount', 'State']);
+  assert.deepEqual(info.Config, { Image: 'jellyfin/jellyfin:latest' });
+});
+
+test('the helper shows an image\'s id and digests only', async () => {
+  const info = await (await fetch(`${helperUrl}/images/ghcr.io/x/app:1.2/json`)).json();
+  assert.deepEqual(info, { Id: 'sha256:abc', RepoDigests: ['jellyfin/jellyfin@sha256:def'] });
+  assert.equal(await ask('GET', '/images/..%2Fcontainers%2Fjellyfin/json'), 403);
+  assert.equal(await ask('DELETE', '/images/jellyfin/json'), 403);
+  assert.equal(await ask('POST', '/images/create?fromImage=x'), 403);
 });
 
 test('the helper passes on only the fixed container-events stream', async () => {

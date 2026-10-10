@@ -786,7 +786,11 @@ a.watch-card:focus-visible { transform: translate(4px, 4px); box-shadow: 3px 3px
 
 .dot.starting { background: #f5d77a; }
 .status-note { margin: 0 0 8px; font-size: 12px; text-transform: none; letter-spacing: 0; }
-.stat-state { font-size: 13px; }
+.stat-state { font-size: 13px; display: flex; align-items: center; flex-wrap: wrap; row-gap: 4px; }
+.update-pill { margin-left: auto; background: none; color: var(--ink); border-color: var(--ink); cursor: pointer; font-size: 10px; padding: 2px 8px; }
+.update-pill[aria-expanded="true"] { background: var(--ink); color: var(--bg); }
+.update-detail { font-size: 11px; line-height: 1.5; display: flex; flex-direction: column; gap: 4px; }
+.update-detail .link-btn { font-size: 11px; min-height: 0; padding: 0; }
 .stat-lines { font-size: 11px; display: flex; flex-direction: column; gap: 3px; border-top: 1px solid var(--line); padding-top: 10px; }
 .stat-lines div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .schedule-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 16px; margin: 4px 0 12px; }

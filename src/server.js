@@ -17,6 +17,7 @@ const selfUpdate = require('./self-update');
 const nestDrive = require('./nest-drive');
 const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor, restartContainer } = require('./docker');
+const { UpdateChecker } = require('./updates');
 const { DriveHealth } = require('./smart');
 const { OutsideServices } = require('./outside');
 const remoteAccess = require('./remote');
@@ -39,6 +40,7 @@ const { Assets } = require('./assets');
 const { TrafficMeter } = require('./traffic');
 const { createSearch, nestSource } = require('./search');
 const { Jellyfin, PREFIX: JELLYFIN_PREFIX, OPENER_HTML } = require('./jellyfin');
+const roostflix = require('./roostflix');
 const { UptimeLog, watchDockerEvents } = require('./uptime');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -204,7 +206,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, coffeeOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000 } = {}) {
+function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, coffeeOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, registryFetch, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000 } = {}) {
   const store = new Store(dataDir);
   const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
   // The few outside services Roost leans on, for the admin's status page.
@@ -243,7 +245,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     }
   }
   if (linked) store.save();
-  const jellyfin = new Jellyfin(() => store.db.settings.jellyfin);
+  // Roostflix, the look Roost gives Jellyfin's page, is on unless switched off.
+  const jellyfin = new Jellyfin(
+    () => store.db.settings.jellyfin,
+    () => (store.db.settings.roostflix === false ? null : (html) => roostflix.skinPage(html, (f) => { const a = assets.load(f); return a && a.hash; })),
+  );
   // Jellyfin sign-ins still being made for a Roost sign-in, by its id.
   const jellyfinLinks = new Map();
   const sessions = new Sessions(path.join(dataDir, 'sessions.json'), (s) => {
@@ -261,6 +267,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // the drive Roost keeps its data on (the same drive is only listed once).
   const diskList = disks && disks.length ? disks : [{ label: 'System', path: '/' }, { label: 'Data', path: dataDir }];
   const db = () => store.db;
+  const updates = new UpdateChecker({ dataDir, dockerHost, fetch: registryFetch });
   // SMART readings the roost-smart helper leaves behind; null when it isn't set up.
   const driveHealth = new DriveHealth(smartDir);
 
@@ -553,11 +560,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
 
   async function jellyfinView() {
     const c = db().settings.jellyfin;
-    if (!c || !c.url) return { url: '', keySaved: false, connected: false };
+    const skin = db().settings.roostflix !== false;
+    if (!c || !c.url) return { url: '', keySaved: false, connected: false, skin };
     try {
-      return { url: c.url, keySaved: Boolean(c.apiKey), connected: true, ...(await jellyfin.check()) };
+      return { url: c.url, keySaved: Boolean(c.apiKey), connected: true, skin, ...(await jellyfin.check()) };
     } catch (err) {
-      return { url: c.url, keySaved: Boolean(c.apiKey), connected: false, error: err.status === 401 ? 'the API key was refused' : err.message };
+      return { url: c.url, keySaved: Boolean(c.apiKey), connected: false, skin, error: err.status === 401 ? 'the API key was refused' : err.message };
     }
   }
 
@@ -1035,7 +1043,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const user = requireUser(req);
       // With the Jellyfin link on, the card opens Jellyfin through Roost,
       // already signed in.
-      const apps = appsFor(user).map((a) => (a.id === 'jellyfin' && jellyfin.enabled() ? { ...a, openUrl: `${JELLYFIN_PREFIX}/` } : galaxyOpenUrl(a, user)));
+      const apps = appsFor(user).map((a) => (a.id === 'jellyfin' && jellyfin.enabled() ? { ...a, openUrl: `${JELLYFIN_PREFIX}/`, ...(db().settings.roostflix === false ? {} : { name: roostflix.NAME }) } : galaxyOpenUrl(a, user)));
       send(res, 200, { apps, searchable: search.apps(user) });
     },
 
@@ -1070,6 +1078,17 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     'GET /api/admin/jellyfin': async (req, res) => {
       requireAdmin(req);
       send(res, 200, await jellyfinView());
+    },
+
+    // Roostflix on or off. Takes effect the next time Jellyfin's page loads.
+    'PUT /api/admin/roostflix': async (req, res) => {
+      requireAdmin(req);
+      const body = await readJson(req);
+      const on = body.on === true;
+      if (on) delete db().settings.roostflix;
+      else db().settings.roostflix = false;
+      store.save();
+      send(res, 200, { skin: on });
     },
 
     'PUT /api/admin/jellyfin': async (req, res) => {
@@ -1139,7 +1158,9 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         listContainers(dockerHost, probeTimeoutMs),
         Promise.all(visibleApps(db(), user).map((a) => appProbe(a, host, probeTimeoutMs))),
       ]);
-      const all = docker.containers || [];
+      // Update badges are for admins, the only ones who can act on them.
+      const updateOf = user.role === 'admin' ? updates.view(docker.containers || []) : {};
+      const all = (docker.containers || []).map((c) => (updateOf[c.id] ? { ...c, update: updateOf[c.id] } : c));
       const canRestart = new Set(user.role === 'admin' ? docker.restartable || [] : []);
       const claimed = new Set();
       const claim = (list) => { list.forEach((c) => claimed.add(c.id)); return list; };
@@ -1200,6 +1221,14 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         record(req, 'app-restart-failed', { actor: admin.username, detail: `${app.name}: ${err.cause.message}` });
         throw new HttpError(502, `${app.name} didn't restart (${err.cause.message})`);
       }
+      send(res, 200, { ok: true });
+    },
+
+    'POST /api/admin/updates/check': async (req, res) => {
+      requireAdmin(req);
+      const docker = await listContainers(dockerHost, probeTimeoutMs);
+      if (docker.error) throw new HttpError(503, "Roost can't see Docker");
+      if (!(await updates.checkNow(docker.containers))) throw new HttpError(429, 'Checked a moment ago');
       send(res, 200, { ok: true });
     },
 
