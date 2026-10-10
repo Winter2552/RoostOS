@@ -213,3 +213,31 @@ test('the card knows when Nest is already on a drive', async () => {
   const r = await call('GET', '/api/admin/nest-drive', null, adminCookie);
   assert.equal(r.body.onDrive, true);
 });
+
+test('a request nobody takes shows how long it has waited, and Try again asks afresh', async () => {
+  fs.rmSync(path.join(dataDir, 'nest-drive-status.json'), { force: true });
+  fs.rmSync(path.join(dataDir, 'nest-drive-request.json'), { force: true });
+  heartbeat();
+  const first = await call('GET', '/api/admin/nest-drive', null, adminCookie);
+  assert.equal(first.body.state, 'off');
+  assert.equal(first.body.requested, true);
+  // An older updater leaves the file alone: pretend it has sat there a while.
+  fs.writeFileSync(path.join(dataDir, 'nest-drive-request.json'), JSON.stringify({ action: 'list', at: new Date(Date.now() - 120000).toISOString() }));
+  const stuck = await call('GET', '/api/admin/nest-drive', null, adminCookie);
+  assert.ok(stuck.body.waitedMs > 100000);
+  assert.equal((await call('POST', '/api/admin/nest-drive/refresh', {}, userCookie)).status, 403);
+  assert.equal((await call('POST', '/api/admin/nest-drive/refresh', {}, adminCookie)).status, 202);
+  const again = await call('GET', '/api/admin/nest-drive', null, adminCookie);
+  assert.ok(again.body.waitedMs < 5000);
+});
+
+test('the updater says when it cannot see the drives folder', async () => {
+  const w = world();
+  try {
+    fs.rmSync(path.join(w.media), { recursive: true });
+    nestDrive.writeRequest(w.data, { action: 'list' });
+    await w.u.tick();
+    assert.equal(nestDrive.readStatus(w.data).mediaSeen, false);
+    assert.equal(nestDrive.summarize(nestDrive.readStatus(w.data), w.root).mediaSeen, false);
+  } finally { w.done(); }
+});

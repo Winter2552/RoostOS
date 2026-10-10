@@ -33,6 +33,7 @@ const ACTIONS = new Set(['check', 'apply']);
 const DRIVE_REQUEST_FILE = 'nest-drive-request.json';
 const DRIVE_STATUS_FILE = 'nest-drive-status.json';
 const OVERRIDE_FILE = 'docker-compose.override.yml';
+const DRIVE_LOOK_MS = 8000;
 const DRIVE_NAME = /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$/;
 // The services an update rebuilds and restarts. The others (Docker window,
 // drive health, this updater) keep running as they are.
@@ -130,27 +131,29 @@ function takeDriveRequest(dataDir) {
 
 // Drives plugged into the server: the folders under /media that are their own
 // mount (a different device number from /media itself), with free space.
-function listDrives(mediaDir) {
+async function listDrives(mediaDir, perDriveMs = DRIVE_LOOK_MS) {
   let rootDev;
+  let names;
   try {
-    rootDev = fs.statSync(mediaDir).dev;
+    rootDev = (await fs.promises.stat(mediaDir)).dev;
+    names = await fs.promises.readdir(mediaDir);
   } catch {
     return [];
   }
-  const out = [];
-  for (const name of fs.readdirSync(mediaDir)) {
-    if (!DRIVE_NAME.test(name)) continue;
-    try {
-      const dir = path.join(mediaDir, name);
-      const st = fs.statSync(dir);
-      if (!st.isDirectory() || st.dev === rootDev) continue;
-      const fsStat = fs.statfsSync(dir);
-      out.push({ name, totalBytes: fsStat.blocks * fsStat.bsize, freeBytes: fsStat.bavail * fsStat.bsize });
-    } catch {
-      // Not readable: not offered.
-    }
-  }
-  return out.sort((a, b) => a.name.localeCompare(b.name));
+  // Looked at one by one without blocking, each with a time limit: a drive that
+  // is asleep or a stuck mount must not freeze the whole updater.
+  const look = async (name) => {
+    const dir = path.join(mediaDir, name);
+    const st = await fs.promises.stat(dir);
+    if (!st.isDirectory() || st.dev === rootDev) return null;
+    const fsStat = await fs.promises.statfs(dir);
+    return { name, totalBytes: fsStat.blocks * fsStat.bsize, freeBytes: fsStat.bavail * fsStat.bsize };
+  };
+  const found = await Promise.all(names.filter((n) => DRIVE_NAME.test(n)).map((name) => Promise.race([
+    look(name).catch(() => null),
+    new Promise((resolve) => { setTimeout(() => resolve(null), perDriveMs).unref(); }),
+  ])));
+  return found.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function create({ dataDir, srcDir, exec = run, now = () => Date.now(), wait = sleep, healthWaitMs = HEALTH_WAIT_MS, composeProject = PROJECT, mediaDir = '/hostmedia', mediaHost = '/media', drives = listDrives }) {
@@ -379,8 +382,16 @@ function create({ dataDir, srcDir, exec = run, now = () => Date.now(), wait = sl
   }
 
   async function refreshDrives() {
-    driveStatus.drives = drives(mediaDir);
-    driveStatus.current = await nestSource();
+    try {
+      driveStatus.drives = await drives(mediaDir);
+      driveStatus.mediaSeen = fs.existsSync(mediaDir);
+      driveStatus.current = await nestSource();
+      driveStatus.error = null;
+    } catch (err) {
+      // Say so in the status, so Roost shows a problem instead of waiting for ever.
+      driveStatus.error = err.message;
+      console.error('Roost updater: could not look at the drives:', err.message);
+    }
     saveDrive();
   }
 
@@ -401,7 +412,7 @@ function create({ dataDir, srcDir, exec = run, now = () => Date.now(), wait = sl
         if (err instanceof Stop) throw err;
       }
       if (!DRIVE_NAME.test(name)) throw new Stop("That isn't a drive name.");
-      driveStatus.drives = drives(mediaDir);
+      driveStatus.drives = await drives(mediaDir);
       const drive = driveStatus.drives.find((d) => d.name === name);
       if (!drive) throw new Stop(`Couldn't find a drive called “${name}” plugged into the server.`);
       const owner = await docker(['inspect', '-f', '{{index .Config.Labels "com.docker.compose.project"}}', 'roost']);
@@ -457,7 +468,7 @@ function create({ dataDir, srcDir, exec = run, now = () => Date.now(), wait = sl
       driveStatus.state = 'idle';
       driveStatus.phase = null;
       driveStatus.current = await nestSource();
-      driveStatus.drives = drives(mediaDir);
+      driveStatus.drives = await drives(mediaDir);
       saveDrive();
     }
   }

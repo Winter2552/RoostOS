@@ -2737,13 +2737,19 @@ function renderNestDrive(n) {
   // Nothing to offer until the updater has looked at the drives.
   const noUpdater = n.updater === 'off' || n.updater === 'stopped';
   panel.classList.toggle('hidden', n.updater === 'off');
-  const looking = n.state === 'off' && !noUpdater;
+  // The updater answers within seconds; a long silence means it isn't reading
+  // requests (an older one that was never redeployed).
+  const stuck = !noUpdater && n.state === 'off' && (n.waitedMs || 0) > 30000;
+  const looking = n.state === 'off' && !noUpdater && !stuck;
   const moving = n.state === 'moving' || n.requested;
   const done = n.onDrive && !nestDriveChanging && !moving;
   const free = (n.drives || []).filter((d) => !n.current || d.name !== driveOf(n.current));
   let headline;
   let dot = 'ok';
-  if (looking) {
+  if (stuck) {
+    headline = 'The updater isn’t answering';
+    dot = 'offline';
+  } else if (looking) {
     headline = 'Looking at the drives…';
     dot = 'starting';
   } else if (moving) {
@@ -2764,16 +2770,19 @@ function renderNestDrive(n) {
   const notes = [];
   const l = n.last;
   if (l && !l.ok && !moving) notes.push(`The last move didn’t work: ${l.error}${l.rolledBack ? ' Nest is back where it was.' : ''}`);
-  if (!looking && !done && !moving && !n.empty) notes.push('Nest already has files in it. They would have to be copied across first, so this button can’t move it yet. See the guide in the README.');
-  if (!looking && !done && !moving && n.empty && !free.length && !noUpdater) notes.push('No other drive is plugged in. Plug in the data drive and it appears here.');
+  if (!looking && !stuck && !done && !moving && !n.empty) notes.push('Nest already has files in it. They would have to be copied across first, so this button can’t move it yet. See the guide in the README.');
+  if (!looking && !stuck && !done && !moving && n.empty && !free.length && !noUpdater) notes.push('No other drive is plugged in. Plug in the data drive and it appears here.');
   if (noUpdater) notes.push('Check that roost-updater is started in ZimaOS, and redeploy once so it can see the drives.');
+  if (n.error) notes.push(`The updater couldn’t look at the drives: ${n.error}`);
+  if (stuck) notes.push('It is probably still running an older version. In the Roost folder on the server, run “sudo docker compose up -d --build”, wait a minute, then press Try again.');
+  if (n.state !== 'off' && n.mediaSeen === false) notes.push('The updater can’t see the server’s drives. Run “sudo docker compose up -d --build” in the Roost folder once so it gets the new drives line.');
   $('#nestdrive-note').textContent = notes.join(' ');
   $('#nestdrive-note').classList.toggle('hidden', !notes.length);
   const tech = l && !l.ok && l.detail;
   $('#nestdrive-tech').classList.toggle('hidden', !tech);
   $('#nestdrive-tech-text').textContent = tech || '';
 
-  const canPick = !done && !moving && !looking && n.empty && free.length && !noUpdater;
+  const canPick = !done && !moving && !looking && !stuck && n.empty && free.length && !noUpdater;
   const select = $('#nestdrive-select');
   const picked = select.value;
   select.replaceChildren(...free.map((d) => el('option', { value: d.name, text: driveLabel(d) })));
@@ -2782,6 +2791,7 @@ function renderNestDrive(n) {
   $('#nestdrive-confirm').classList.toggle('hidden', !canPick || !nestDriveAsking);
   $('#nestdrive-confirm-text').textContent = `Move Nest and Glint to ${select.value}? Roost restarts for a minute or two. Nothing is copied because Nest is empty; if the move fails, the old setting is put back.`;
   $('#nestdrive-change').classList.toggle('hidden', !done || !n.empty);
+  $('#nestdrive-retry').classList.toggle('hidden', !stuck);
 
   clearTimeout(nestDriveTimer);
   if (moving || looking) nestDriveTimer = setTimeout(loadNestDrive, 3000);
@@ -2793,7 +2803,7 @@ async function loadNestDrive() {
   try {
     renderNestDrive(await api('GET', '/api/admin/nest-drive'));
     // The first look at the drives is made by the updater a moment after the request.
-    if (nestDriveLast && nestDriveLast.requested) nestDriveTimer = setTimeout(loadNestDrive, 3000);
+    if (nestDriveLast && nestDriveLast.requested && !(nestDriveLast.waitedMs > 30000)) nestDriveTimer = setTimeout(loadNestDrive, 3000);
   } catch (err) {
     // While Roost restarts for the move, it simply doesn't answer for a bit.
     if (nestDriveLast && (nestDriveLast.state === 'moving' || nestDriveLast.requested) && !err.status) {
@@ -2801,6 +2811,14 @@ async function loadNestDrive() {
     }
   }
 }
+
+$('#nestdrive-retry').addEventListener('click', async () => {
+  try {
+    await api('POST', '/api/admin/nest-drive/refresh');
+  } catch (err) { flash($('#nestdrive-panel'), err.message, false); }
+  nestDriveLast = { ...nestDriveLast, waitedMs: 0 };
+  loadNestDrive();
+});
 
 $('#nestdrive-move').addEventListener('click', () => {
   nestDriveAsking = true;
