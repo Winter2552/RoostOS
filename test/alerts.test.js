@@ -2,7 +2,12 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { Watcher, GRACE_MS } = require('../src/alerts');
+const { createServer } = require('../src/server');
+const { setUpTwoStep } = require('./helpers');
 
 const GB = 1024 ** 3;
 
@@ -158,4 +163,50 @@ test('cleared alerts are kept for a week', async () => {
   assert.equal(env.store.db.alerts.length, 1);
   await env.tick(8 * 24 * 60 * 60 * 1000);
   assert.equal(env.store.db.alerts.length, 0);
+});
+
+test('alerts: admins read, ignore and tune them; users cannot', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'roost-alerts-'));
+  const docker = { containers: [{ id: 'c1', name: 'jellyfin', project: '', state: 'exited', health: null, restarts: 0, exitCode: 1 }] };
+  const server = createServer({ dataDir: dir, alertIntervalMs: 0, disks: [{ label: 'Data', path: dir }], readContainers: async () => docker });
+  let clock = Date.now();
+  server.watcher.now = () => clock;
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const call = async (method, p, body, cookie) => {
+    const res = await fetch(url + p, { method, headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(cookie ? { Cookie: cookie } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    return { status: res.status, body: await res.json().catch(() => null), cookie: (res.headers.get('set-cookie') || '').split(';')[0] };
+  };
+  try {
+    const admin = (await call('POST', '/api/setup', { username: 'raven', password: 'correct horse' })).cookie;
+    await setUpTwoStep(call, admin);
+    await call('POST', '/api/admin/users', { username: 'sam', password: 'correct horse' }, admin);
+    const sam = (await call('POST', '/api/login', { username: 'sam', password: 'correct horse' })).cookie;
+    assert.equal((await call('GET', '/api/alerts', null, sam)).status, 403);
+
+    await server.watcher.check();
+    clock += 3 * 60 * 1000;
+    await server.watcher.check();
+    let view = (await call('GET', '/api/alerts', null, admin)).body;
+    assert.deepEqual(view.active.map((a) => a.title), ['Jellyfin has stopped']);
+    assert.deepEqual(view.settings, { alertApps: true, alertDisks: true, alertDiskPct: 90 });
+    assert.ok(view.checkedAt);
+
+    assert.equal((await call('POST', `/api/alerts/${view.active[0].id}/dismiss`, null, sam)).status, 403);
+    view = (await call('POST', `/api/alerts/${view.active[0].id}/dismiss`, null, admin)).body;
+    assert.ok(view.active[0].dismissedAt);
+
+    assert.equal((await call('PATCH', '/api/admin/settings', { alertDiskPct: 101 }, admin)).status, 400);
+    const saved = await call('PATCH', '/api/admin/settings', { alertApps: false, alertDisks: false, alertDiskPct: 80 }, admin);
+    assert.equal(saved.status, 200);
+    // Turning the checks off re-checks at once, so the app alert clears.
+    view = (await call('GET', '/api/alerts', null, admin)).body;
+    assert.deepEqual(view.settings, { alertApps: false, alertDisks: false, alertDiskPct: 80 });
+    assert.deepEqual(view.active, []);
+    assert.deepEqual(view.recent.map((a) => a.title), ['Jellyfin has stopped']);
+    assert.equal((await call('POST', `/api/alerts/${view.recent[0].id}/dismiss`, null, admin)).status, 404);
+  } finally {
+    server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
