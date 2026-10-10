@@ -701,6 +701,7 @@ async function enter(user) {
   renderUser();
   await Promise.all([loadApps(), isGuest(user) ? null : loadSystem()]);
   if (!isGuest(user)) loadBackup();
+  if (user.role === 'admin') loadAlerts();
   route();
   if (user.role === 'admin' && !location.hash.startsWith('#/admin')) loadSetup();
 }
@@ -827,8 +828,271 @@ $('#who').addEventListener('pointerleave', (e) => {
 
 $('#logout').addEventListener('click', async () => {
   await api('POST', '/api/logout').catch(() => {});
+  closeAlerts();
   showWelcome(false);
 });
+
+// ---------- alerts (admins) ----------
+
+const ALERTS_REFRESH_MS = 30 * 1000;
+const alerts = { data: null, busy: false };
+
+function clock(iso) {
+  return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+// "14:02" today, "3 Oct 14:02" on another day.
+function when(iso) {
+  const d = new Date(iso);
+  return d.toDateString() === new Date().toDateString() ? clock(iso) : `${shortDate(iso)} ${clock(iso)}`;
+}
+
+async function loadAlerts() {
+  if (alerts.busy || !state.user || state.user.role !== 'admin') return;
+  alerts.busy = true;
+  try {
+    renderAlerts(await api('GET', '/api/alerts'));
+  } catch {
+    // Keep what the bell showed last.
+  } finally {
+    alerts.busy = false;
+  }
+}
+
+function alertRow(a) {
+  const cleared = Boolean(a.resolvedAt);
+  const kind = cleared ? '' : a.dismissedAt ? 'starting' : 'offline';
+  let meta;
+  if (!cleared) meta = `Since ${when(a.startedAt)} · ${ago(a.startedAt)}${a.dismissedAt ? ' · ignored until fixed' : ''}`;
+  else if (a.startedAt === a.resolvedAt) meta = when(a.resolvedAt);
+  else meta = `${when(a.startedAt)} – ${clock(a.resolvedAt)} · lasted ${duration((Date.parse(a.resolvedAt) - Date.parse(a.startedAt)) / 1000)}`;
+  const ignore = !cleared && !a.dismissedAt
+    ? el('button', { class: 'link-btn mono', type: 'button', text: 'Ignore', onclick: () => dismissAlert(a.id) })
+    : null;
+  return el('div', { class: `alert-row${cleared ? ' cleared' : ''}` },
+    el('span', { class: `dot ${kind}` }),
+    el('div', { class: 'alert-text' },
+      el('div', { text: a.title }),
+      el('div', { class: 'mono muted', text: a.detail }),
+      el('div', { class: 'mono muted', text: meta })),
+    ignore);
+}
+
+function renderAlerts(data) {
+  alerts.data = data;
+  const loud = data.active.filter((a) => !a.dismissedAt).length;
+  const count = $('#bell-count');
+  count.textContent = loud > 9 ? '9+' : String(loud);
+  count.classList.toggle('hidden', !loud);
+  $('#bell').classList.toggle('loud', loud > 0);
+  $('#bell').setAttribute('aria-label', loud ? `Alerts: ${loud} problem${loud > 1 ? 's' : ''}` : 'Alerts');
+  $('#alerts-checked').textContent = data.checkedAt ? `Checked ${clock(data.checkedAt)}` : 'First check running';
+
+  const list = [];
+  if (data.active.length) list.push(...data.active.map(alertRow));
+  else list.push(el('p', { class: 'alerts-quiet' }, el('span', { class: 'dot online' }), 'All quiet'));
+  if (data.recent.length) {
+    list.push(el('div', { class: 'mono muted alerts-sub', text: 'Cleared · last 7 days' }));
+    list.push(...data.recent.map(alertRow));
+  }
+  $('#alerts-list').replaceChildren(...list);
+  renderAlertSettings(data.settings);
+}
+
+async function dismissAlert(id) {
+  try {
+    renderAlerts(await api('POST', `/api/alerts/${id}/dismiss`));
+  } catch {
+    loadAlerts();
+  }
+}
+
+function openAlerts() {
+  $('#alerts-panel').classList.remove('hidden');
+  $('#bell').setAttribute('aria-expanded', 'true');
+  loadAlerts();
+}
+
+function closeAlerts() {
+  $('#alerts-panel').classList.add('hidden');
+  $('#bell').setAttribute('aria-expanded', 'false');
+}
+
+$('#bell').addEventListener('click', () => {
+  if ($('#alerts-panel').classList.contains('hidden')) openAlerts();
+  else closeAlerts();
+});
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.bell-wrap')) closeAlerts();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('#alerts-panel').classList.contains('hidden')) {
+    closeAlerts();
+    $('#bell').focus();
+  }
+});
+$('#alerts-settings-link').addEventListener('click', () => {
+  closeAlerts();
+  // Wait for the admin view to show, then bring the alert settings into view.
+  setTimeout(() => $('#alerts-form').scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+});
+
+const alertForm = $('#alerts-form');
+const paintAlertPct = () => {
+  const r = alertForm.alertDiskPct;
+  r.style.setProperty('--fill', `${((r.value - r.min) / (r.max - r.min)) * 100}%`);
+  $('#alert-pct-value').textContent = `${r.value}%`;
+  r.disabled = !alertForm.alertDisks.checked;
+  $('.alert-level', alertForm).classList.toggle('off', r.disabled);
+};
+alertForm.alertDiskPct.addEventListener('input', paintAlertPct);
+alertForm.alertDisks.addEventListener('change', paintAlertPct);
+
+function renderAlertSettings(s) {
+  // Don't overwrite what an admin is in the middle of changing.
+  if (alertForm.contains(document.activeElement)) return;
+  alertForm.alertApps.checked = s.alertApps;
+  alertForm.alertDisks.checked = s.alertDisks;
+  alertForm.alertDiskPct.value = s.alertDiskPct;
+  paintAlertPct();
+}
+
+alertForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('PATCH', '/api/admin/settings', {
+      alertApps: alertForm.alertApps.checked,
+      alertDisks: alertForm.alertDisks.checked,
+      alertDiskPct: Number(alertForm.alertDiskPct.value),
+    });
+    flash(alertForm, 'Saved');
+    alertForm.querySelector('button').blur();
+    loadAlerts();
+  } catch (err) { flash(alertForm, err.message, false); }
+});
+
+// ---------- alerts on this device (admins) ----------
+
+// Roost sends the alert itself; the browser's own push service only carries the
+// sealed message to this device. Nothing here polls: the page asks once when
+// the Admin view opens and again after each button.
+const push = { devices: [], mine: null, busy: false };
+
+function isIos() {
+  return /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+function isInstalled() {
+  return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+}
+
+// What this browser can do about alerts, in the order the person needs to fix it.
+function pushSupport() {
+  if (!window.isSecureContext) return { ok: false, note: 'Phones and PCs only allow alerts when Roost is opened over https. Set up the certificate under Secure connection, then open Roost from its https address.' };
+  if (isIos() && !isInstalled()) return { ok: false, note: 'On iPhone, add Roost to the Home Screen first: tap Share, then Add to Home Screen, then open Roost from there and come back to this page.' };
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return { ok: false, note: "This browser can't receive alerts. Try Chrome, Edge, Firefox or Safari." };
+  if (Notification.permission === 'denied') return { ok: false, note: 'Alerts are blocked for Roost in this browser. Allow notifications for this site in the browser settings, then reload.' };
+  return { ok: true };
+}
+
+const keyBytes = (b64u) => Uint8Array.from(atob(b64u.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+
+async function currentSubscription() {
+  const reg = await navigator.serviceWorker.ready;
+  return reg.pushManager.getSubscription();
+}
+
+async function loadPush() {
+  const support = pushSupport();
+  const sub = support.ok ? await currentSubscription().catch(() => null) : null;
+  try {
+    // Sending what the browser holds again just refreshes it, so Roost and this
+    // device agree even if one of them lost track.
+    push.mine = sub ? (await api('POST', '/api/push/devices', { subscription: sub.toJSON() })).device.id : null;
+    push.devices = (await api('GET', '/api/push/devices')).devices;
+  } catch (err) {
+    push.mine = null;
+    $('#push-msg').className = 'msg error';
+    $('#push-msg').textContent = err.message;
+  }
+  renderPush(support);
+}
+
+function renderPush(support = pushSupport()) {
+  const on = Boolean(push.mine);
+  $('#push-note').textContent = support.ok ? (on ? 'On for this device.' : 'Off for this device.') : support.note;
+  $('#push-note').classList.toggle('muted', support.ok);
+  $('#push-on').classList.toggle('hidden', !support.ok || on);
+  $('#push-off').classList.toggle('hidden', !on);
+  $('#push-test').classList.toggle('hidden', !push.devices.length);
+  $('#push-devices').replaceChildren(...push.devices.map((d) => el('div', { class: 'push-device' },
+    el('div', {},
+      el('div', { text: d.label }),
+      el('div', { class: 'mono muted', text: `Added ${shortDate(d.createdAt)}` })),
+    d.id === push.mine ? el('span', { class: 'pill', text: 'This device' }) : null,
+    el('button', { class: 'link-btn mono', type: 'button', text: 'Remove', onclick: () => removePushDevice(d.id) }))));
+}
+
+function pushFlash(text, ok = true) {
+  $('#push-msg').className = `msg ${ok ? 'ok' : 'error'}`;
+  $('#push-msg').textContent = text;
+}
+
+// Runs one button's work with the buttons paused, then shows the result.
+async function pushAction(work) {
+  if (push.busy) return;
+  push.busy = true;
+  document.querySelectorAll('#push-panel button').forEach((b) => { b.disabled = true; });
+  pushFlash('');
+  try {
+    await work();
+  } catch (err) {
+    pushFlash(err.message || 'That did not work', false);
+  } finally {
+    push.busy = false;
+    document.querySelectorAll('#push-panel button').forEach((b) => { b.disabled = false; });
+    await loadPush();
+  }
+}
+
+$('#push-on').addEventListener('click', () => pushAction(async () => {
+  // iPhone wants the permission prompt straight from the tap, so it comes first.
+  if ((await Notification.requestPermission()) !== 'granted') throw new Error('Notifications were not allowed. Allow them for this site in the browser settings and try again.');
+  const { publicKey } = await api('GET', '/api/push/key');
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  // A subscription made for a different Roost key can't be reused.
+  if (sub && new Uint8Array(sub.options.applicationServerKey).join() !== keyBytes(publicKey).join()) {
+    await sub.unsubscribe();
+    sub = null;
+  }
+  sub = sub || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(publicKey) });
+  await api('POST', '/api/push/devices', { subscription: sub.toJSON() });
+  pushFlash('Alerts are on. Press "Send a test alert" to check.');
+}));
+
+$('#push-off').addEventListener('click', () => pushAction(async () => {
+  const sub = await currentSubscription();
+  if (push.mine) await api('DELETE', `/api/push/devices/${push.mine}`);
+  if (sub) await sub.unsubscribe();
+  pushFlash('Alerts are off for this device.');
+}));
+
+$('#push-test').addEventListener('click', () => pushAction(async () => {
+  const { result } = await api('POST', '/api/push/test');
+  const parts = [`Sent to ${result.sent} ${result.sent === 1 ? 'device' : 'devices'}`];
+  if (result.failed) parts.push(`${result.failed} did not answer`);
+  if (result.removed) parts.push(`${result.removed} had turned alerts off and ${result.removed === 1 ? 'was' : 'were'} removed`);
+  pushFlash(`${parts.join('; ')}.`, !result.failed);
+}));
+
+async function removePushDevice(id) {
+  await pushAction(async () => {
+    // Removing this very device also turns its browser subscription off.
+    if (id === push.mine) (await currentSubscription())?.unsubscribe();
+    await api('DELETE', `/api/push/devices/${id}`);
+  });
+}
 
 // ---------- apps ----------
 
@@ -1962,6 +2226,7 @@ $('#setup-toggle').addEventListener('click', () => {
 
 async function loadAdmin() {
   loadSetup(true);
+  loadPush();
   const [{ users }, { apps }, { requests, defaultLimitGb }, { invites, publicUrl }, { settings }, { family }] = await Promise.all([
     api('GET', '/api/admin/users'), api('GET', '/api/apps'), api('GET', '/api/admin/storage-requests'), api('GET', '/api/admin/invites'),
     api('GET', '/api/admin/settings'), api('GET', '/api/admin/family')]);
@@ -3293,6 +3558,9 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
     const asking = [...restarts.values()].some((r) => r.step === 'confirm');
     if (state.user && !conn.lost && !document.hidden && !asking && !$('#view-status').classList.contains('hidden')) loadStatus();
   }, STATUS_REFRESH_MS);
+  // The bell reads the server's last check, so this is cheap; it pauses in background tabs.
+  setInterval(() => { if (!document.hidden) loadAlerts(); }, ALERTS_REFRESH_MS);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) loadAlerts(); });
   const token = linkToken();
   if (token) return showJoin(token);
   const s = await api('GET', '/api/state');
