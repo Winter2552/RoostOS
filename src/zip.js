@@ -24,11 +24,13 @@ function dosDateTime(ms) {
 }
 
 // entries: [{ name: 'folder/file.txt' | 'folder/', file: '/abs/path' | null, size, mtime }]
+// An entry may have `open()` returning a readable stream instead of `file`.
+// `size` is always the size of the bytes that will be written.
 function plan(entries) {
   let offset = 0;
   const items = entries.map((e) => {
     const name = Buffer.from(e.name, 'utf8');
-    const dir = !e.file;
+    const dir = !e.file && !e.open;
     const size = dir ? 0 : e.size;
     const zip64 = size >= MAX32;
     const item = { ...e, nameBuf: name, dir, size, zip64, offset, ...dosDateTime(e.mtime) };
@@ -158,6 +160,12 @@ function write(out, buf) {
   return out.write(buf) ? null : new Promise((r) => out.once('drain', r));
 }
 
+// Where an entry's bytes come from. `open` (a function) lets callers supply the
+// stream themselves, e.g. a backup file that has to be gunzipped on the way.
+function source(it) {
+  return it.open ? it.open() : fs.createReadStream(it.file, { highWaterMark: 1 << 20 });
+}
+
 async function streamZip(out, p) {
   for (const it of p.items) {
     if (out.destroyed) return;
@@ -165,7 +173,7 @@ async function streamZip(out, p) {
     if (it.dir) continue;
     let crc = 0;
     let sent = 0;
-    for await (const chunk of fs.createReadStream(it.file, { highWaterMark: 1 << 20 })) {
+    for await (const chunk of source(it)) {
       // Never send more than was promised, or the zip and Content-Length break.
       const part = sent + chunk.length > it.size ? chunk.subarray(0, it.size - sent) : chunk;
       crc = zlib.crc32(part, crc);

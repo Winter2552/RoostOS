@@ -13,7 +13,7 @@ const ICONS = {
   home: '<path d="M3 11l9-7 9 7v9h-6v-6H9v6H3z"/>',
 };
 
-const state = { serverName: 'Roost', publicUrl: '', mailEnabled: false, user: null, apps: [], status: {}, users: [], defaultLimitGb: null, diskGb: null };
+const state = { serverName: 'Roost', publicUrl: '', mailEnabled: false, user: null, apps: [], status: {}, arranging: null, users: [], defaultLimitGb: null, diskGb: null, notice: null };
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -35,20 +35,117 @@ function icon(name, cls = 'icon-tile') {
   return span;
 }
 
-async function api(method, url, body) {
-  const res = await fetch(url, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
-    credentials: 'same-origin',
-  });
+async function api(method, url, body, signal) {
+  let res;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+      credentials: 'same-origin',
+      signal,
+    });
+  } catch (err) {
+    if (err.name === 'AbortError') throw err;
+    connectionLost();
+    throw new Error("Can't reach the server");
+  }
+  if (serverDown(res)) {
+    connectionLost();
+    throw new Error("Can't reach the server");
+  }
+  connectionBack();
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 && !url.startsWith('/api/login') && !linkToken()) {
     showWelcome(false);
   }
-  if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status });
+  if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status, code: data.code });
   return data;
 }
+
+// ---------- connection ----------
+// When the server stops answering, a banner says so in plain words and checks
+// again on a growing gap. It does nothing while the tab is hidden or the device
+// is offline, so a lost server costs no battery or data.
+
+const conn = { lost: false, booted: false, timer: null, tries: 0, checking: false };
+const RETRY_MS = [2000, 5000, 15000, 60000];
+
+// Roost always answers in JSON. A 5xx page that isn't JSON comes from a proxy
+// or tunnel in front of Roost saying it can't reach the server behind it.
+function serverDown(res) {
+  return res.status >= 502 && !String(res.headers.get('Content-Type')).includes('application/json');
+}
+
+function connectionWhy() {
+  return navigator.onLine
+    ? "The server may be off or restarting, or you're away from home and it can't be reached from here."
+    : 'This device is offline. Roost will reconnect when it is back online.';
+}
+
+function connectionLost() {
+  if (conn.lost) return;
+  conn.lost = true;
+  conn.tries = 0;
+  $('#conn-title').textContent = "Can't reach your Roost server";
+  $('#conn-why').textContent = connectionWhy();
+  $('#conn-retry').classList.remove('hidden');
+  $('#conn-banner').classList.remove('hidden', 'back');
+  scheduleCheck();
+}
+
+function connectionBack() {
+  conn.booted = true;
+  if (!conn.lost) return;
+  conn.lost = false;
+  clearTimeout(conn.timer);
+  $('#conn-title').textContent = 'Connected again';
+  $('#conn-why').textContent = '';
+  $('#conn-retry').classList.add('hidden');
+  $('#conn-banner').classList.add('back');
+  setTimeout(() => { if (!conn.lost) $('#conn-banner').classList.add('hidden'); }, 2000);
+  // Fill in whatever failed to load while the server was away.
+  if (state.user) {
+    loadApps().catch(() => {});
+    route();
+  }
+}
+
+function scheduleCheck() {
+  clearTimeout(conn.timer);
+  if (!conn.lost || document.hidden || !navigator.onLine) return;
+  conn.timer = setTimeout(checkServer, RETRY_MS[Math.min(conn.tries, RETRY_MS.length - 1)]);
+}
+
+async function checkServer() {
+  if (!conn.lost || conn.checking) return;
+  clearTimeout(conn.timer);
+  conn.checking = true;
+  $('#conn-retry').disabled = true;
+  $('#conn-retry').textContent = 'Checking…';
+  let ok = false;
+  try {
+    const res = await fetch('/api/ping', { cache: 'no-store', credentials: 'same-origin' });
+    ok = res.ok;
+  } catch {}
+  conn.checking = false;
+  $('#conn-retry').disabled = false;
+  $('#conn-retry').textContent = 'Try again';
+  if (ok) {
+    // The first load never finished, so start again from the top.
+    if (!conn.booted) return location.reload();
+    connectionBack();
+  } else {
+    conn.tries++;
+    $('#conn-why').textContent = connectionWhy();
+    scheduleCheck();
+  }
+}
+
+$('#conn-retry').addEventListener('click', checkServer);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && conn.lost) checkServer(); });
+window.addEventListener('online', () => { if (conn.lost) { conn.tries = 0; checkServer(); } });
+window.addEventListener('offline', () => { if (conn.lost) { $('#conn-why').textContent = connectionWhy(); clearTimeout(conn.timer); } });
 
 function flash(form, text, ok = true) {
   const msg = $('.msg', form);
@@ -138,10 +235,12 @@ const pickers = {
   request: gbPicker({ label: 'Storage you need' }),
   newUser: gbPicker({ label: 'Storage limit', allowNone: true }),
   default: gbPicker({ label: 'Default storage limit', allowNone: true }),
+  family: gbPicker({ label: 'Family storage limit', allowNone: true }),
 };
 $('#request-picker').replaceWith(pickers.request);
 $('#new-user-picker').replaceWith(pickers.newUser);
 $('#default-picker').replaceWith(pickers.default);
+$('#family-picker').replaceWith(pickers.family);
 
 function shortDate(iso) {
   return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
@@ -167,6 +266,7 @@ let setupMode = false;
 function showWelcome(setup) {
   setupMode = setup;
   state.user = null;
+  state.arranging = null;
   $('#shell').classList.add('hidden');
   $('#secure').classList.add('hidden');
   $('#welcome').classList.remove('hidden');
@@ -455,7 +555,8 @@ async function showJoin(token) {
   if (invite) {
     $('#join-title').textContent = `Join ${info.serverName}`;
     const who = info.invitedBy ? `${info.invitedBy} invited you` : "You're invited";
-    $('#join-lead').textContent = info.apps.length ? `${who} · ${info.apps.join(', ')}` : who;
+    const lead = info.apps.length ? `${who} · ${info.apps.join(', ')}` : who;
+    $('#join-lead').textContent = info.guestUntil ? `${lead} · guest pass until ${untilDate(info.guestUntil)}` : lead;
     $('#join-submit').textContent = 'Create account';
     usernameHint('');
   } else {
@@ -558,14 +659,33 @@ function linkBox(url, note, shareText) {
   return el('div', { class: 'link-box' }, input, el('div', { class: 'row', style: 'margin:0' }, copy, share), el('div', { class: 'mono muted', text: note }));
 }
 
+// When a guest pass ends: after some days, or at the end of the day picked.
+function guestUntil(f) {
+  if (f.guestFor.value !== 'date') return new Date(Date.now() + Number(f.guestFor.value) * 86400000).toISOString();
+  return f.guestDate.value ? new Date(`${f.guestDate.value}T23:59:59`).toISOString() : '';
+}
+
+const isGuest = (u) => u.role === 'guest';
+
 function untilDate(iso) {
   return new Date(iso).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 // ---------- shell ----------
 
+// Coffee Galaxy sends signed-out visitors here with ?next=coffee; once they are
+// signed in, they go back to it.
+function followNext() {
+  if (new URLSearchParams(location.search).get('next') !== 'coffee') return false;
+  history.replaceState(null, '', location.pathname + location.hash);
+  if (/^[\d.]+$/.test(location.hostname) || !location.hostname.includes('.')) return false;
+  location.assign(`https://nova.${location.hostname}/coffee/`);
+  return true;
+}
+
 async function enter(user) {
   state.user = user;
+  if (followNext()) return;
   if (needsSecureStep(user)) {
     showSecure(user);
     return;
@@ -575,8 +695,11 @@ async function enter(user) {
   $('#join').classList.add('hidden');
   $('#shell').classList.remove('hidden');
   document.querySelectorAll('.admin-only').forEach((n) => n.classList.toggle('hidden', user.role !== 'admin'));
+  // Guests get a calm view: their apps and their profile, nothing about the server.
+  document.querySelectorAll('.member-only').forEach((n) => n.classList.toggle('hidden', isGuest(user)));
   renderUser();
-  await Promise.all([loadApps(), loadSystem()]);
+  await Promise.all([loadApps(), isGuest(user) ? null : loadSystem()]);
+  if (!isGuest(user)) loadBackup();
   route();
   if (user.role === 'admin' && !location.hash.startsWith('#/admin')) loadSetup();
 }
@@ -586,25 +709,27 @@ function renderUser() {
   const name = u.displayName || u.username;
   $('#avatar').textContent = name.charAt(0).toUpperCase();
   $('#who-name').textContent = name;
-  $('#who-role').textContent = u.role;
+  const role = isGuest(u) ? `guest until ${shortDate(u.guestUntil)}` : u.role;
+  $('#who-role').textContent = role;
   $('#account-btn').setAttribute('aria-label', `Account menu for ${name}`);
   $('#hero-name').textContent = name;
-  $('#profile-role').textContent = u.role;
+  $('#profile-role').textContent = role;
   $('#profile-form').displayName.value = u.displayName;
   $('#profile-form').username.value = u.username;
   $('#profile-form').email.value = u.email || '';
 }
 
-const VIEWS = ['apps', 'nest', 'status', 'profile', 'admin'];
+const VIEWS = ['apps', 'nest', 'glint', 'status', 'profile', 'admin'];
 
 const hasNest = () => state.apps.some((a) => a.id === 'nest' && a.url === '#/nest');
+const hasGlint = () => state.apps.some((a) => a.id === 'glint' && a.url === '#/glint');
 
 function route() {
   // Nothing opens behind the two-step screen; enter() routes once it is done.
   if (!state.user || needsSecureStep(state.user)) return;
   const [first, ...rest] = location.hash.replace(/^#\/?/, '').split('/');
   let view = first || 'apps';
-  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'nest' && !hasNest())) view = 'apps';
+  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'status' && isGuest(state.user)) || (view === 'nest' && !hasNest()) || (view === 'glint' && !hasGlint())) view = 'apps';
   for (const v of VIEWS) $(`#view-${v}`).classList.toggle('hidden', v !== view);
   document.querySelectorAll('#account-menu a').forEach((a) => {
     if (a.dataset.view === view) a.setAttribute('aria-current', 'page');
@@ -613,11 +738,12 @@ function route() {
   document.querySelectorAll('#app-bar a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
   $('#account-btn').classList.toggle('active', ['status', 'profile', 'admin'].includes(view));
   closeMenu(false);
-  if (view === 'admin') loadAdmin();
-  if (view === 'profile') { loadStorage(); loadTwoStep(); }
+  if (view === 'admin') { loadAdmin(); loadJellyfin(); }
+  if (view === 'profile') { if (!isGuest(state.user)) loadStorage(); loadTwoStep(); loadDevices(); }
   if (view === 'status') loadStatus();
   if (view === 'nest') window.nestOpen(rest);
-  else document.title = state.serverName;
+  if (view === 'glint') window.glintOpen(rest);
+  else if (view !== 'nest') document.title = state.serverName;
 }
 
 window.addEventListener('hashchange', () => { if (state.user) route(); });
@@ -704,15 +830,32 @@ $('#logout').addEventListener('click', async () => {
 // ---------- apps ----------
 
 async function loadApps() {
-  const { apps } = await api('GET', '/api/apps');
+  const { apps, searchable } = await api('GET', '/api/apps');
   state.apps = apps;
+  window.searchSetup(searchable || []);
   renderAppBar();
   renderApps();
+  loadWatching(true);
   api('GET', '/api/apps/status').then(({ status }) => { state.status = status; renderApps(); }).catch(() => {});
 }
 
+// Each person's own layout: starred apps first, then the rest, both in their
+// chosen order. Apps they haven't placed yet keep the admin's order at the end.
+function layoutApps(order, favs) {
+  const pos = new Map(order.map((id, i) => [id, i]));
+  const rank = (app, i) => (pos.has(app.id) ? pos.get(app.id) : order.length + i);
+  return state.apps
+    .map((app, i) => ({ app, fav: favs.has(app.id), rank: rank(app, i) }))
+    .sort((a, b) => b.fav - a.fav || a.rank - b.rank);
+}
+
+function myLayout() {
+  if (state.arranging) return layoutApps(state.arranging.order, state.arranging.favs);
+  return layoutApps(state.user.appOrder || [], new Set(state.user.favourites || []));
+}
+
 function renderAppBar() {
-  $('#app-bar').replaceChildren(...state.apps.filter((app) => app.url).map((app) =>
+  $('#app-bar').replaceChildren(...myLayout().map(({ app }) => app).filter((app) => app.url).map((app) =>
     el('a', app.url.startsWith('#/') ? { href: app.url, 'data-view': app.url.slice(2), class: location.hash.startsWith(app.url) ? 'active' : '' } : { href: resolveUrl(app.url), target: '_blank', rel: 'noopener' },
       icon(app.icon, 'bar-icon'), el('span', { text: app.name }))));
 }
@@ -720,17 +863,41 @@ function renderAppBar() {
 function renderApps() {
   const list = $('#apps');
   const total = state.apps.length;
+  renderArrangeActions();
   if (!total) {
     list.replaceChildren(el('div', { class: 'empty mono', text: 'No apps yet. Ask an admin to give you access.' }));
     return;
   }
-  list.replaceChildren(...state.apps.map((app) => {
+  const layout = myLayout();
+  list.classList.toggle('arranging', Boolean(state.arranging));
+  list.replaceChildren(...layout.map(({ app, fav }, i) => {
     const status = app.url ? state.status[app.id] || 'checking' : 'unset';
     const label = { online: 'Online', offline: 'Offline', checking: 'Checking', unset: 'Not set up' }[status];
     const isAdmin = state.user.role === 'admin';
+    const head = el('div', {}, el('div', { class: 'mono muted' },
+      fav && !state.arranging ? el('span', { class: 'fav-mark', title: 'Favourite', text: '★ ' }) : null, app.tagline),
+    el('h3', { text: app.name }));
+    if (state.arranging) {
+      // Arrows only move a card within its group: starred apps always stay first.
+      const canMove = (j) => j >= 0 && j < total && layout[j].fav === fav;
+      const move = (dir) => el('button', {
+        type: 'button', class: 'arrange-btn', 'data-act': dir < 0 ? 'back' : 'fwd', 'data-id': app.id,
+        'aria-label': `Move ${app.name} ${dir < 0 ? 'earlier' : 'later'}`,
+        disabled: !canMove(i + dir), onclick: () => moveApp(layout, i, dir),
+        text: dir < 0 ? '←' : '→',
+      });
+      return el('div', { class: 'card app-card arrange' },
+        el('button', {
+          type: 'button', class: `star-btn${fav ? ' on' : ''}`, 'data-act': 'star', 'data-id': app.id,
+          'aria-pressed': String(fav), 'aria-label': `Favourite ${app.name}`,
+          onclick: () => toggleFavourite(layout, app.id), text: fav ? '★' : '☆',
+        }),
+        icon(app.icon), head, el('p', { text: app.description }),
+        el('div', { class: 'arrange-row' }, move(-1), move(1)));
+    }
     const children = [
       icon(app.icon),
-      el('div', {}, el('div', { class: 'mono muted', text: app.tagline }), el('h3', { text: app.name })),
+      head,
       el('p', { text: app.description }),
       el('div', { class: 'app-foot mono' },
         el('span', {}, el('span', { class: `dot ${status}` }), label),
@@ -739,9 +906,122 @@ function renderApps() {
     // Apps built into Roost (like Nest) open in place; the rest in a new tab.
     const builtIn = app.url.startsWith('#/');
     return app.url
-      ? el('a', builtIn ? { class: 'card app-card', href: app.url } : { class: 'card app-card', href: resolveUrl(app.url), target: '_blank', rel: 'noopener' }, children)
+      ? el('a', builtIn ? { class: 'card app-card', href: app.url } : { class: 'card app-card', href: app.openUrl || resolveUrl(app.url), target: '_blank', rel: 'noopener' }, children)
       : el('div', { class: 'card app-card disabled' }, children);
   }));
+}
+
+// ---------- continue watching ----------
+
+// Shown under the apps so it never pushes them around as it loads. Checked
+// again when someone comes back to the tab, at most once a minute.
+const WATCH_REFRESH_MS = 60 * 1000;
+let watchedAt = 0;
+
+function minutesLeft(m) {
+  if (!m) return '';
+  return m < 60 ? `${m} min left` : `${Math.floor(m / 60)} h ${m % 60} min left`;
+}
+
+async function loadWatching(force) {
+  const linked = state.apps.some((a) => a.id === 'jellyfin' && a.openUrl);
+  if (!linked) return $('#watching').classList.add('hidden');
+  if (!force && Date.now() - watchedAt < WATCH_REFRESH_MS) return;
+  watchedAt = Date.now();
+  let items = [];
+  try {
+    ({ items } = await api('GET', '/api/jellyfin/resume'));
+  } catch {
+    // Leave the row as it was.
+    return;
+  }
+  $('#watching').classList.toggle('hidden', !items.length);
+  $('#watch-row').replaceChildren(...items.map((it) => {
+    const hash = `#/details?id=${it.id}${it.serverId ? `&serverId=${it.serverId}` : ''}`;
+    const sub = [it.where, minutesLeft(it.minutesLeft)].filter(Boolean).join(' · ');
+    return el('a', { class: 'card watch-card', href: `/jellyfin/${hash}`, target: '_blank', rel: 'noopener', title: it.subtitle ? `${it.title}: ${it.subtitle}` : it.title },
+      el('div', { class: 'watch-pic' },
+        it.image ? el('img', { src: it.image, alt: '', loading: 'lazy', decoding: 'async', width: 480, height: 270 }) : icon('play'),
+        el('div', { class: 'watch-bar', role: 'meter', 'aria-label': 'Watched', 'aria-valuenow': it.percent, 'aria-valuemin': 0, 'aria-valuemax': 100 },
+          el('i', { style: `width:${it.percent}%` }))),
+      el('div', { class: 'watch-text' },
+        el('div', { class: 'watch-title', text: it.title }),
+        it.subtitle ? el('div', { class: 'watch-sub muted', text: it.subtitle }) : null,
+        sub ? el('div', { class: 'mono muted watch-meta', text: sub }) : null));
+  }));
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.user) loadWatching(false);
+});
+
+// ---------- arranging apps ----------
+
+function renderArrangeActions(error = '') {
+  const box = $('#arrange-actions');
+  if (!state.arranging) {
+    box.replaceChildren(state.apps.length > 1
+      ? el('button', { type: 'button', class: 'btn ghost small', onclick: startArranging, text: 'Arrange' })
+      : '');
+    return;
+  }
+  box.replaceChildren(
+    error ? el('span', { class: 'mono arrange-error', role: 'alert', text: error }) : '',
+    el('button', { type: 'button', class: 'btn ghost small', onclick: stopArranging, text: 'Cancel' }),
+    el('button', { type: 'button', class: 'btn small', onclick: saveArrangement, text: 'Done' }));
+}
+
+function startArranging() {
+  const order = myLayout().map(({ app }) => app.id);
+  state.arranging = { order, favs: new Set(state.user.favourites || []) };
+  renderApps();
+  $('#apps .arrange-btn, #apps .star-btn')?.focus();
+}
+
+function stopArranging() {
+  state.arranging = null;
+  renderApps();
+}
+
+// Re-draw, then put focus back on the button that was pressed so keyboard
+// users can keep tapping it (or on the card's star if it can't move further).
+function rerenderArranging(id, act) {
+  renderApps();
+  const btn = $(`#apps [data-id="${id}"][data-act="${act}"]`);
+  (btn && !btn.disabled ? btn : $(`#apps [data-id="${id}"][data-act="star"]`))?.focus();
+}
+
+function moveApp(layout, i, dir) {
+  const ids = layout.map(({ app }) => app.id);
+  [ids[i], ids[i + dir]] = [ids[i + dir], ids[i]];
+  state.arranging.order = ids;
+  rerenderArranging(ids[i + dir], dir < 0 ? 'back' : 'fwd');
+}
+
+function toggleFavourite(layout, id) {
+  const { favs } = state.arranging;
+  if (favs.has(id)) favs.delete(id); else favs.add(id);
+  state.arranging.order = layout.map(({ app }) => app.id);
+  rerenderArranging(id, 'star');
+}
+
+async function saveArrangement() {
+  const order = myLayout().map(({ app }) => app.id);
+  const favourites = order.filter((id) => state.arranging.favs.has(id));
+  const saved = layoutApps(state.user.appOrder || [], new Set(state.user.favourites || [])).map(({ app }) => app.id);
+  const savedFavs = saved.filter((id) => (state.user.favourites || []).includes(id));
+  // Only talk to the server when something actually changed.
+  if (order.join() !== saved.join() || favourites.join() !== savedFavs.join()) {
+    try {
+      ({ user: state.user } = await api('PATCH', '/api/me', { appOrder: order, favourites }));
+    } catch (err) {
+      renderArrangeActions(err.message || "Couldn't save. Try again.");
+      return;
+    }
+  }
+  state.arranging = null;
+  renderAppBar();
+  renderApps();
 }
 
 // ---------- system panel ----------
@@ -749,6 +1029,7 @@ function renderApps() {
 async function loadSystem() {
   try {
     const s = await api('GET', '/api/system');
+    renderNotice(s.notice);
     const used = s.memory.total - s.memory.free;
     $('#stat-uptime').textContent = duration(s.uptime);
     $('#stat-mem').textContent = `${bytes(used)} / ${bytes(s.memory.total)}`;
@@ -761,6 +1042,102 @@ async function loadSystem() {
   }
 }
 
+// ---------- backup line ----------
+
+// One quiet line under the stats: when the last backup finished, or what is
+// wrong. Hidden until backups are set up.
+async function loadBackup() {
+  const line = $('#backup-line');
+  let b;
+  try {
+    b = await api('GET', '/api/backup');
+  } catch {
+    return;
+  }
+  const last = b.lastOk ? `Last backup ${backupWhen(b.lastOk)}` : 'No backup yet';
+  const [dot, text] = {
+    ok: ['online', last],
+    late: ['warn', last],
+    none: ['', 'First backup on its way'],
+    running: ['', b.lastOk ? `Backing up now · ${last.toLowerCase()}` : 'First backup running'],
+    failed: ['offline', `Last backup failed · ${b.lastOk ? backupWhen(b.lastOk) : 'none yet'}`],
+    drive: ['offline', 'Backup drive not found'],
+    stopped: ['offline', 'Backups aren’t running'],
+  }[b.state] || [];
+  line.classList.toggle('hidden', !text);
+  if (!text) return;
+  line.replaceChildren(el('span', { class: `dot ${dot}` }), text);
+  // Admins can tap through to the setup checklist, where the backup steps are.
+  if (state.user.role === 'admin') line.href = '#/admin';
+  else line.removeAttribute('href');
+  line.title = b.message || '';
+}
+
+// ---------- notice ----------
+
+// Hiding a notice is remembered in this browser only, keyed by when the notice
+// was posted, so a new notice shows again.
+const NOTICE_HIDDEN = 'roost.noticeHidden';
+
+function hiddenNotice() {
+  try { return localStorage.getItem(NOTICE_HIDDEN); } catch { return null; }
+}
+
+function renderNotice(n) {
+  state.notice = n || null;
+  const show = Boolean(n) && hiddenNotice() !== n.at;
+  if (show) $('#notice-text').textContent = n.text;
+  $('#notice').classList.toggle('hidden', !show);
+  renderNoticeAdmin();
+}
+
+$('#notice-close').addEventListener('click', () => {
+  try { localStorage.setItem(NOTICE_HIDDEN, state.notice.at); } catch { /* hides until the next refresh */ }
+  $('#notice').classList.add('hidden');
+});
+
+function noticeUntil(choice) {
+  const d = new Date();
+  if (choice === 'today') d.setHours(23, 59, 0, 0);
+  else if (choice === 'morning') { d.setDate(d.getDate() + 1); d.setHours(8, 0, 0, 0); }
+  else if (choice === 'day') d.setTime(d.getTime() + 86400 * 1000);
+  else if (choice === 'week') d.setTime(d.getTime() + 7 * 86400 * 1000);
+  else return null;
+  return d.toISOString();
+}
+
+function previewNotice() {
+  const text = $('#notice-form').text.value.trim();
+  $('#notice-count').textContent = `${$('#notice-form').text.value.length} / 200`;
+  $('.notice-text', $('#notice-preview')).textContent = text;
+  $('#notice-preview').classList.toggle('hidden', !text);
+}
+
+function renderNoticeAdmin() {
+  const n = state.notice;
+  $('#notice-now').textContent = !n ? 'No notice showing' : n.until ? `Showing now, until ${untilDate(n.until)}` : 'Showing now, until you clear it';
+  $('#notice-clear').classList.toggle('hidden', !n);
+}
+
+async function saveNotice(text, until) {
+  const f = $('#notice-form');
+  try {
+    const { notice } = await api('PUT', '/api/admin/notice', { text, until });
+    renderNotice(notice);
+    flash(f, notice ? 'Posted. Everyone sees it on their dashboard.' : 'Cleared');
+    if (!notice) { f.text.value = ''; previewNotice(); }
+  } catch (err) { flash(f, err.message, false); }
+}
+
+$('#notice-form').text.addEventListener('input', previewNotice);
+$('#notice-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = e.target.text.value.trim();
+  if (!text) return flash(e.target, 'Write a message first', false);
+  saveNotice(text, noticeUntil(e.target.until.value));
+});
+$('#notice-clear').addEventListener('click', () => saveNotice('', null));
+
 // ---------- status page ----------
 
 const STATUS_REFRESH_MS = 5 * 1000;
@@ -769,6 +1146,8 @@ let statusBusy = false;
 // Status cards whose "Update" detail is open; kept across the page's refreshes.
 const openUpdates = new Set();
 let lastStatus = null;
+// Restart button state per app id: confirm, busy, done or error (with msg).
+const restarts = new Map();
 
 function pct(used, total) {
   return total ? Math.round((used / total) * 100) : 0;
@@ -787,7 +1166,8 @@ function statCard(label, value, sub, bar) {
     el('div', { class: 'mono muted stat-sub', text: sub }));
 }
 
-function ago(iso) {
+// "3h 20m" since a time; the activity log's ago() says "3 h ago" instead.
+function elapsed(iso) {
   return duration(Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000));
 }
 
@@ -805,9 +1185,9 @@ function containerState(c) {
 
 function containerSince(c) {
   const exit = c.exitCode ? ` (exit ${c.exitCode})` : '';
-  if (c.startedAt) return `up ${ago(c.startedAt)}`;
+  if (c.startedAt) return `up ${elapsed(c.startedAt)}`;
   if (c.state === 'restarting') return `crashing${exit}`;
-  if (c.finishedAt) return `stopped ${ago(c.finishedAt)} ago${exit}`;
+  if (c.finishedAt) return `stopped ${elapsed(c.finishedAt)} ago${exit}`;
   return c.state;
 }
 
@@ -823,6 +1203,94 @@ function appState(a, dockerOk) {
   if (a.containers.length) return containerState(worstContainer(a.containers));
   if (dockerOk && a.web.state !== 'online') return { kind: a.web.state === 'unset' ? 'unset' : 'offline', label: 'No container' };
   return { kind: a.web.state, label: WEB_LABEL[a.web.state] };
+}
+
+// ---------- uptime history ----------
+
+const HISTORY_DAYS = 30;
+const uptimePick = {}; // app id → the day tapped on its strip
+
+function overlap(ranges, from, to) {
+  let ms = 0;
+  for (const [s, e] of ranges) ms += Math.max(0, Math.min(e, to) - Math.max(s, from));
+  return ms;
+}
+
+// One entry per local day, oldest first: how long it was watched and down.
+function uptimeDays(h, now) {
+  const days = [];
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  for (let i = HISTORY_DAYS - 1; i >= 0; i--) {
+    const start = new Date(today);
+    start.setDate(today.getDate() - i);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 1);
+    const from = start.getTime();
+    const to = Math.min(end.getTime(), now);
+    const watched = overlap(h.watched, from, to);
+    const down = Math.min(watched, overlap(h.outages, from, to));
+    const kind = !watched ? 'none' : !down ? 'up' : down * 2 >= watched ? 'down' : 'part';
+    days.push({ from, to, watched, down, kind, outages: h.outages.filter(([s, e]) => e > from && s < to) });
+  }
+  return days;
+}
+
+const clockTime = (ms) => new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+const dayName = (ms) => new Date(ms).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+const mins = (ms) => duration(Math.max(60, ms / 1000));
+
+function dayDetail(d) {
+  if (!d.watched) return `${dayName(d.from)} · no data`;
+  if (!d.down) return `${dayName(d.from)} · no downtime`;
+  const times = d.outages.slice(0, 3).map(([s, e]) => `${clockTime(Math.max(s, d.from))}–${clockTime(Math.min(e, d.to))}`);
+  const more = d.outages.length > 3 ? ` +${d.outages.length - 3}` : '';
+  return `${dayName(d.from)} · down ${mins(d.down)} (${times.join(', ')}${more})`;
+}
+
+function uptimeStrip(id, h, now) {
+  const days = uptimeDays(h, now);
+  const watched = days.reduce((n, d) => n + d.watched, 0);
+  const down = days.reduce((n, d) => n + d.down, 0);
+  if (!watched) return null;
+  // Any downtime shows a decimal and never rounds up to 100.
+  const percent = down ? Math.min(99.9, 100 * (1 - down / watched)).toFixed(1) : '100';
+  const outages = h.outages.length;
+  const summary = outages ? `${outages} outage${outages > 1 ? 's' : ''} · ${mins(down)}` : 'No outages';
+  const detail = el('div', { class: 'uptime-detail mono muted', 'aria-live': 'polite' });
+  const bars = el('div', { class: 'uptime-bars' }, days.map((d) => el('i', { class: d.kind })));
+  const strip = el('div', {
+    class: 'uptime-strip',
+    role: 'slider',
+    tabindex: '0',
+    'aria-label': `Last ${HISTORY_DAYS} days: ${percent}% up, ${summary.toLowerCase()}`,
+    'aria-valuemin': 0,
+    'aria-valuemax': HISTORY_DAYS - 1,
+  }, bars);
+  const pick = (i) => {
+    const n = Math.max(0, Math.min(HISTORY_DAYS - 1, i));
+    uptimePick[id] = n;
+    [...bars.children].forEach((b, j) => b.classList.toggle('picked', j === n));
+    strip.setAttribute('aria-valuenow', n);
+    strip.setAttribute('aria-valuetext', dayDetail(days[n]));
+    detail.textContent = dayDetail(days[n]);
+  };
+  // The whole strip is the tap target: thin bars are hard to hit on a phone.
+  strip.addEventListener('click', (e) => {
+    const r = bars.getBoundingClientRect();
+    pick(Math.floor(((e.clientX - r.left) / r.width) * HISTORY_DAYS));
+  });
+  strip.addEventListener('keydown', (e) => {
+    const step = { ArrowLeft: -1, ArrowRight: 1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    pick((uptimePick[id] ?? HISTORY_DAYS - 1) + step);
+  });
+  if (uptimePick[id] !== undefined) pick(uptimePick[id]);
+  return el('div', { class: 'uptime' },
+    el('div', { class: 'uptime-head mono muted' }, el('span', { text: `${percent}% · ${HISTORY_DAYS} days` }), el('span', { text: summary })),
+    strip,
+    detail);
 }
 
 // "update" (newer on the registry) beats "restart" (newer already pulled).
@@ -859,7 +1327,7 @@ function updateDetail(a, up) {
       el('button', { class: 'link-btn mono', type: 'button', text: 'Check now', onclick: (e) => checkUpdatesNow(e.target) })));
 }
 
-function appStatusCard(a, dockerOk) {
+function appStatusCard(a, dockerOk, history) {
   const st = appState(a, dockerOk);
   const up = appUpdate(a);
   const open = up && openUpdates.has(a.id);
@@ -884,7 +1352,146 @@ function appStatusCard(a, dockerOk) {
         onclick: () => { if (!openUpdates.delete(a.id)) openUpdates.add(a.id); if (lastStatus) renderStatus(lastStatus); },
       }) : null),
     open ? updateDetail(a, up) : null,
-    el('div', { class: 'stat-lines mono muted' }, lines.map((t) => el('div', { text: t }))));
+    history && history.apps[a.id] ? uptimeStrip(a.id, history.apps[a.id], history.now) : null,
+    el('div', { class: 'stat-lines mono muted' }, lines.map((t) => el('div', { text: t }))),
+    a.restartable || restarts.has(a.id) ? restartRow(a) : null);
+}
+
+function autoRestartText(s) {
+  const own = s.tz === myZone() ? '' : ` ${s.tz}`;
+  return `Restarts ${s.every === 'week' ? `${WEEKDAYS[s.day]}s` : 'daily'} at ${s.time}${own}`;
+}
+
+// Restart lives in the app's own card: one tap asks, the second restarts.
+function restartRow(a) {
+  const r = restarts.get(a.id) || {};
+  const set = (next) => {
+    if (next) restarts.set(a.id, next); else restarts.delete(a.id);
+    if (lastStatus) renderStatus(lastStatus);
+  };
+  const row = el('div', { class: 'restart-row mono', 'aria-live': 'polite' });
+  if (r.step === 'confirm') {
+    const yes = el('button', { type: 'button', class: 'btn small danger', text: 'Restart', onclick: () => restartApp(a, set) });
+    row.append(
+      el('div', { class: 'restart-ask', text: `Restart ${a.name}? Anyone using it is cut off for a moment.` }),
+      el('div', { class: 'restart-actions' }, yes,
+        el('button', { type: 'button', class: 'btn small ghost', text: 'Cancel', onclick: () => set(null) })));
+    queueMicrotask(() => yes.focus());
+  } else if (r.step === 'busy') {
+    row.append(el('span', { class: 'spinner', 'aria-hidden': 'true' }), el('span', { class: 'muted', text: `Restarting ${a.name}…` }));
+  } else if (r.step === 'done') {
+    row.append(el('span', { class: 'dot online' }), el('span', { text: 'Restarted' }));
+  } else {
+    if (r.step === 'error') row.append(el('div', { class: 'restart-error', text: r.msg }));
+    if (a.restartSchedule && r.step !== 'error') row.append(el('span', { class: 'muted restart-auto', text: autoRestartText(a.restartSchedule) }));
+    row.append(el('button', {
+      type: 'button',
+      class: 'link-btn mono',
+      text: r.step === 'error' ? 'Try again' : 'Restart',
+      'aria-label': `Restart ${a.name}`,
+      onclick: () => set({ step: 'confirm' }),
+    }));
+  }
+  return row;
+}
+
+async function restartApp(a, set) {
+  set({ step: 'busy' });
+  try {
+    await api('POST', `/api/admin/apps/${encodeURIComponent(a.id)}/restart`);
+    set({ step: 'done' });
+    setTimeout(() => { if ((restarts.get(a.id) || {}).step === 'done') set(null); }, 4000);
+  } catch (err) {
+    set({ step: 'error', msg: err.message });
+  }
+  loadStatus();
+}
+
+// ---------- drive health ----------
+
+const HEALTH_DOT = { good: 'online', watch: 'starting', bad: 'offline', unknown: 'unset' };
+
+// Drive makers count in thousands, so a "240 GB" drive is shown as 240 GB, not 224.
+function driveSize(n) {
+  if (!n) return '';
+  return n >= 1e12 ? `${+(n / 1e12).toFixed(1)} TB` : `${Math.round(n / 1e9)} GB`;
+}
+
+function hoursOn(h) {
+  const years = h / (24 * 365);
+  if (years >= 1) {
+    const y = +years.toFixed(1);
+    return `${y} year${y === 1 ? '' : 's'}`;
+  }
+  return h >= 48 ? `${Math.round(h / 24)} days` : `${h} hours`;
+}
+
+function healthLines(d) {
+  const x = d.details || {};
+  const n = (v) => Number(v).toLocaleString();
+  return [
+    x.temp !== null && x.temp !== undefined ? `Temperature ${x.temp}°C` : null,
+    x.hours !== null && x.hours !== undefined ? `Powered on ${hoursOn(x.hours)} (${n(x.hours)} h)` : null,
+    x.wear !== null && x.wear !== undefined ? `Life used ${x.wear}%` : null,
+    x.written ? `Written ${bytes(x.written)}` : null,
+    x.reallocated !== null && x.reallocated !== undefined ? `Replaced sectors ${n(x.reallocated)}` : null,
+    x.pending !== null && x.pending !== undefined ? `Unreadable sectors ${n(x.pending)}` : null,
+    x.uncorrectable !== null && x.uncorrectable !== undefined ? `Lost sectors ${n(x.uncorrectable)}` : null,
+    x.cableErrors !== null && x.cableErrors !== undefined ? `Cable errors ${n(x.cableErrors)} (ever)` : null,
+    d.model ? `${d.model}${d.serial ? ` · ${d.serial}` : ''}` : null,
+    d.asleep && d.readAt ? 'Asleep now, so this is its last reading' : null,
+    d.readAt ? `Read ${ago(d.readAt)} · /dev/${d.device}` : `/dev/${d.device}`,
+  ].filter(Boolean);
+}
+
+// One card per drive: a verdict in plain words, the reason that matters, and
+// the numbers behind it when you tap it.
+function healthCard(d, open) {
+  const x = d.details || {};
+  const name = [d.kind, driveSize(d.capacity)].filter(Boolean).join(' · ') || `/dev/${d.device}`;
+  const fine = [x.temp !== null && x.temp !== undefined ? `${x.temp}°C` : null, x.hours ? `${hoursOn(x.hours)} on` : null].filter(Boolean).join(' · ');
+  const why = d.reasons && d.reasons.length ? d.reasons[0] : fine || 'No problems found';
+  const card = el('details', { class: `card stat-card drive-health ${d.verdict}`, 'data-device': d.device, open },
+    el('summary', {},
+      el('div', { class: 'mono muted', text: name }),
+      el('div', { class: 'stat-value', text: d.headline }),
+      el('div', { class: 'mono stat-state' }, el('span', { class: `dot ${HEALTH_DOT[d.verdict]}` }), why)),
+    el('div', { class: 'stat-lines mono muted' },
+      (d.reasons || []).slice(1).map((t) => el('div', { class: 'health-reason', text: t })),
+      healthLines(d).map((t) => el('div', { text: t }))));
+  return card;
+}
+
+// ---------- outside services (admins only) ----------
+
+const OUTSIDE_DOT = { good: 'online', watch: 'starting', bad: 'offline', unset: 'unset' };
+
+function renderOutside(list) {
+  $('#status-outside-wrap').classList.toggle('hidden', !list);
+  if (!list) return;
+  $('#status-outside').replaceChildren(...list.map((o) => {
+    const when = o.checkedAt ? `checked ${ago(o.checkedAt)}` : '';
+    const detail = [o.expiresAt ? `valid until ${longDate(o.expiresAt)}` : null, o.detail, when].filter(Boolean).join(' · ');
+    return el('div', { class: `container-row outside-row ${o.state}` },
+      el('span', { class: 'mono' }, el('span', { class: `dot ${OUTSIDE_DOT[o.state]}` }), o.name, el('span', { class: 'muted outside-role', text: ` · ${o.role}` })),
+      el('span', { class: 'outside-state' }, el('b', { text: o.headline }), detail ? el('span', { class: 'mono muted', text: detail }) : null));
+  }));
+}
+
+function renderHealth(h) {
+  $('#status-health-wrap').classList.toggle('hidden', !h);
+  if (!h) return;
+  // The page refreshes every few seconds; keep any card you opened open.
+  const open = new Set([...document.querySelectorAll('#status-health details[open]')].map((n) => n.dataset.device));
+  $('#status-health').replaceChildren(...h.drives.map((d) => healthCard(d, open.has(d.device))));
+  const note = $('#status-health-note');
+  const text = h.missing || (!h.drives.length && !h.checkedAt)
+    ? 'Waiting for the first health check from the roost-smart helper.'
+    : h.stale
+      ? `Health checks have stopped${h.checkedAt ? `; the last one was ${ago(h.checkedAt)}` : ''}. Is roost-smart running?`
+      : h.checkedAt ? `Checked hourly · last ${ago(h.checkedAt)}` : '';
+  note.textContent = text;
+  note.classList.toggle('hidden', !text);
 }
 
 async function loadStatus() {
@@ -904,6 +1511,14 @@ function setSummary(kind, text) {
   $('#status-summary').replaceChildren(el('span', { class: `dot ${kind}` }), el('span', { text }));
 }
 
+// Admins only: the HTTPS certificate needs a look well before it runs out.
+function certProblem(c) {
+  if (!c) return null;
+  if (c.state === 'error') return 'HTTPS certificate: couldn\'t get one (see Admin)';
+  if (c.daysLeft !== null && c.daysLeft < 14) return `HTTPS certificate runs out in ${Math.max(0, c.daysLeft)} days (see Admin)`;
+  return null;
+}
+
 function renderStatus(s) {
   lastStatus = s;
   const memUsed = s.memory.total - s.memory.available;
@@ -921,7 +1536,10 @@ function renderStatus(s) {
     return statCard(d.label, `${bytes(d.free)} free`, `${bytes(used)} of ${bytes(d.total)} used`, pct(used, d.total));
   }));
 
-  $('#status-apps').replaceChildren(...s.apps.map((a) => appStatusCard(a, s.docker.ok)));
+  renderHealth(s.driveHealth);
+  renderOutside(s.outside);
+
+  $('#status-apps').replaceChildren(...s.apps.map((a) => appStatusCard(a, s.docker.ok, s.history)));
 
   const note = $('#status-note');
   note.classList.toggle('hidden', s.docker.ok);
@@ -935,13 +1553,35 @@ function renderStatus(s) {
       el('span', { class: 'mono muted', text: `${st.label} · ${containerSince(c)}${c.update ? ` · ${c.update.state === 'update' ? 'update out' : 'restart to update'}` : ''}` }));
   }));
 
+  const t = s.traffic;
+  $('#status-traffic-wrap').classList.toggle('hidden', !t);
+  if (t) {
+    const names = { roost: s.apps[0].name, nest: 'Nest', glint: 'Glint', jellyfin: 'Jellyfin' };
+    $('#status-traffic').replaceChildren(...['roost', 'nest', 'glint', 'jellyfin'].map((id) => {
+      const a = t.apps[id] || { today: 0, week: 0 };
+      return statCard(names[id], bytes(a.today), `today · ${bytes(a.week)} this week`);
+    }));
+  }
+
   const problems = [
     ...s.apps.map((a) => [a, appState(a, s.docker.ok)]).filter(([, st]) => st.kind === 'offline').map(([a, st]) => `${a.name}: ${st.label.toLowerCase()}`),
     ...s.disks.filter((d) => !d.missing && pct(d.total - d.free, d.total) >= FULL_AT).map((d) => `${d.label} drive is nearly full`),
     ...s.disks.filter((d) => d.missing).map((d) => `${d.label} drive not found`),
     ...(memPct >= FULL_AT ? ['Memory is nearly full'] : []),
+    ...(certProblem(s.certificate) ? [certProblem(s.certificate)] : []),
   ];
-  setSummary(problems.length ? 'offline' : 'online', problems.length ? problems.join(' · ') : 'Everything is running');
+  const drives = (s.driveHealth && s.driveHealth.drives) || [];
+  const driveName = (d) => [d.kind || 'Drive', driveSize(d.capacity)].filter(Boolean).join(' ');
+  problems.push(...drives.filter((d) => d.verdict === 'bad').map((d) => `${driveName(d)}: ${d.headline.toLowerCase()}`));
+  // Worth a look, but nothing is down: a yellow dot rather than a red one.
+  const warnings = drives.filter((d) => d.verdict === 'watch').map((d) => `${driveName(d)}: ${d.reasons[0].toLowerCase()}`);
+  // The certificate has its own line in the summary above; the rest are listed here.
+  const outside = (s.outside || []).filter((o) => o.id !== 'letsencrypt');
+  problems.push(...outside.filter((o) => o.state === 'bad').map((o) => `${o.name}: ${o.headline.toLowerCase()}`));
+  warnings.push(...outside.filter((o) => o.state === 'watch').map((o) => `${o.name}: ${o.headline.toLowerCase()}`));
+  if (problems.length) setSummary('offline', [...problems, ...warnings].join(' · '));
+  else if (warnings.length) setSummary('starting', warnings.join(' · '));
+  else setSummary('online', 'Everything is running');
   $('#status-updated').textContent = `Updated ${new Date(s.checkedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
 }
 
@@ -970,8 +1610,53 @@ $('#password-form').addEventListener('submit', async (e) => {
   try {
     await api('PATCH', '/api/me', { currentPassword: f.currentPassword.value, newPassword: f.newPassword.value });
     f.reset();
-    flash(f, 'Password changed');
+    flash(f, 'Password changed. Your other devices were signed out.');
+    loadDevices();
   } catch (err) { flash(f, err.message, false); }
+});
+
+// ---------- signed-in devices ----------
+
+function lastActive(iso) {
+  const sec = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (sec < 600) return 'Active now';
+  if (sec < 3600) return `Active ${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `Active ${Math.floor(sec / 3600)}h ago`;
+  const days = Math.floor(sec / 86400);
+  return `Active ${days} day${days === 1 ? '' : 's'} ago`;
+}
+
+async function loadDevices() {
+  const panel = $('#devices-panel');
+  let devices;
+  try {
+    ({ devices } = await api('GET', '/api/me/devices'));
+  } catch (err) { flash(panel, err.message, false); return; }
+  $('#devices-list').replaceChildren(...devices.map((d) => {
+    const signOut = async () => {
+      try {
+        await api('DELETE', `/api/me/devices/${d.id}`);
+        loadDevices();
+      } catch (err) { flash(panel, err.message, false); }
+    };
+    return el('div', { class: 'device-row' },
+      el('div', {},
+        el('div', {},
+          el('span', { text: d.name || (d.kind === 'app' ? 'Roost app' : 'Browser') }),
+          d.current ? el('span', { class: 'pill approved', text: 'This device' }) : null,
+          d.kind === 'app' ? el('span', { class: 'pill', text: 'App' }) : null),
+        el('div', { class: 'mono muted', title: `Signed in ${shortDate(d.created)}`, text: d.current ? 'Active now' : lastActive(d.lastSeen) })),
+      d.current ? null : el('button', { class: 'link-btn mono', type: 'button', text: 'Sign out', onclick: signOut }));
+  }));
+  $('#devices-others').classList.toggle('hidden', devices.length < 2);
+}
+
+$('#sign-out-others').addEventListener('click', async () => {
+  try {
+    await api('POST', '/api/me/devices/sign-out-others');
+    await loadDevices();
+    flash($('#devices-panel'), 'Signed out everywhere else');
+  } catch (err) { flash($('#devices-panel'), err.message, false); }
 });
 
 // ---------- two-step in profile ----------
@@ -1044,12 +1729,28 @@ $('#two-step-on').addEventListener('submit', (e) => e.preventDefault());
 
 const REQUEST_LABEL = { pending: 'Waiting for an admin', approved: 'Approved', declined: 'Declined' };
 
+// Usage split for the Profile bar: Nest is Files, Glint is Photos, anything
+// else a storage app reports is Other. Empty parts are left out.
+const USAGE_LABELS = { nest: 'Files', glint: 'Photos' };
+
+function usageParts(usage = {}) {
+  const parts = Object.entries(USAGE_LABELS).map(([app, label]) => ({ label, bytes: usage[app] || 0 }));
+  const other = Object.entries(usage).filter(([app]) => !(app in USAGE_LABELS)).reduce((sum, [, n]) => sum + n, 0);
+  parts.push({ label: 'Other', bytes: other });
+  return parts.filter((p) => p.bytes > 0);
+}
+
 async function loadStorage() {
   const { storage, requests } = await api('GET', '/api/me/storage');
   const isAdmin = state.user.role === 'admin';
   const pct = storage.limitBytes ? Math.min(100, (storage.usedBytes / storage.limitBytes) * 100) : 0;
-  $('#storage-fill').style.width = `${pct}%`;
+  const parts = usageParts(storage.usage);
+  // With no limit the bar has nothing to fill up to, so it shows only the split.
+  $('#storage-fill').style.width = `${storage.limitBytes ? pct : (storage.usedBytes ? 100 : 0)}%`;
   $('#storage-fill').classList.toggle('full', pct >= 90);
+  $('#storage-fill').replaceChildren(...parts.map((p, i) => el('span', { class: `part-${i}`, style: `width:${(p.bytes / storage.usedBytes) * 100}%` })));
+  $('#storage-key').replaceChildren(...parts.map((p, i) => el('span', {}, el('i', { class: `part-${i}` }), p.label, el('b', { text: bytes(p.bytes) }))));
+  $('#storage-key').classList.toggle('hidden', !parts.length);
   $('#storage-used').textContent = `${bytes(storage.usedBytes)} used`;
   $('#storage-limit').textContent = storage.limitGb === null ? 'No limit' : `of ${storage.limitGb} GB`;
   const pending = requests.some((r) => r.status === 'pending');
@@ -1204,10 +1905,11 @@ $('#setup-toggle').addEventListener('click', () => {
 
 async function loadAdmin() {
   loadSetup();
-  const [{ users }, { apps }, { requests, defaultLimitGb }, { invites, publicUrl }, { settings }] = await Promise.all([
+  const [{ users }, { apps }, { requests, defaultLimitGb }, { invites, publicUrl }, { settings }, { family }] = await Promise.all([
     api('GET', '/api/admin/users'), api('GET', '/api/apps'), api('GET', '/api/admin/storage-requests'), api('GET', '/api/admin/invites'),
-    api('GET', '/api/admin/settings')]);
+    api('GET', '/api/admin/settings'), api('GET', '/api/admin/family')]);
   $('#settings-form').adminsNeedTwoStep.checked = settings.adminsNeedTwoStep;
+  if (state.notice && !$('#notice-form').text.value) { $('#notice-form').text.value = state.notice.text; previewNotice(); }
   renderMailSettings(settings);
   state.users = users;
   state.apps = apps;
@@ -1221,9 +1923,58 @@ async function loadAdmin() {
   loadActivity();
   renderAppsEditor();
   renderUsers();
+  renderFamily(family);
   renderInvites(invites);
   $('#new-user-apps').replaceChildren(...appChecks(null));
+  loadTls();
+  loadRemote();
+  loadCoffee();
+  loadBackupAdmin();
+  loadUpdateAdmin();
+  loadNestDrive();
+  restoreView.night = '';
+  browseBackup('');
 }
+
+// ---------- Jellyfin sign-in ----------
+
+// Loaded on its own so a slow or stopped Jellyfin never holds up the Admin page.
+async function loadJellyfin() {
+  try {
+    renderJellyfin(await api('GET', '/api/admin/jellyfin'));
+  } catch (err) { flash($('#jellyfin-form'), err.message, false); }
+}
+
+function renderJellyfin(j) {
+  const f = $('#jellyfin-form');
+  f.url.value = j.url;
+  f.apiKey.value = '';
+  f.apiKey.placeholder = j.keySaved ? 'Saved · paste a new one to replace it' : '';
+  $('#jellyfin-dot').className = `dot ${j.connected ? 'online' : j.url ? 'offline' : ''}`;
+  $('#jellyfin-text').textContent = j.connected
+    ? `Connected to ${j.serverName} · Jellyfin ${j.version} · ${j.accounts} account${j.accounts === 1 ? '' : 's'}`
+    : j.url ? `Can't reach Jellyfin: ${j.error}` : 'Off · Jellyfin keeps its own sign-in';
+  $('#jellyfin-off').classList.toggle('hidden', !j.url);
+  $('#jellyfin-save').textContent = j.url ? 'Save' : 'Connect';
+}
+
+$('#jellyfin-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    renderJellyfin(await api('PUT', '/api/admin/jellyfin', { url: f.url.value, apiKey: f.apiKey.value }));
+    flash(f, 'Connected. People are linked to Jellyfin the next time they sign in to Roost.');
+  } catch (err) { flash(f, err.message, false); }
+});
+
+$('#jellyfin-off').addEventListener('click', async () => {
+  const f = $('#jellyfin-form');
+  if (!confirm('Turn off the Jellyfin link? Jellyfin keeps its accounts; people sign in to it themselves.')) return;
+  try {
+    renderJellyfin(await api('PUT', '/api/admin/jellyfin', { url: '' }));
+    flash(f, 'Turned off');
+  } catch (err) { flash(f, err.message, false); }
+});
 
 function appChecks(selected) {
   return state.apps.map((a) => el('label', {},
@@ -1232,6 +1983,43 @@ function appChecks(selected) {
 
 function checkedApps(container) {
   return [...container.querySelectorAll('input[type=checkbox]:checked')].map((c) => c.value);
+}
+
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const myZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+// Auto-restart: Never / Every day / Every week, with the time (and weekday) only
+// when they matter. The time is on this device's clock; its zone is saved with it.
+function scheduleFields(saved) {
+  const s = saved || { every: 'never', time: '04:00', day: 1 };
+  const every = el('select', { name: 'restartEvery', 'aria-label': 'Auto-restart' },
+    [['never', 'Never'], ['day', 'Every day'], ['week', 'Every week']].map(([v, t]) => el('option', { value: v, text: t, selected: v === s.every })));
+  const day = el('select', { name: 'restartDay', 'aria-label': 'Day of the week' },
+    WEEKDAYS.map((d, i) => el('option', { value: i, text: d, selected: i === (s.day ?? 1) })));
+  const time = el('input', { type: 'time', name: 'restartTime', value: s.time, required: true, 'aria-label': 'Auto-restart time' });
+  const zone = el('span', { class: 'mono muted restart-zone', text: saved && saved.tz !== myZone() ? `${saved.tz} time` : 'your time' });
+  const when = el('div', { class: 'schedule-when' }, day, time, zone);
+  const sync = () => {
+    when.classList.toggle('hidden', every.value === 'never');
+    day.classList.toggle('hidden', every.value !== 'week');
+    time.required = every.value !== 'never';
+  };
+  every.addEventListener('change', sync);
+  sync();
+  return el('div', { class: 'schedule-row' },
+    el('label', { class: 'field' }, el('span', { text: 'Auto-restart' }), every),
+    when,
+    el('span', { class: 'mono muted schedule-hint', text: 'Keeps an app fresh. Only for apps on the restart list (Admin → Setup).' }));
+}
+
+// What the form sends: nothing for Never. A schedule left as it was keeps its zone.
+function readSchedule(row, saved) {
+  const every = $('[name=restartEvery]', row).value;
+  if (every === 'never') return null;
+  const time = $('[name=restartTime]', row).value;
+  const day = Number($('[name=restartDay]', row).value);
+  const same = saved && saved.every === every && saved.time === time && (every === 'day' || saved.day === day);
+  return { every, time, day, tz: same ? saved.tz : myZone() };
 }
 
 function appEditorRow(app) {
@@ -1244,6 +2032,7 @@ function appEditorRow(app) {
       el('label', { class: 'field' }, el('span', { text: 'Icon' }), iconSelect),
       el('label', { class: 'field' }, el('span', { text: 'Container' }), el('input', { type: 'text', name: 'container', value: app.container || '', placeholder: 'Found by name if empty', spellcheck: 'false' })),
     ),
+    scheduleFields(app.restartSchedule),
     el('div', { class: 'row' },
       el('label', { class: 'field', style: 'flex:1' }, el('span', { text: 'Description' }), el('input', { type: 'text', name: 'description', value: app.description || '', maxlength: 200 })),
       el('button', { class: 'btn danger small', type: 'button', text: 'Remove', onclick: () => row.remove() })),
@@ -1255,8 +2044,68 @@ function renderAppsEditor() {
   $('#apps-editor').replaceChildren(...state.apps.map(appEditorRow));
 }
 
+// Add app opens a short picker: what Docker is running that has no card yet,
+// then the built-in templates, then a blank card. Docker is only asked now.
+function addAppRow(app) {
+  const ids = new Set([...document.querySelectorAll('#apps-editor .admin-app')].map((r) => r.dataset.id));
+  const card = { ...app };
+  if (ids.has(card.id)) delete card.id;
+  const row = appEditorRow(card);
+  $('#apps-editor').append(row);
+  closeAppPicker();
+  row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  $('[name=name]', row).focus({ preventScroll: true });
+}
+
+function closeAppPicker() {
+  $('#app-picker').classList.add('hidden');
+  $('#add-app').setAttribute('aria-expanded', 'false');
+}
+
+function pickerItem(app, detail) {
+  return el('button', { class: 'picker-item', type: 'button', onclick: () => addAppRow(app) },
+    icon(app.icon),
+    el('span', { class: 'picker-text' }, el('span', { text: app.name }), el('span', { class: 'mono muted', text: detail })));
+}
+
+async function openAppPicker() {
+  const picker = $('#app-picker');
+  picker.replaceChildren(el('span', { class: 'mono muted', text: 'Looking for apps on this server…' }));
+  picker.classList.remove('hidden');
+  $('#add-app').setAttribute('aria-expanded', 'true');
+  let data;
+  try {
+    data = await api('GET', '/api/admin/app-templates');
+  } catch (err) {
+    picker.replaceChildren(el('div', { class: 'msg error', text: err.message }));
+    return;
+  }
+  const names = new Set([...document.querySelectorAll('#apps-editor [name=name]')].map((i) => i.value.trim().toLowerCase()));
+  const port = (url) => (url.match(/:(\d+)$/) || [])[1];
+  // Port first: it is what tells two similar entries apart, and long names get cut.
+  const detail = (...parts) => parts.filter(Boolean).join(' · ');
+  const running = data.running.map((a) => pickerItem(a, detail(port(a.url) && `:${port(a.url)}`, a.container)));
+  // A template for an app that is already running would only repeat it.
+  const covered = new Set(data.running.map((a) => a.key));
+  const templates = data.templates
+    .filter((t) => !covered.has(t.key) && !names.has(t.name.toLowerCase()))
+    .map((t) => pickerItem(t, detail(port(t.url) && `:${port(t.url)}`, t.tagline)));
+  picker.replaceChildren(
+    el('div', { class: 'picker-head' },
+      el('h4', { text: 'Running on this server' }),
+      el('button', { class: 'link-btn mono', type: 'button', text: 'Close', onclick: closeAppPicker })),
+    running.length
+      ? el('div', { class: 'picker-list' }, running)
+      : el('span', { class: 'mono muted', text: data.docker.ok ? 'Every running app already has a card.' : 'Roost can\'t see Docker, so only templates are shown.' }),
+    templates.length ? el('h4', { text: 'Templates' }) : null,
+    templates.length ? el('div', { class: 'picker-list' }, templates) : null,
+    el('button', { class: 'btn ghost small', type: 'button', text: 'Blank card', onclick: () => addAppRow({ icon: 'grid' }) }),
+  );
+}
+
 $('#add-app').addEventListener('click', () => {
-  $('#apps-editor').append(appEditorRow({ icon: 'grid' }));
+  if ($('#app-picker').classList.contains('hidden')) openAppPicker();
+  else closeAppPicker();
 });
 
 $('#apps-form').addEventListener('submit', async (e) => {
@@ -1265,6 +2114,7 @@ $('#apps-form').addEventListener('submit', async (e) => {
     const get = (n) => $(`[name=${n}]`, row).value;
     const app = { name: get('name'), tagline: get('tagline'), url: get('url'), icon: get('icon'), description: get('description'), container: get('container') };
     if (row.dataset.id) app.id = row.dataset.id;
+    app.restartSchedule = readSchedule(row, (state.apps.find((a) => a.id === row.dataset.id) || {}).restartSchedule);
     return app;
   });
   try {
@@ -1308,6 +2158,16 @@ function renderUsers() {
           `Set a new password for ${state.serverName}`));
       } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
     };
+    const ended = isGuest(u) && !(Date.parse(u.guestUntil) > Date.now());
+    const guestPass = async (body) => {
+      try {
+        await api('PATCH', `/api/admin/users/${u.id}`, body);
+        loadAdmin();
+      } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
+    };
+    // A week more, counted from now for a pass that has already ended.
+    const extend = () => guestPass({ guestUntil: new Date(Math.max(Date.now(), Date.parse(u.guestUntil)) + 7 * 86400000).toISOString() });
+    const endPass = () => confirm(`End ${u.displayName}'s guest pass now? They are signed out straight away.`) && guestPass({ endGuestPass: true });
     const remove = async () => {
       if (!confirm(`Remove ${u.displayName}? They will no longer be able to sign in.`)) return;
       try {
@@ -1315,12 +2175,16 @@ function renderUsers() {
         loadAdmin();
       } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
     };
-    return el('div', { class: 'user-row' },
+    return el('div', { class: `user-row${ended ? ' ended' : ''}` },
       el('div', { class: 'who' },
         el('span', { class: 'avatar', text: (u.displayName || u.username).charAt(0).toUpperCase() }),
         el('div', {}, el('div', { text: u.displayName }), el('div', { class: 'mono muted', text: [`@${u.username}`, u.email].filter(Boolean).join(' · ') })),
         el('span', { class: 'pill', text: u.role }),
         u.twoStep.on ? el('span', { class: 'pill approved', text: 'Two-step' }) : null),
+      isGuest(u) ? el('div', { class: 'row', style: 'margin:0' },
+        el('span', { class: 'mono muted', text: ended ? `Guest pass ended ${shortDate(u.guestUntil)}` : `Guest pass until ${untilDate(u.guestUntil)}` }),
+        el('button', { class: 'btn ghost small', type: 'button', text: 'Add a week', onclick: extend }),
+        ended ? null : el('button', { class: 'btn ghost small', type: 'button', text: 'End now', onclick: endPass })) : null,
       u.role === 'admin' ? el('span', { class: 'mono muted', text: 'Sees every app' }) : checks,
       el('div', { class: 'row user-storage' },
         el('span', { class: 'mono muted', text: `Storage · ${bytes(u.storage.usedBytes)} used` }),
@@ -1336,6 +2200,30 @@ function renderUsers() {
   }));
 }
 
+// Members are ticked from the user list. People without Nest can be members,
+// but they only see the Family space once they're given Nest.
+function renderFamily(family) {
+  const hasNest = (u) => u.role === 'admin' || !Array.isArray(u.apps) || u.apps.includes('nest');
+  $('#family-members').replaceChildren(...state.users.map((u) => el('label', {},
+    el('input', { type: 'checkbox', value: u.id, checked: family.members.includes(u.id) }),
+    u.displayName,
+    hasNest(u) ? null : el('span', { class: 'mono muted', text: ' (no Nest)' }))));
+  $('#family-used').textContent = `Family storage · ${bytes(family.usedBytes)} used`;
+  pickers.family.setValue(family.limitGb);
+}
+
+$('#family-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    const { family } = await api('PUT', '/api/admin/family', { members: checkedApps($('#family-members')), limitGb: pickers.family.getValue() });
+    renderFamily(family);
+    state.user.family = family.members.includes(state.user.id);
+    if (window.nestFamily) window.nestFamily();
+    if (window.glintFamily) window.glintFamily();
+    flash(e.target, 'Family saved');
+  } catch (err) { flash(e.target, err.message, false); }
+});
+
 function renderInvites(invites) {
   const list = $('#invites');
   if (!invites.length) return list.replaceChildren();
@@ -1349,13 +2237,25 @@ function renderInvites(invites) {
     return el('div', { class: 'request-row' },
       el('div', {},
         el('div', { text: inv.label || 'Invite' }),
-        el('div', { class: 'mono muted', text: `${inv.role} · made ${shortDate(inv.createdAt)} · until ${untilDate(inv.expiresAt)}` })),
+        el('div', { class: 'mono muted', text: `${inv.role}${inv.guestUntil ? ` until ${shortDate(inv.guestUntil)}` : ''} · made ${shortDate(inv.createdAt)} · link works until ${untilDate(inv.expiresAt)}` })),
       el('button', { class: 'btn danger small', type: 'button', text: 'Cancel', onclick: cancel }));
   }));
 }
 
 $('#invite-form').role.addEventListener('change', (e) => {
-  $('#invite-apps-row').classList.toggle('hidden', e.target.value === 'admin');
+  const role = e.target.value;
+  $('#invite-apps-row').classList.toggle('hidden', role === 'admin');
+  $('#guest-until-field').classList.toggle('hidden', role !== 'guest');
+  // Guests start with just Jellyfin; tick more if they need them.
+  $('#new-user-apps').replaceChildren(...appChecks(role === 'guest' ? state.apps.filter((a) => a.id === 'jellyfin').map((a) => a.id) : null));
+  pickers.newUser.setValue(role === 'guest' ? 1 : state.defaultLimitGb);
+});
+
+$('#invite-form').guestFor.addEventListener('change', (e) => {
+  const f = e.target.form;
+  f.guestDate.classList.toggle('hidden', e.target.value !== 'date');
+  f.guestDate.required = e.target.value === 'date';
+  f.guestDate.min = new Date().toLocaleDateString('en-CA');
 });
 
 $('#invite-form').addEventListener('submit', async (e) => {
@@ -1367,10 +2267,14 @@ $('#invite-form').addEventListener('submit', async (e) => {
       email: state.mailEnabled ? f.email.value : '',
       role: f.role.value,
       apps: checkedApps($('#new-user-apps')),
+      guestUntil: f.role.value === 'guest' ? guestUntil(f) : undefined,
       limitGb: pickers.newUser.getValue(),
     });
     f.reset();
     $('#invite-apps-row').classList.remove('hidden');
+    $('#guest-until-field').classList.add('hidden');
+    f.guestDate.classList.add('hidden');
+    f.guestDate.required = false;
     flash(f, '');
     await loadAdmin();
     $('#invite-result').replaceChildren(linkBox(linkUrl('join', token),
@@ -1470,7 +2374,12 @@ const ACTIVITY_LABELS = {
   'storage-approved': 'Approved storage',
   'storage-declined': 'Declined storage',
   'apps-changed': 'Changed apps',
+  'app-restarted': 'Restarted an app',
+  'app-restart-failed': 'Restart failed',
   'settings-changed': 'Changed server settings',
+  'family-changed': 'Changed family',
+  'notice-posted': 'Posted a notice',
+  'notice-cleared': 'Cleared the notice',
 };
 
 const activity = { filter: '', last: null };
@@ -1524,15 +2433,717 @@ $('#activity-filters').addEventListener('click', (e) => {
 
 $('#activity-more').addEventListener('click', () => loadActivity(true));
 
+// ---------- secure connection ----------
+
+let tlsTimer = null;
+
+function longDate(iso) {
+  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function renderTls(t) {
+  const f = $('#tls-form');
+  const c = t.certificate;
+  const [kind, headline] = {
+    off: ['', 'Off: Roost is only on plain HTTP'],
+    pending: ['starting', 'Waiting to get a certificate'],
+    working: ['starting', t.step || 'Getting a certificate'],
+    active: ['online', `Secure: ${t.domain} and *.${t.domain}`],
+    warning: ['starting', `Secure for now, but renewal is failing`],
+    error: ['offline', "Couldn't get a certificate"],
+  }[t.state] || ['', t.state];
+  $('#tls-state').replaceChildren(el('span', { class: `dot ${kind}` }), el('span', { text: headline }));
+
+  const lines = [];
+  if (c && t.state !== 'working') lines.push(`${t.staging ? 'Test certificate' : `From ${c.issuer}`} · valid until ${longDate(c.expiresAt)} (${c.daysLeft} days) · renews 30 days before`);
+  if (t.lastError && t.state !== 'working') lines.push(t.lastError);
+  if (t.state === 'working') lines.push('This usually takes under a minute.');
+  if (t.connection.viaCloudflare) lines.push('You opened this page through Cloudflare.');
+  else if (t.connection.secure) lines.push('You opened this page directly over HTTPS.');
+  $('#tls-detail').textContent = lines.join(' · ');
+
+  // Don't overwrite what someone is typing; an empty field is always filled in.
+  for (const name of ['domain', 'email']) {
+    if (document.activeElement !== f[name] || !f[name].value) f[name].value = t[name] || '';
+  }
+  f.token.placeholder = t.tokenSaved ? 'Saved (leave blank to keep)' : 'Paste the token';
+  f.token.required = !t.tokenSaved;
+  const busy = t.state === 'working';
+  $('#tls-save').disabled = busy;
+  $('#tls-save').textContent = t.tokenSaved ? 'Save' : 'Save and get certificate';
+  $('#tls-renew').classList.toggle('hidden', !t.tokenSaved);
+  $('#tls-renew').disabled = busy;
+  $('#tls-off').classList.toggle('hidden', !t.tokenSaved);
+  $('#tls-off').disabled = busy;
+
+  // Follow progress while a request runs; stop as soon as it finishes.
+  clearTimeout(tlsTimer);
+  if (busy) tlsTimer = setTimeout(loadTls, 1500);
+}
+
+async function loadTls() {
+  if ($('#view-admin').classList.contains('hidden')) return;
+  try { renderTls(await api('GET', '/api/admin/tls')); } catch { /* the rest of Admin still works */ }
+}
+
+// ---------- remote access ----------
+
+function agoMs(ms) {
+  const m = Math.round((Date.now() - ms) / 60000);
+  return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
+}
+
+let remoteState = {};
+
+function renderRemote(r) {
+  remoteState = r;
+  const f = $('#remote-form');
+  const reach = r.reach;
+  const [kind, headline] = !r.domain || !r.tokenSaved ? ['', 'Set up Secure connection first']
+    : r.cgnat ? ['offline', 'Your internet provider shares your address (CGNAT)']
+    : reach && reach.ok ? ['online', `Reachable from outside (${reach.ms} ms)`]
+    : reach ? ['offline', 'Not reachable from outside yet']
+    : ['', 'Not checked yet'];
+  $('#remote-state').replaceChildren(el('span', { class: `dot ${kind}` }), el('span', { text: headline }));
+  const lines = [];
+  if (r.dns && r.dns.ok) lines.push(`${r.domain} points at ${r.dns.ip} (${agoMs(r.dns.at)})`);
+  if (r.dns && !r.dns.ok) lines.push(r.dns.error);
+  if (r.cgnat) lines.push('Ask your internet provider for a public address; port forwarding can\'t work until you have one');
+  if (reach && !reach.ok) lines.push(reach.error);
+  if (reach) lines.push(`Checked ${agoMs(reach.at)}`);
+  $('#remote-detail').textContent = lines.join(' · ');
+  f.ddns.checked = r.ddns;
+  f.cloudflareOnly.checked = r.cloudflareOnly;
+}
+
+async function loadRemote() {
+  if ($('#view-admin').classList.contains('hidden')) return;
+  try { renderRemote(await api('GET', '/api/admin/remote')); } catch { /* the rest of Admin still works */ }
+}
+
+$('#remote-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const turningOn = f.ddns.checked && !remoteState.ddns;
+  if (turningOn && !confirm(`Roost will change the Cloudflare record for ${remoteState.domain || 'your domain'}: it will point at this connection with the orange cloud on, so Cloudflare sits in front of it. If the record is grey today, the domain behaves differently from now on. Continue?`)) {
+    f.ddns.checked = false;
+    return;
+  }
+  try {
+    renderRemote(await api('PUT', '/api/admin/remote', { ddns: f.ddns.checked, cloudflareOnly: f.cloudflareOnly.checked, confirmProxy: turningOn }));
+    flash(f, 'Saved');
+  } catch (err) { flash(f, err.message, false); }
+});
+
+$('#remote-check').addEventListener('click', async () => {
+  const f = $('#remote-form');
+  const btn = $('#remote-check');
+  btn.disabled = true;
+  flash(f, 'Checking from outside…');
+  try { renderRemote(await api('POST', '/api/admin/remote/check')); flash(f, 'Checked'); } catch (err) { flash(f, err.message, false); }
+  btn.disabled = false;
+});
+
+// ---------- Coffee Galaxy ----------
+
+function renderCoffee(c) {
+  const f = $('#coffee-form');
+  const ck = c.check;
+  const [kind, headline] = !c.peerPublicKey || !c.endpoint ? ['', 'Not linked yet']
+    : ck && ck.ok ? ['online', `Linked (${ck.ms} ms)`]
+    : ck ? ['offline', 'The link isn’t answering']
+    : ['starting', 'Saved, not checked yet'];
+  $('#coffee-state').replaceChildren(el('span', { class: `dot ${kind}` }), el('span', { text: headline }));
+  const lines = [];
+  if (ck && !ck.ok) lines.push(ck.error);
+  if (ck) lines.push(`Checked ${agoMs(ck.at)}`);
+  if (c.applied && !c.applied.ok) lines.push(c.applied.note);
+  if (c.enabled) lines.push(`Open at nova.${c.domain}/coffee`);
+  $('#coffee-detail').textContent = lines.join(' · ');
+  f.ownKey.value = c.publicKey;
+  for (const name of ['peerPublicKey', 'endpoint']) {
+    if (document.activeElement !== f[name] || !f[name].value) f[name].value = c[name] || '';
+  }
+  f.secret.placeholder = c.secretSaved ? 'Saved (leave blank to keep)' : 'Make one, or paste yours';
+  f.enabled.checked = c.enabled;
+}
+
+async function loadCoffee() {
+  if ($('#view-admin').classList.contains('hidden')) return;
+  try { renderCoffee(await api('GET', '/api/admin/coffee')); } catch { /* the rest of Admin still works */ }
+}
+
+$('#coffee-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    renderCoffee(await api('PUT', '/api/admin/coffee', { peerPublicKey: f.peerPublicKey.value, endpoint: f.endpoint.value, secret: f.secret.value, enabled: f.enabled.checked }));
+    f.secret.value = '';
+    flash(f, 'Saved');
+  } catch (err) { flash(f, err.message, false); }
+});
+
+$('#coffee-form').ownKey.addEventListener('focus', (e) => e.target.select());
+$('#coffee-copy').addEventListener('click', async () => {
+  const f = $('#coffee-form');
+  try { await copyPlain(f.ownKey.value); flash(f, 'Copied: give it to the other server'); } catch { flash(f, 'Select the key and copy it by hand', false); }
+});
+
+$('#coffee-secret').addEventListener('click', async () => {
+  const f = $('#coffee-form');
+  if (!confirm('Make a new shared secret? Coffee Galaxy will refuse Roost until you put the new one in its config.')) return;
+  try {
+    const res = await api('POST', '/api/admin/coffee/secret');
+    renderCoffee(res);
+    const line = $('#coffee-new-secret');
+    line.hidden = false;
+    line.replaceChildren(document.createTextNode(`Copy it now, it is shown once: ${res.secret} `), el('button', { class: 'link-btn mono', type: 'button', text: 'Copy', onclick: async () => { await copyPlain(res.secret); flash(f, 'Copied'); } }));
+  } catch (err) { flash(f, err.message, false); }
+});
+
+$('#coffee-check').addEventListener('click', async () => {
+  const f = $('#coffee-form');
+  const btn = $('#coffee-check');
+  btn.disabled = true;
+  flash(f, 'Checking the link…');
+  try { renderCoffee(await api('POST', '/api/admin/coffee/check')); flash(f, 'Checked'); } catch (err) { flash(f, err.message, false); }
+  btn.disabled = false;
+});
+
+$('#tls-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    const t = await api('PUT', '/api/admin/tls', { domain: f.domain.value, token: f.token.value, email: f.email.value });
+    f.token.value = '';
+    renderTls(t);
+    flash(f, 'Saved. Getting the certificate…');
+  } catch (err) { flash(f, err.message, false); }
+});
+
+$('#tls-renew').addEventListener('click', async () => {
+  const f = $('#tls-form');
+  try { renderTls(await api('POST', '/api/admin/tls/renew')); flash(f, 'Renewing…'); } catch (err) { flash(f, err.message, false); }
+});
+
+$('#tls-off').addEventListener('click', async () => {
+  const f = $('#tls-form');
+  if (!confirm('Turn off HTTPS? Roost forgets the Cloudflare token and the certificate. Links using your domain will stop working securely.')) return;
+  try { renderTls(await api('DELETE', '/api/admin/tls')); flash(f, 'HTTPS turned off'); } catch (err) { flash(f, err.message, false); }
+});
+
+// ---------- updates (Admin) ----------
+
+let updateTimer = null;
+let updateAsking = false;
+let updateLast = null;
+
+const UPDATE_PHASE = {
+  checking: 'Checking what’s new',
+  merge: 'Bringing in the new code',
+  build: 'Building the new version, which takes a few minutes',
+  restart: 'Restarting Roost',
+  health: 'Waiting for the new version to start',
+  rollback: 'Something failed, so the old version is being put back',
+};
+
+function plural(n, one, many) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+function renderUpdate(u) {
+  updateLast = u;
+  const applying = u.state === 'applying';
+  const [dot, headline] = {
+    off: ['', 'The updater isn’t set up yet'],
+    stopped: ['offline', 'The updater isn’t running'],
+    checking: ['starting', 'Looking at GitHub…'],
+    applying: ['starting', `Updating Roost… ${UPDATE_PHASE[u.phase] || ''}`.trim()],
+    available: ['starting', `${plural(u.behind, 'change', 'changes')} waiting on GitHub`],
+    current: ['online', 'Roost is up to date'],
+    error: ['offline', u.checkError || 'Couldn’t look at GitHub'],
+  }[u.state] || ['', ''];
+  $('#update-state').replaceChildren(el('span', { class: `dot ${dot}` }), el('span', { text: headline }));
+
+  const lines = [];
+  if (u.state === 'off') lines.push('Finish “Update Roost from inside Roost” in Setup above.');
+  if (u.state === 'stopped') lines.push('Check that roost-updater is started in ZimaOS, then reload this page.');
+  if (u.head && !['off', 'stopped'].includes(u.state)) lines.push(`Running ${u.head.short}${u.head.date ? `, from ${shortDate(u.head.date)}` : ''}`);
+  if (u.checkedAt && !['off', 'stopped'].includes(u.state)) lines.push(`checked ${backupWhen(u.checkedAt)}`);
+  if (u.checkError && u.state !== 'error') lines.push(u.checkError);
+  $('#update-detail').textContent = lines.join(' · ');
+
+  $('#update-changes').replaceChildren(...(u.state === 'available' ? u.commits : []).map((c) =>
+    el('li', {}, el('span', { class: 'muted', text: c.sha }), el('span', { text: c.subject }))));
+
+  // One note at a time: what blocks the update, or how the last one went.
+  const notes = [];
+  const l = u.last;
+  if (u.state === 'available' && u.conflicts.length) {
+    notes.push(`You changed ${u.conflicts.join(', ')} on the server, and this update changes it too. Move your own settings into docker-compose.override.yml, then check again.`);
+  }
+  if (u.state === 'available' && u.ahead) notes.push('This folder has changes of its own that aren’t on GitHub, so it can’t be updated here.');
+  if (u.state === 'available' && (u.composeChanged || u.updaterChanged)) {
+    notes.push('This update also changes the compose file or the updater. Roost and its backups update here; to apply the rest, run “docker compose up -d --build” in the Roost folder afterwards.');
+  }
+  if (l && !l.ok && !applying) {
+    notes.push(`The last update didn’t work: ${l.error}${l.rolledBack ? ' The old version is running again.' : ''}`);
+  } else if (l && l.ok && !l.nothing && !applying && Date.now() - Date.parse(l.finishedAt) < 7 * 86400000) {
+    notes.push(`Updated ${backupWhen(l.finishedAt)} (${plural(l.count, 'change', 'changes')}).${l.needsRedeploy ? ' The compose file or updater changed too: run “docker compose up -d --build” in the Roost folder to apply that part.' : ''}`);
+  }
+  $('#update-note').textContent = notes.join(' ');
+  $('#update-note').classList.toggle('hidden', !notes.length);
+  const tech = l && !l.ok && !applying ? l.detail : '';
+  $('#update-tech').classList.toggle('hidden', !tech);
+  $('#update-tech-text').textContent = tech || '';
+
+  const canApply = u.state === 'available' && !u.conflicts.length && !u.ahead && !u.requested;
+  $('#update-apply').disabled = !canApply;
+  $('#update-apply').classList.toggle('hidden', u.state !== 'available');
+  $('#update-check').disabled = ['off', 'stopped', 'checking', 'applying'].includes(u.state) || u.requested;
+  $('#update-check').textContent = u.state === 'checking' || (u.requested && u.state !== 'applying') ? 'Checking…' : 'Check now';
+  $('#update-buttons').classList.toggle('hidden', updateAsking || applying);
+  $('#update-confirm').classList.toggle('hidden', !updateAsking || applying);
+  $('#update-confirm-text').textContent = `Update Roost now? ${plural(u.behind, 'change', 'changes')} will be installed. Roost is unavailable for a minute or two while it restarts, and the old version is put back if the new one fails.`;
+
+  clearTimeout(updateTimer);
+  updateTimer = setTimeout(loadUpdateAdmin, applying || u.requested || u.state === 'checking' ? 3000 : 30000);
+}
+
+async function loadUpdateAdmin() {
+  clearTimeout(updateTimer);
+  if ($('#view-admin').classList.contains('hidden') || document.hidden) {
+    if (!$('#view-admin').classList.contains('hidden')) updateTimer = setTimeout(loadUpdateAdmin, 30000);
+    return;
+  }
+  try {
+    renderUpdate(await api('GET', '/api/admin/update'));
+  } catch (err) {
+    // While Roost restarts for an update, it simply doesn't answer for a bit.
+    if (updateLast && updateLast.state === 'applying' && !err.status) {
+      $('#update-state').replaceChildren(el('span', { class: 'dot starting' }), el('span', { text: 'Roost is restarting on the new version…' }));
+      updateTimer = setTimeout(loadUpdateAdmin, 3000);
+    }
+  }
+}
+
+$('#update-check').addEventListener('click', async () => {
+  const f = $('#update-form');
+  try {
+    await api('POST', '/api/admin/update/check');
+    loadUpdateAdmin();
+  } catch (err) { flash(f, err.message, false); }
+});
+
+$('#update-apply').addEventListener('click', () => {
+  updateAsking = true;
+  if (updateLast) renderUpdate(updateLast);
+  $('#update-yes').focus();
+});
+
+$('#update-no').addEventListener('click', () => {
+  updateAsking = false;
+  if (updateLast) renderUpdate(updateLast);
+});
+
+$('#update-yes').addEventListener('click', async () => {
+  const f = $('#update-form');
+  updateAsking = false;
+  try {
+    await api('POST', '/api/admin/update/apply', { confirm: true });
+    flash(f, 'Starting the update');
+  } catch (err) { flash(f, err.message, false); }
+  loadUpdateAdmin();
+});
+
+// ---------- where Nest keeps its files (Admin) ----------
+
+let nestDriveTimer = null;
+let nestDriveLast = null;
+let nestDriveAsking = false;
+let nestDriveChanging = false;
+
+const NESTDRIVE_PHASE = {
+  folder: 'Making Nest’s folder on the drive',
+  settings: 'Saving the new settings',
+  restart: 'Restarting Roost',
+  health: 'Waiting for Roost to start',
+  rollback: 'Something failed, so the old setting is being put back',
+};
+
+const driveLabel = (d) => `${d.name} · ${bytes(d.totalBytes)}, ${bytes(d.freeBytes)} free`;
+const driveOf = (current) => String(current || '').replace(/^\/media\//, '').split('/')[0];
+
+function renderNestDrive(n) {
+  nestDriveLast = n;
+  const panel = $('#nestdrive-panel');
+  // Nothing to offer until the updater has looked at the drives.
+  const noUpdater = n.updater === 'off' || n.updater === 'stopped';
+  panel.classList.toggle('hidden', n.updater === 'off');
+  // The updater answers within seconds; a long silence means it isn't reading
+  // requests (an older one that was never redeployed).
+  const stuck = !noUpdater && n.state === 'off' && (n.waitedMs || 0) > 30000;
+  const looking = n.state === 'off' && !noUpdater && !stuck;
+  const moving = n.state === 'moving' || n.requested;
+  const done = n.onDrive && !nestDriveChanging && !moving;
+  const free = (n.drives || []).filter((d) => !n.current || d.name !== driveOf(n.current));
+  let headline;
+  let dot = 'ok';
+  if (stuck) {
+    headline = 'The updater isn’t answering';
+    dot = 'offline';
+  } else if (looking) {
+    headline = 'Looking at the drives…';
+    dot = 'starting';
+  } else if (moving) {
+    headline = NESTDRIVE_PHASE[n.phase] || 'Moving Nest';
+    dot = 'starting';
+  } else if (n.onDrive) {
+    headline = `Nest is on ${driveOf(n.current)}`;
+  } else if (noUpdater) {
+    headline = 'Waiting for the updater';
+    dot = 'offline';
+  } else {
+    headline = 'Nest is on the server’s main drive';
+    dot = 'starting';
+  }
+  $('#nestdrive-state').replaceChildren(el('span', { class: `dot ${dot}` }), el('span', { text: headline }));
+  $('#nestdrive-sub').classList.toggle('hidden', done);
+
+  const notes = [];
+  const l = n.last;
+  if (l && !l.ok && !moving) notes.push(`The last move didn’t work: ${l.error}${l.rolledBack ? ' Nest is back where it was.' : ''}`);
+  if (!looking && !stuck && !done && !moving && !n.empty) notes.push('Nest already has files in it. They would have to be copied across first, so this button can’t move it yet. See the guide in the README.');
+  if (!looking && !stuck && !done && !moving && n.empty && !free.length && !noUpdater) notes.push('No other drive is plugged in. Plug in the data drive and it appears here.');
+  if (noUpdater) notes.push('Check that roost-updater is started in ZimaOS, and redeploy once so it can see the drives.');
+  if (n.error) notes.push(`The updater couldn’t look at the drives: ${n.error}`);
+  if (stuck) notes.push('It is probably still running an older version. In the Roost folder on the server, run “sudo docker compose up -d --build”, wait a minute, then press Try again.');
+  if (n.state !== 'off' && n.mediaSeen === false) notes.push('The updater can’t see the server’s drives. Run “sudo docker compose up -d --build” in the Roost folder once so it gets the new drives line.');
+  $('#nestdrive-note').textContent = notes.join(' ');
+  $('#nestdrive-note').classList.toggle('hidden', !notes.length);
+  const tech = l && !l.ok && l.detail;
+  $('#nestdrive-tech').classList.toggle('hidden', !tech);
+  $('#nestdrive-tech-text').textContent = tech || '';
+
+  const canPick = !done && !moving && !looking && !stuck && n.empty && free.length && !noUpdater;
+  const select = $('#nestdrive-select');
+  const picked = select.value;
+  select.replaceChildren(...free.map((d) => el('option', { value: d.name, text: driveLabel(d) })));
+  if (picked && free.some((d) => d.name === picked)) select.value = picked;
+  $('#nestdrive-pick').classList.toggle('hidden', !canPick || nestDriveAsking);
+  $('#nestdrive-confirm').classList.toggle('hidden', !canPick || !nestDriveAsking);
+  $('#nestdrive-confirm-text').textContent = `Move Nest and Glint to ${select.value}? Roost restarts for a minute or two. Nothing is copied because Nest is empty; if the move fails, the old setting is put back.`;
+  $('#nestdrive-change').classList.toggle('hidden', !done || !n.empty);
+  $('#nestdrive-retry').classList.toggle('hidden', !stuck);
+
+  clearTimeout(nestDriveTimer);
+  if (moving || looking) nestDriveTimer = setTimeout(loadNestDrive, 3000);
+}
+
+async function loadNestDrive() {
+  clearTimeout(nestDriveTimer);
+  if ($('#view-admin').classList.contains('hidden') || document.hidden) return;
+  try {
+    renderNestDrive(await api('GET', '/api/admin/nest-drive'));
+    // The first look at the drives is made by the updater a moment after the request.
+    if (nestDriveLast && nestDriveLast.requested && !(nestDriveLast.waitedMs > 30000)) nestDriveTimer = setTimeout(loadNestDrive, 3000);
+  } catch (err) {
+    // While Roost restarts for the move, it simply doesn't answer for a bit.
+    if (nestDriveLast && (nestDriveLast.state === 'moving' || nestDriveLast.requested) && !err.status) {
+      nestDriveTimer = setTimeout(loadNestDrive, 3000);
+    }
+  }
+}
+
+$('#nestdrive-retry').addEventListener('click', async () => {
+  try {
+    await api('POST', '/api/admin/nest-drive/refresh');
+  } catch (err) { flash($('#nestdrive-panel'), err.message, false); }
+  nestDriveLast = { ...nestDriveLast, waitedMs: 0 };
+  loadNestDrive();
+});
+
+$('#nestdrive-move').addEventListener('click', () => {
+  nestDriveAsking = true;
+  if (nestDriveLast) renderNestDrive(nestDriveLast);
+  $('#nestdrive-yes').focus();
+});
+
+$('#nestdrive-no').addEventListener('click', () => {
+  nestDriveAsking = false;
+  if (nestDriveLast) renderNestDrive(nestDriveLast);
+});
+
+$('#nestdrive-change').addEventListener('click', () => {
+  nestDriveChanging = true;
+  if (nestDriveLast) renderNestDrive(nestDriveLast);
+});
+
+$('#nestdrive-yes').addEventListener('click', async () => {
+  const f = $('#nestdrive-panel');
+  nestDriveAsking = false;
+  nestDriveChanging = false;
+  try {
+    await api('POST', '/api/admin/nest-drive/move', { drive: $('#nestdrive-select').value, confirm: true });
+    flash(f, 'Starting the move');
+    nestDriveLast = { ...nestDriveLast, requested: true };
+  } catch (err) { flash(f, err.message, false); }
+  loadNestDrive();
+});
+
+// ---------- backups (Admin) ----------
+
+let backupTimer = null;
+
+// When something happened or will happen: "today 3:04 AM", "tomorrow 3:00 AM", "Tue 3:00 AM".
+function backupWhen(iso) {
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const days = Math.round((new Date(iso).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86400000);
+  if (days === 0) return `today ${time}`;
+  if (days === 1) return `tomorrow ${time}`;
+  if (days === -1) return `yesterday ${time}`;
+  if (Math.abs(days) < 7) return `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`;
+  return `${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${time}`;
+}
+
+const runTime = (ms) => (ms < 60000 ? `${Math.max(1, Math.round(ms / 1000))}s` : duration(ms / 1000));
+
+function backupRow(h) {
+  const when = backupWhen(h.startedAt).replace(/^./, (c) => c.toUpperCase());
+  const lines = [];
+  let result = 'OK';
+  if (h.cancelled) {
+    result = 'Cancelled';
+  } else if (!h.ok) {
+    result = 'Failed';
+    lines.push(h.error);
+  } else {
+    lines.push(`${h.files.toLocaleString()} files · ${(h.files - h.linked).toLocaleString()} new or changed · ${bytes(h.written)} written`);
+    if (h.skipped) lines.push(`${h.skipped} couldn’t be read`);
+  }
+  if (h.finishedAt && !(!h.ok && !h.cancelled && h.finishedAt === h.startedAt)) lines.push(`took ${runTime(Date.parse(h.finishedAt) - Date.parse(h.startedAt))}`);
+  return el('li', { class: `activity-row${h.ok ? '' : h.cancelled ? ' cancelled' : ' failed'}` },
+    el('div', { class: 'activity-main' },
+      el('div', { class: 'activity-what', text: `${when}${h.manual ? ' · by hand' : ''}` }),
+      el('div', { class: 'activity-detail mono muted', text: lines.join(' · ') })),
+    el('span', { class: 'mono muted activity-time', text: result }));
+}
+
+function renderBackup(b) {
+  const f = $('#backup-form');
+  const running = b.state === 'running';
+  const [dot, headline] = {
+    ok: ['online', `Last backup ${b.lastOk ? backupWhen(b.lastOk) : ''}`],
+    late: ['starting', `Last backup ${b.lastOk ? backupWhen(b.lastOk) : ''}: it has missed a night`],
+    none: ['', 'No backup yet'],
+    running: ['starting', 'Backing up now'],
+    failed: ['offline', 'The last backup failed'],
+    drive: ['offline', 'Backup drive not found'],
+    stopped: ['offline', 'The backup service isn’t running'],
+    off: ['', 'Backups aren’t set up yet'],
+  }[b.state] || ['', b.state];
+  $('#backup-state').replaceChildren(el('span', { class: `dot ${dot}` }), el('span', { text: headline }));
+
+  const lines = [];
+  if (running && b.progress && b.progress.files !== undefined) lines.push(`${b.progress.files.toLocaleString()} files checked · ${bytes(b.progress.written)} written so far`);
+  if (b.state === 'failed') lines.push(b.message);
+  if (b.state === 'stopped') lines.push('Check that the roost-backup container is started in ZimaOS, then reload this page.');
+  if (b.state === 'off') lines.push('Finish the “Plug in the backup drive” step in Setup above.');
+  if (!running && b.next && ['ok', 'late', 'none', 'failed', 'drive'].includes(b.state)) lines.push(`Next backup ${backupWhen(b.next)}`);
+  if (b.snapshots && b.snapshots.count) lines.push(`${b.snapshots.count} ${b.snapshots.count === 1 ? 'backup' : 'backups'} kept, back to ${shortDate(b.snapshots.oldest)}`);
+  $('#backup-detail').textContent = lines.filter(Boolean).join(' · ');
+
+  const d = b.drive;
+  $('#backup-drive').classList.toggle('hidden', !(d && d.ok && d.total));
+  if (d && d.ok && d.total) {
+    const used = d.total - d.free;
+    const percent = pct(used, d.total);
+    const m = $('#backup-meter');
+    m.className = `meter${percent >= FULL_AT ? ' high' : ''}`;
+    m.setAttribute('aria-valuenow', percent);
+    m.firstElementChild.style.width = `${Math.min(100, percent)}%`;
+    $('#backup-drive-text').textContent = `${bytes(d.free)} free of ${bytes(d.total)}`;
+  }
+
+  // Don't overwrite what someone is typing.
+  const c = b.config;
+  const values = { time: c.time, keepDaily: c.keepDaily, keepWeekly: c.keepWeekly, capGb: c.capGb || '' };
+  for (const [name, v] of Object.entries(values)) {
+    if (document.activeElement !== f[name]) f[name].value = v;
+  }
+  const canRun = !running && !b.requested && d && d.ok && !['stopped', 'off'].includes(b.state);
+  $('#backup-run').disabled = !canRun;
+  $('#backup-run').textContent = b.requested && !running ? 'Starting…' : 'Back up now';
+  $('#backup-cancel').classList.toggle('hidden', !running);
+  $('#backup-history').replaceChildren(...(b.history || []).map(backupRow));
+
+  // Follow a running backup closely; otherwise just keep the page honest.
+  clearTimeout(backupTimer);
+  backupTimer = setTimeout(loadBackupAdmin, running || b.requested ? 3000 : 30000);
+}
+
+async function loadBackupAdmin() {
+  clearTimeout(backupTimer);
+  if ($('#view-admin').classList.contains('hidden') || document.hidden || conn.lost) {
+    // Look again soon in case the tab comes back, but cheaply.
+    if (!$('#view-admin').classList.contains('hidden')) backupTimer = setTimeout(loadBackupAdmin, 30000);
+    return;
+  }
+  try { renderBackup(await api('GET', '/api/admin/backup')); } catch { /* the rest of Admin still works */ }
+}
+
+$('#backup-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    await api('PATCH', '/api/admin/settings', { backup: { time: f.time.value, keepDaily: f.keepDaily.value, keepWeekly: f.keepWeekly.value, capGb: f.capGb.value } });
+    flash(f, 'Saved');
+    loadBackupAdmin();
+  } catch (err) { flash(f, err.message, false); }
+});
+
+$('#backup-run').addEventListener('click', async () => {
+  const f = $('#backup-form');
+  try {
+    await api('POST', '/api/admin/backup/run');
+    flash(f, 'Starting the backup…');
+    loadBackupAdmin();
+  } catch (err) { flash(f, err.message, false); }
+});
+
+$('#backup-cancel').addEventListener('click', async () => {
+  const f = $('#backup-form');
+  if (!confirm('Cancel this backup? What it copied so far is thrown away; the earlier backups are untouched.')) return;
+  try {
+    await api('POST', '/api/admin/backup/cancel');
+    flash(f, 'Cancelling…');
+    loadBackupAdmin();
+  } catch (err) { flash(f, err.message, false); }
+});
+
+// ---------- get files back (Admin) ----------
+
+const restoreView = { night: '', path: '', timer: null };
+
+const restoreUrl = (kind, path = restoreView.path) => `/api/admin/backup/${kind}?${new URLSearchParams({ snapshot: restoreView.night, path })}`;
+
+function restoreAction(label, props) {
+  return el(props.href ? 'a' : 'button', { class: 'btn ghost small', type: props.href ? undefined : 'button', ...props, text: label });
+}
+
+async function askRestore(item, fullPath, person) {
+  const night = $('#restore-night').selectedOptions[0].textContent;
+  if (!confirm(`Put “${item}” from the ${night} backup into ${person}’s Nest, in a new folder called “Restored from backup ${restoreView.night}”?\n\nNothing already in their Nest is changed.`)) return;
+  try {
+    await api('POST', '/api/admin/backup/restore', { snapshot: restoreView.night, path: fullPath });
+    flash($('#restore-panel'), 'Restoring…');
+    followRestore();
+  } catch (err) { flash($('#restore-panel'), err.message, false); }
+}
+
+function renderRestoreJob(job) {
+  const line = $('#restore-job');
+  line.classList.toggle('hidden', !job);
+  if (!job) return;
+  if (job.running) line.textContent = `Restoring ${job.person}’s files: ${job.files.toLocaleString()} of ${job.total.toLocaleString()} files · ${bytes(job.bytes)} of ${bytes(job.totalBytes)}`;
+  else if (job.error) line.textContent = `The restore for ${job.person} stopped after ${job.files.toLocaleString()} files: ${job.error}`;
+  else line.textContent = `Done: ${job.files.toLocaleString()} files (${bytes(job.bytes)}) are in ${job.person}’s Nest, in “${job.folder}”.`;
+}
+
+async function followRestore() {
+  clearTimeout(restoreView.timer);
+  if ($('#view-admin').classList.contains('hidden')) return;
+  try {
+    const { job } = await api('GET', '/api/admin/backup/restore');
+    renderRestoreJob(job);
+    if (job && job.running) restoreView.timer = setTimeout(followRestore, 2000);
+  } catch { /* try again next time Admin opens */ }
+}
+
+function renderRestore(r) {
+  const panel = $('#restore-panel');
+  panel.classList.toggle('hidden', !r.available && r.reason !== 'not-mounted');
+  const hint = $('#restore-hint');
+  hint.classList.toggle('hidden', r.available);
+  $('#restore-browser').classList.toggle('hidden', !r.available);
+  if (!r.available) {
+    hint.textContent = 'Roost can’t see the backup drive yet. In the compose file, point the roost service’s /backup:ro line at the same folder as the roost-backup service, then redeploy.';
+    return;
+  }
+  restoreView.night = r.snapshot.name;
+  const select = $('#restore-night');
+  select.replaceChildren(...r.nights.map((n) => el('option', { value: n.name, selected: n.name === r.snapshot.name }, `${backupWhen(n.at).replace(/^./, (c) => c.toUpperCase())}`)));
+  select.value = r.snapshot.name;
+
+  const crumbs = [el('button', { type: 'button', text: 'Backup', onclick: () => browseBackup('') })];
+  r.path.forEach((seg, i) => {
+    const there = r.path.slice(0, i + 1).map((s) => s.name).join('/');
+    crumbs.push(el('span', { text: '›', 'aria-hidden': 'true' }));
+    const name = seg.label || seg.name;
+    crumbs.push(i === r.path.length - 1 ? el('span', { text: name }) : el('button', { type: 'button', text: name, onclick: () => browseBackup(there) }));
+  });
+  $('#restore-path').replaceChildren(...crumbs);
+
+  const at = (name) => (restoreView.path ? `${restoreView.path}/${name}` : name);
+  const rows = [];
+  for (const f of r.folders) {
+    rows.push(el('li', { class: 'restore-row' },
+      el('button', { class: 'restore-name', type: 'button', onclick: () => browseBackup(at(f.name)) },
+        f.label || f.name, el('small', { text: `${f.files.toLocaleString()} ${f.files === 1 ? 'file' : 'files'} · ${bytes(f.bytes)}` })),
+      el('div', { class: 'restore-actions' },
+        f.restoreFor ? restoreAction('Restore to Nest', { onclick: () => askRestore(f.name, at(f.name), f.restoreFor) }) : null,
+        restoreAction('Download .zip', { href: restoreUrl('download', at(f.name)) }))));
+  }
+  for (const f of r.files) {
+    rows.push(el('li', { class: 'restore-row' },
+      el('div', { class: 'restore-name' }, f.name, el('small', { text: `${bytes(f.size)} · ${new Date(f.mtime).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}` })),
+      el('div', { class: 'restore-actions' },
+        f.restoreFor ? restoreAction('Restore to Nest', { onclick: () => askRestore(f.name, at(f.name), f.restoreFor) }) : null,
+        restoreAction('Download', { href: restoreUrl('download', at(f.name)) }))));
+  }
+  $('#restore-list').replaceChildren(...(rows.length ? rows : [el('li', { class: 'empty mono', text: 'Nothing in this folder' })]));
+  restoreView.restoreTo = r.restoreTo;
+  const here = $('#restore-here');
+  here.classList.toggle('hidden', !r.restoreTo || !r.path.length);
+  if (r.restoreTo) {
+    const name = r.path[r.path.length - 1].name;
+    here.textContent = r.path.length === 3 ? `Restore all of ${r.restoreTo.name}’s files to Nest` : `Restore “${name}” to Nest`;
+    here.onclick = () => askRestore(r.path.length === 3 ? `all of ${r.restoreTo.name}’s files` : name, restoreView.path, r.restoreTo.name);
+  }
+  renderRestoreJob(r.job);
+  if (r.job && r.job.running) { clearTimeout(restoreView.timer); restoreView.timer = setTimeout(followRestore, 2000); }
+}
+
+async function browseBackup(path, night = restoreView.night) {
+  restoreView.path = path;
+  try {
+    renderRestore(await api('GET', `/api/admin/backup/browse?${new URLSearchParams({ snapshot: night, path })}`));
+  } catch (err) {
+    flash($('#restore-panel'), err.message, false);
+    if (path) browseBackup('', night);
+  }
+}
+
+$('#restore-night').addEventListener('change', (e) => browseBackup('', e.target.value));
+
 // ---------- boot ----------
+
+// Lets Roost install as an app and show an offline screen. Browsers only allow
+// it on HTTPS (or localhost), so on a plain home address this does nothing.
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
 
 (async function boot() {
   tickClock();
   setInterval(tickClock, 30 * 1000);
-  setInterval(() => { if (state.user && !$('#view-apps').classList.contains('hidden')) loadSystem(); }, 15 * 1000);
+  setInterval(() => { if (state.user && !isGuest(state.user) && !conn.lost && !$('#view-apps').classList.contains('hidden')) loadSystem(); }, 15 * 1000);
   // The status page refreshes itself while it is open and the tab is visible.
   setInterval(() => {
-    if (state.user && !document.hidden && !$('#view-status').classList.contains('hidden')) loadStatus();
+    // Holds still while a restart question is open, so the buttons don't move under a finger.
+    const asking = [...restarts.values()].some((r) => r.step === 'confirm');
+    if (state.user && !conn.lost && !document.hidden && !asking && !$('#view-status').classList.contains('hidden')) loadStatus();
   }, STATUS_REFRESH_MS);
   const token = linkToken();
   if (token) return showJoin(token);

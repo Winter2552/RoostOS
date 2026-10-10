@@ -28,13 +28,18 @@ const KINDS = {
   'password-reset': 'users',
   'two-step-on': 'users',
   'two-step-off': 'users',
+  'family-changed': 'users',
   'storage-requested': 'storage',
   'storage-approved': 'storage',
   'storage-declined': 'storage',
   'apps-changed': 'settings',
+  'app-restarted': 'apps',
+  'app-restart-failed': 'apps',
   'settings-changed': 'settings',
+  'notice-posted': 'settings',
+  'notice-cleared': 'settings',
 };
-const FILTERS = ['sign-ins', 'failed', 'users', 'storage', 'settings'];
+const FILTERS = ['sign-ins', 'failed', 'users', 'storage', 'apps', 'settings'];
 
 class ActivityLog {
   constructor(dataDir, { saveDelayMs = SAVE_DELAY_MS, max = MAX_ENTRIES } = {}) {
@@ -98,6 +103,8 @@ class ActivityLog {
 // proxy appended last to X-Forwarded-For (earlier entries can be faked by the
 // visitor). Off by default, because then anyone could send that header.
 function clientIp(req, trustProxy) {
+  // Set by the remote access check when the request really came through Cloudflare.
+  if (req.roostIp) return req.roostIp;
   if (trustProxy) {
     const parts = String(req.headers['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean);
     if (parts.length) return parts[parts.length - 1];

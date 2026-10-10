@@ -6,6 +6,12 @@
   <meta name="theme-color" content="#0a0a0a">
   <title>Roost</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <!-- Installable app: Android and Windows read the manifest, iPhone the apple-* lines. -->
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <!-- Fonts load when the server has internet; the page falls back to system fonts otherwise. -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -13,6 +19,14 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <!-- Shown when the server stops answering (public/app.js, "connection") -->
+  <div id="conn-banner" class="conn-banner hidden" role="status" aria-live="polite">
+    <div class="conn-text">
+      <strong id="conn-title"></strong>
+      <span id="conn-why" class="muted"></span>
+    </div>
+    <button class="btn small ghost" type="button" id="conn-retry">Try again</button>
+  </div>
   <!-- Setup and sign-in -->
   <main id="welcome" class="welcome hidden">
     <section class="card welcome-card">
@@ -107,7 +121,7 @@
         </button>
         <div class="account-menu hidden" id="account-menu" role="menu" aria-labelledby="account-btn">
           <div class="menu-head"><b id="who-name"></b><span class="mono muted" id="who-role"></span></div>
-          <a role="menuitem" href="#/status" data-view="status">Status</a>
+          <a role="menuitem" href="#/status" data-view="status" class="member-only">Status</a>
           <a role="menuitem" href="#/profile" data-view="profile">Profile</a>
           <a role="menuitem" href="#/admin" data-view="admin" class="admin-only">Admin</a>
           <button role="menuitem" type="button" id="logout">Sign out</button>
@@ -117,24 +131,44 @@
 
     <!-- Apps view -->
     <section id="view-apps">
+      <div class="notice hidden" id="notice" role="status">
+        <span class="notice-label mono">Notice</span>
+        <p class="notice-text" id="notice-text"></p>
+        <button class="notice-close" type="button" id="notice-close" aria-label="Hide this notice">×</button>
+      </div>
       <div class="hero">
         <div class="mono muted" id="greeting">Hello</div>
         <h1>Welcome home, <span id="hero-name"></span></h1>
-        <div class="stats mono">
+        <div class="stats mono member-only">
           <div class="stat">Uptime<b id="stat-uptime">—</b></div>
           <div class="stat">Memory<b id="stat-mem">—</b></div>
           <div class="stat">Load<b id="stat-load">—</b></div>
           <div class="stat">Storage<b id="stat-disk">—</b></div>
         </div>
-        <a class="more-link mono" href="#/status">Server status →</a>
+        <a class="backup-line mono member-only hidden" id="backup-line"></a>
+        <a class="more-link mono member-only" href="#/status">Server status →</a>
         <a class="more-link mono setup-nudge hidden" id="setup-nudge" href="#/admin"></a>
+      </div>
+      <!-- One search box across the apps (public/search.js) -->
+      <div class="search hidden" id="search" role="search">
+        <label class="search-field">
+          <span class="search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/></svg></span>
+          <input type="search" id="search-input" placeholder="Search Roost" aria-label="Search Roost" aria-controls="search-results" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
+          <kbd class="search-key mono" aria-hidden="true">/</kbd>
+        </label>
+        <div class="search-results hidden" id="search-results" aria-live="polite"></div>
       </div>
       <div class="section">
         <div class="section-head">
           <h2>Your apps</h2>
+          <div class="arrange-actions" id="arrange-actions"></div>
           <span class="mono muted" id="clock"></span>
         </div>
         <div class="apps" id="apps"></div>
+      </div>
+      <div class="section watching hidden" id="watching">
+        <div class="section-head"><h2>Continue watching</h2></div>
+        <div class="watch-row" id="watch-row"></div>
       </div>
     </section>
 
@@ -144,11 +178,13 @@
         <button class="btn nest-new" type="button" id="nest-new"><span aria-hidden="true">+</span> New</button>
         <nav class="nest-places mono" aria-label="Nest">
           <a href="#/nest" data-place="drive">My Drive</a>
-          <a href="#/nest/trash" data-place="trash">Trash</a>
+          <a href="#/nest/family" data-place="family" id="nest-family-link" class="hidden">Family</a>
+          <a href="#/nest/trash" data-place="trash" id="nest-trash-link">Trash</a>
         </nav>
         <div class="nest-storage">
           <div class="meter" aria-hidden="true"><i id="nest-meter"></i></div>
           <span class="mono muted" id="nest-used"></span>
+          <a class="link-btn mono hidden" id="nest-more"></a>
         </div>
       </aside>
       <div class="nest-main" id="nest-main">
@@ -179,6 +215,41 @@
       <input type="file" id="nest-pick-folder" webkitdirectory multiple hidden>
     </section>
 
+    <!-- Glint: photos (public/glint.js) -->
+    <section id="view-glint" class="nest glint hidden">
+      <aside class="nest-side">
+        <button class="btn nest-new" type="button" id="glint-upload"><span aria-hidden="true">+</span> Upload</button>
+        <div class="glint-spaces mono hidden" id="glint-spaces" role="group" aria-label="Whose photos">
+          <a href="#/glint" data-space="">Mine</a>
+          <a href="#/glint/family" data-space="family">Family</a>
+        </div>
+        <nav class="nest-places mono" aria-label="Glint">
+          <a href="#/glint" data-place="photos">Photos</a>
+          <a href="#/glint/favourites" data-place="favourites">Favourites</a>
+          <a href="#/glint/albums" data-place="albums">Albums</a>
+          <a href="#/glint/trash" data-place="trash">Trash</a>
+        </nav>
+        <div class="nest-storage">
+          <div class="meter" aria-hidden="true"><i id="glint-meter"></i></div>
+          <span class="mono muted" id="glint-used"></span>
+          <a class="link-btn mono hidden" id="glint-more"></a>
+        </div>
+      </aside>
+      <div class="nest-main" id="glint-main">
+        <div class="nest-bar">
+          <div class="nest-head">
+            <nav class="nest-crumbs" id="glint-crumbs" aria-label="Where you are"></nav>
+            <div class="nest-tools" id="glint-tools"></div>
+          </div>
+          <div class="nest-selbar hidden" id="glint-selbar" role="toolbar" aria-label="Selected photos"></div>
+        </div>
+        <div id="glint-body" tabindex="0" aria-label="Photos"></div>
+        <div class="nest-sentinel" id="glint-sentinel"></div>
+        <div class="nest-drop hidden" id="glint-drop"><span>Drop photos to upload</span></div>
+      </div>
+      <input type="file" id="glint-pick" accept="image/*,video/*,.heic,.heif" multiple hidden>
+    </section>
+
     <!-- Status view -->
     <section id="view-status" class="section hidden">
       <div class="section-head">
@@ -201,6 +272,23 @@
 
       <h3 class="status-group mono muted">Drives</h3>
       <div class="status-grid" id="status-disks"></div>
+
+      <div id="status-traffic-wrap" class="hidden">
+        <h3 class="status-group mono muted">Sent away from home</h3>
+        <div class="status-grid" id="status-traffic"></div>
+        <p class="mono muted status-note">Uses your home upload. Counts Roost, Nest and Jellyfin watched through Roost.</p>
+      </div>
+
+      <div id="status-outside-wrap" class="hidden">
+        <h3 class="status-group mono muted">Outside services</h3>
+        <div class="card container-list outside-list" id="status-outside"></div>
+      </div>
+
+      <div id="status-health-wrap" class="hidden">
+        <h3 class="status-group mono muted">Drive health</h3>
+        <p class="mono muted status-note hidden" id="status-health-note"></p>
+        <div class="status-grid" id="status-health"></div>
+      </div>
     </section>
 
     <!-- Profile view -->
@@ -216,10 +304,11 @@
         <div class="row"><button class="btn" type="submit">Save</button></div>
         <div class="msg" role="status"></div>
       </form>
-      <div class="card panel" id="storage-panel">
+      <div class="card panel member-only" id="storage-panel">
         <h3>Storage</h3><span class="mono muted">Space for your files and photos in Nest and Glint</span>
         <div class="meter" aria-hidden="true"><div class="meter-fill" id="storage-fill"></div></div>
         <div class="meter-label"><b id="storage-used">—</b><span class="mono muted" id="storage-limit"></span></div>
+        <div class="usage-key hidden" id="storage-key"></div>
         <form id="storage-request-form">
           <div class="form-grid">
             <div class="field"><span>How much do you need?</span><div id="request-picker"></div></div>
@@ -249,6 +338,12 @@
           <div class="row" id="two-step-devices"></div>
           <div class="msg" role="status"></div>
         </form>
+      </div>
+      <div class="card panel" id="devices-panel">
+        <h3>Signed-in devices</h3><span class="mono muted">Where your Roost account is signed in</span>
+        <div id="devices-list"></div>
+        <div class="row hidden" id="devices-others"><button class="btn ghost small" type="button" id="sign-out-others">Sign out everywhere else</button></div>
+        <div class="msg" role="status"></div>
       </div>
       <form class="card panel" id="password-form">
         <h3>Password</h3><span class="mono muted">At least 8 characters</span>
@@ -282,12 +377,57 @@
         <div id="storage-requests-admin"></div>
       </div>
 
+      <div class="card panel hidden" id="nestdrive-panel">
+        <h3>Where Nest keeps its files</h3><span class="mono muted" id="nestdrive-sub">Nest and Glint store everyone's files on one drive.</span>
+        <p class="tls-state" id="nestdrive-state"><span class="dot"></span><span>Checking…</span></p>
+        <p class="mono muted tls-help hidden" id="nestdrive-note"></p>
+        <details class="update-tech mono muted hidden" id="nestdrive-tech"><summary>Technical details</summary><pre id="nestdrive-tech-text"></pre></details>
+        <div class="row hidden" id="nestdrive-pick">
+          <select id="nestdrive-select" aria-label="Drive for Nest"></select>
+          <button class="btn" type="button" id="nestdrive-move">Move Nest here</button>
+        </div>
+        <div class="update-confirm hidden" id="nestdrive-confirm" role="alertdialog" aria-labelledby="nestdrive-confirm-text">
+          <p class="mono" id="nestdrive-confirm-text"></p>
+          <div class="row">
+            <button class="btn" type="button" id="nestdrive-yes">Move now</button>
+            <button class="btn ghost small" type="button" id="nestdrive-no">Not now</button>
+          </div>
+        </div>
+        <button class="btn ghost small hidden" type="button" id="nestdrive-retry">Try again</button>
+        <button class="link-btn mono hidden" type="button" id="nestdrive-change">Change drive</button>
+        <div class="msg" role="status"></div>
+      </div>
+
+      <form class="card panel" id="notice-form">
+        <h3>Notice</h3><span class="mono muted">A short message at the top of everyone's dashboard, e.g. for maintenance</span>
+        <div class="form-grid">
+          <label class="field"><span>Message <b class="notice-count" id="notice-count">0 / 200</b></span><input type="text" name="text" maxlength="200" placeholder="Server maintenance tonight at 10pm"></label>
+          <label class="field"><span>Show until</span><select name="until">
+            <option value="today">End of today</option>
+            <option value="morning">Tomorrow morning (8:00)</option>
+            <option value="day">24 hours</option>
+            <option value="week">1 week</option>
+            <option value="">Until I clear it</option>
+          </select></label>
+        </div>
+        <div class="notice notice-preview hidden" id="notice-preview" aria-hidden="true">
+          <span class="notice-label mono">Notice</span><p class="notice-text"></p>
+        </div>
+        <p class="mono muted notice-now" id="notice-now">No notice showing</p>
+        <div class="row">
+          <button class="btn" type="submit">Post notice</button>
+          <button class="btn ghost small hidden" type="button" id="notice-clear">Clear</button>
+        </div>
+        <div class="msg" role="status"></div>
+      </form>
+
       <form class="card panel" id="apps-form">
         <h3>Apps</h3>
         <span class="mono muted">Use {host} in a link to mean "the address you opened Roost on", e.g. http://{host}:8096</span>
         <div id="apps-editor"></div>
+        <div class="app-picker hidden" id="app-picker" aria-live="polite"></div>
         <div class="row">
-          <button class="btn ghost small" type="button" id="add-app">+ Add app</button>
+          <button class="btn ghost small" type="button" id="add-app" aria-expanded="false" aria-controls="app-picker">+ Add app</button>
           <button class="btn" type="submit">Save apps</button>
         </div>
         <div class="msg" role="status"></div>
@@ -298,12 +438,26 @@
         <div id="users"></div>
       </div>
 
+      <form class="card panel" id="family-form">
+        <h3>Family</h3><span class="mono muted">A shared Family space in Nest and Glint. Members can all open, add, rename and remove what's in it, and share Family albums. Its files and photos count against the family's own limit, not anyone's personal space.</span>
+        <div class="checks family-members" id="family-members"></div>
+        <div class="row user-storage">
+          <span class="mono muted" id="family-used"></span>
+          <div id="family-picker"></div>
+          <button class="btn ghost small" type="submit">Save</button>
+        </div>
+        <div class="msg" role="status"></div>
+      </form>
+
       <form class="card panel" id="invite-form">
-        <h3>Invite someone</h3><span class="mono muted">Send them a link. They pick their own username and password. Works once, for 7 days.</span>
+        <h3>Invite someone</h3><span class="mono muted">Send them a link. They pick their own username and password. Works once, for 7 days. A guest pass stops working on the day you pick.</span>
         <div class="form-grid">
           <label class="field"><span>Who it's for (only you see this)</span><input type="text" name="label" maxlength="60" placeholder="e.g. Mum"></label>
           <label class="field mail-only"><span>Email it to (optional)</span><input type="email" name="email" maxlength="254" autocapitalize="none" spellcheck="false" placeholder="mum@example.com"></label>
-          <label class="field"><span>Role</span><select name="role"><option value="user">User</option><option value="admin">Admin</option></select></label>
+          <label class="field"><span>Role</span><select name="role"><option value="user">User</option><option value="guest">Guest</option><option value="admin">Admin</option></select></label>
+          <div class="field hidden" id="guest-until-field"><span>Guest pass ends</span>
+            <div class="row" style="margin:0"><select name="guestFor"><option value="1">After 1 day</option><option value="7" selected>After 1 week</option><option value="30">After 1 month</option><option value="date">On a date…</option></select>
+            <input type="date" name="guestDate" class="hidden" aria-label="Last day of the guest pass"></div></div>
           <div class="field"><span>Storage limit</span><div id="new-user-picker"></div></div>
         </div>
         <div class="row" id="invite-apps-row"><span class="mono muted">Apps</span><div class="checks" id="new-user-apps"></div></div>
@@ -311,6 +465,18 @@
         <div class="msg" role="status"></div>
         <div id="invite-result"></div>
         <div id="invites"></div>
+      </form>
+
+      <form class="card panel" id="jellyfin-form">
+        <h3>Jellyfin sign-in</h3><span class="mono muted">Same username and password in Jellyfin, which opens already signed in</span>
+        <p class="two-step-state"><span class="dot" id="jellyfin-dot"></span><span id="jellyfin-text">Checking…</span></p>
+        <div class="form-grid">
+          <label class="field"><span>Jellyfin address, as Roost reaches it</span><input type="text" name="url" placeholder="http://192.168.1.20:8096" spellcheck="false"></label>
+          <label class="field"><span>API key</span><input type="password" name="apiKey" autocomplete="off" spellcheck="false"></label>
+        </div>
+        <p class="mono muted panel-note">Make a key in Jellyfin under Dashboard → API Keys. Accounts are matched by username; Jellyfin admin accounts are never changed.</p>
+        <div class="row"><button class="btn" type="submit" id="jellyfin-save">Connect</button><button class="btn ghost small hidden" type="button" id="jellyfin-off">Turn off</button></div>
+        <div class="msg" role="status"></div>
       </form>
 
       <form class="card panel" id="settings-form">
@@ -325,6 +491,57 @@
         <div class="msg" role="status"></div>
       </form>
 
+      <form class="card panel" id="tls-form">
+        <h3>Secure connection</h3><span class="mono muted">HTTPS for your domain and every name under it, renewed automatically</span>
+        <p class="tls-state" id="tls-state"><span class="dot"></span><span>Checking…</span></p>
+        <p class="mono muted tls-detail" id="tls-detail"></p>
+        <div class="form-grid">
+          <label class="field"><span>Domain</span><input type="text" name="domain" placeholder="roostos.network" autocapitalize="none" spellcheck="false" required></label>
+          <label class="field"><span>Cloudflare API token</span><input type="password" name="token" autocomplete="off" spellcheck="false"></label>
+          <label class="field"><span>Email (optional)</span><input type="email" name="email" placeholder="For Let's Encrypt notices" autocapitalize="none"></label>
+        </div>
+        <p class="mono muted tls-help">Make the token in Cloudflare under My Profile → API Tokens → Create Token, using the "Edit zone DNS" template limited to this domain. Roost keeps it on the server and never shows it again.</p>
+        <div class="row">
+          <button class="btn" type="submit" id="tls-save">Save and get certificate</button>
+          <button class="btn ghost small hidden" type="button" id="tls-renew">Renew now</button>
+          <button class="btn danger small hidden" type="button" id="tls-off">Turn off</button>
+        </div>
+        <div class="msg" role="status"></div>
+      </form>
+      <form class="card panel" id="remote-form">
+        <h3>Remote access</h3><span class="mono muted">Reach Roost away from home, through Cloudflare</span>
+        <p class="tls-state" id="remote-state"><span class="dot"></span><span>Checking…</span></p>
+        <p class="mono muted tls-detail" id="remote-detail"></p>
+        <label class="check-line" style="margin-top:18px"><input type="checkbox" name="ddns"> Keep the domain pointed at this connection</label>
+        <label class="check-line" style="margin-top:6px"><input type="checkbox" name="cloudflareOnly"> Only accept outside traffic that comes through Cloudflare</label>
+        <p class="mono muted tls-help">Needs the domain and token from Secure connection. Also forward port 443 on your router to this server and set Cloudflare's SSL mode to Full (strict); Check now tests the whole route from outside.</p>
+        <div class="row">
+          <button class="btn" type="submit">Save</button>
+          <button class="btn ghost small" type="button" id="remote-check">Check now</button>
+        </div>
+        <div class="msg" role="status"></div>
+      </form>
+      <form class="card panel" id="coffee-form">
+        <h3>Coffee Galaxy</h3><span class="mono muted">A private link to the Coffee Galaxy server, opened through Roost at nova.&lt;your domain&gt;/coffee</span>
+        <p class="tls-state" id="coffee-state"><span class="dot"></span><span>Checking…</span></p>
+        <p class="mono muted tls-detail" id="coffee-detail"></p>
+        <div class="form-grid">
+          <label class="field"><span>Roost's public key (give this to the other server)</span><input type="text" name="ownKey" readonly spellcheck="false"></label>
+          <label class="field"><span>Other server's public key</span><input type="text" name="peerPublicKey" autocomplete="off" spellcheck="false" autocapitalize="none"></label>
+          <label class="field"><span>Other server's address</span><input type="text" name="endpoint" placeholder="141.147.108.43" autocomplete="off" spellcheck="false" autocapitalize="none"></label>
+          <label class="field"><span>Shared secret</span><input type="password" name="secret" autocomplete="off" spellcheck="false"></label>
+        </div>
+        <p class="mono muted tls-help" id="coffee-new-secret" hidden></p>
+        <label class="check-line" style="margin-top:18px"><input type="checkbox" name="enabled"> Open Coffee Galaxy through Roost</label>
+        <p class="mono muted tls-help">The secret goes into Coffee Galaxy's own config (never into chat or git). Make one here and copy it once, or paste yours.</p>
+        <div class="row">
+          <button class="btn" type="submit">Save</button>
+          <button class="btn ghost small" type="button" id="coffee-copy">Copy Roost's key</button>
+          <button class="btn ghost small" type="button" id="coffee-secret">Make a secret</button>
+          <button class="btn ghost small" type="button" id="coffee-check">Check link</button>
+        </div>
+        <div class="msg" role="status"></div>
+      </form>
       <form class="card panel" id="mail-form">
         <h3>Email</h3><span class="mono muted">For "Forgot password?" and emailed invites. Roost hands mail to a relay such as Resend or Brevo; see the README.</span>
         <div class="form-grid">
@@ -343,6 +560,64 @@
         <div class="msg" role="status"></div>
       </form>
 
+      <form class="card panel" id="backup-form">
+        <h3>Backups</h3><span class="mono muted">Every night Roost copies Nest, the apps' settings and its own data to the backup drive. Films and shows aren't included.</span>
+        <p class="tls-state" id="backup-state"><span class="dot"></span><span>Checking…</span></p>
+        <p class="mono muted tls-detail" id="backup-detail"></p>
+        <div class="backup-drive hidden" id="backup-drive">
+          <div class="meter" id="backup-meter" role="meter" aria-label="Backup drive used" aria-valuemin="0" aria-valuemax="100"><i></i></div>
+          <div class="mono muted" id="backup-drive-text"></div>
+        </div>
+        <div class="form-grid">
+          <label class="field"><span>Back up at</span><input type="time" name="time" required></label>
+          <label class="field"><span>Nightly backups to keep</span><input type="number" name="keepDaily" inputmode="numeric" min="1" max="30" required></label>
+          <label class="field"><span>Weekly backups to keep</span><input type="number" name="keepWeekly" inputmode="numeric" min="0" max="12" required></label>
+          <label class="field"><span>Drive size limit (GB)</span><input type="number" name="capGb" inputmode="numeric" min="10" placeholder="No limit"></label>
+        </div>
+        <p class="mono muted tls-help">Each night keeps only what changed, so more nights cost very little space. If the drive holds more than the size limit, the oldest backups go first; the newest is always kept.</p>
+        <div class="row">
+          <button class="btn" type="submit">Save</button>
+          <button class="btn ghost small" type="button" id="backup-run">Back up now</button>
+          <button class="btn danger small hidden" type="button" id="backup-cancel">Cancel backup</button>
+        </div>
+        <div class="msg" role="status"></div>
+        <ol class="activity" id="backup-history"></ol>
+      </form>
+
+      <div class="card panel" id="update-form">
+        <h3>Updates</h3><span class="mono muted">Roost's own code comes from GitHub. See what's new and update when you're ready: nothing updates by itself, and if the new version won't start, the old one is put back.</span>
+        <p class="tls-state" id="update-state"><span class="dot"></span><span>Checking…</span></p>
+        <p class="mono muted tls-detail" id="update-detail"></p>
+        <ul class="update-changes mono" id="update-changes"></ul>
+        <p class="mono muted tls-help hidden" id="update-note"></p>
+        <details class="update-tech mono muted hidden" id="update-tech"><summary>Technical details</summary><pre id="update-tech-text"></pre></details>
+        <div class="row" id="update-buttons">
+          <button class="btn" type="button" id="update-apply">Update Roost</button>
+          <button class="btn ghost small" type="button" id="update-check">Check now</button>
+        </div>
+        <div class="update-confirm hidden" id="update-confirm" role="alertdialog" aria-labelledby="update-confirm-text">
+          <p class="mono" id="update-confirm-text">Update Roost now? It will be unavailable for a minute or two while it restarts.</p>
+          <div class="row">
+            <button class="btn" type="button" id="update-yes">Update now</button>
+            <button class="btn ghost small" type="button" id="update-no">Not now</button>
+          </div>
+        </div>
+        <div class="msg" role="status"></div>
+      </div>
+
+      <div class="card panel hidden" id="restore-panel">
+        <h3>Get files back</h3><span class="mono muted">Browse any backup like a folder. Nothing is overwritten: files come back as a download, or as a new folder in the person's Nest.</span>
+        <p class="mono muted tls-help hidden" id="restore-hint"></p>
+        <div id="restore-browser">
+          <div class="form-grid"><label class="field"><span>Backup</span><select id="restore-night"></select></label></div>
+          <nav class="restore-path mono" id="restore-path" aria-label="Where you are in the backup"></nav>
+          <ul class="restore-list" id="restore-list"></ul>
+          <div class="row"><button class="btn small hidden" type="button" id="restore-here"></button></div>
+        </div>
+        <div class="msg" role="status"></div>
+        <p class="mono muted restore-job hidden" id="restore-job" role="status"></p>
+      </div>
+
       <div class="card panel" id="activity-panel">
         <h3>Activity</h3><span class="mono muted">Sign-ins and changes, newest first. Tap a time for the exact date.</span>
         <div class="chips" id="activity-filters" role="group" aria-label="Show">
@@ -351,6 +626,7 @@
           <button type="button" class="chip" data-filter="failed" aria-pressed="false">Failed</button>
           <button type="button" class="chip" data-filter="users" aria-pressed="false">Users</button>
           <button type="button" class="chip" data-filter="storage" aria-pressed="false">Storage</button>
+          <button type="button" class="chip" data-filter="apps" aria-pressed="false">Apps</button>
           <button type="button" class="chip" data-filter="settings" aria-pressed="false">Settings</button>
         </div>
         <ol class="activity" id="activity"></ol>
@@ -367,5 +643,7 @@
 
   <script src="/app.js"></script>
   <script src="/nest.js"></script>
+  <script src="/glint.js"></script>
+  <script src="/search.js"></script>
 </body>
 </html>

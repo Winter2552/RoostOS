@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a0a0a">
+  <title>Roost</title>
+  <!-- Shown by sw.js when the server can't be reached, so everything is inline. -->
+  <style>
+    html, body { margin: 0; background: #0a0a0a; color: #f2efe9; }
+    body {
+      min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 24px;
+      box-sizing: border-box; text-align: center;
+      font-family: 'Space Grotesk', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    }
+    svg { width: 72px; height: 72px; }
+    h1 { font-size: 24px; font-weight: 600; margin: 20px 0 8px; }
+    p {
+      margin: 0; color: #9a978f; font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase;
+      font-family: 'Space Mono', ui-monospace, Menlo, Consolas, monospace;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <svg viewBox="0 8 120 120" aria-hidden="true">
+      <path d="M22 48 L42 68 L22 88" fill="none" stroke="currentColor" stroke-width="13"/>
+      <path d="M58 92 V44 H76 A26 26 0 0 1 102 70 V92 Z" fill="currentColor"/>
+      <circle cx="86" cy="60" r="4.5" fill="#0a0a0a"/>
+    </svg>
+    <h1>Can't reach Roost</h1>
+    <p id="note" role="status">Reconnecting by itself</p>
+  </main>
+  <script>
+    // Check quietly, slowing down while the server stays away, and only while
+    // this screen is on show. Reload the moment Roost answers.
+    let wait = 3000;
+    let timer;
+    async function check() {
+      clearTimeout(timer);
+      try {
+        const res = await fetch('/api/state', { cache: 'no-store' });
+        if (res.ok) return location.reload();
+      } catch {}
+      wait = Math.min(wait * 1.5, 30000);
+      if (!document.hidden) timer = setTimeout(check, wait);
+    }
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) { wait = 3000; check(); } });
+    addEventListener('online', () => { wait = 3000; check(); });
+    timer = setTimeout(check, wait);
+  </script>
+</body>
+</html>
