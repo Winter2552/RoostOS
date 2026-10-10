@@ -360,3 +360,12 @@ test('turning the link off restores the plain Jellyfin card', async () => {
   const apps = await call('GET', '/api/apps', null, admin);
   assert.equal(apps.body.apps.find((a) => a.id === 'jellyfin').openUrl, undefined);
 });
+
+test('the Roostflix script and stylesheet are served and the script parses', async () => {
+  const js = await fetch(`${base}/roostflix/skin.js`);
+  assert.equal(js.status, 200);
+  new (require('vm').Script)(await js.text());
+  const css = await fetch(`${base}/roostflix/skin.css`);
+  assert.match(await css.text(), /\.rf-hero/);
+  assert.equal((await fetch(`${base}/roostflix/icon.svg`)).status, 200);
+});
