@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { createServer } = require('../src/server');
-const { STEPS, NO_STEP } = require('../src/setup');
+const { STEPS, NO_STEP, CARDS } = require('../src/setup');
 const { setUpTwoStep } = require('./helpers');
 
 let server;
@@ -134,4 +134,21 @@ test('backup steps tick off from what the backup service reports', async () => {
   assert.equal(b.lastOk, done);
   assert.equal(b.last.files, 3);
   assert.equal((await call('GET', '/api/backup')).status, 401);
+});
+
+test('finished setup cards are listed so Admin can fold them away', async () => {
+  const known = new Set(STEPS.map((s) => s.id));
+  const page = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  for (const card of CARDS) {
+    assert.ok(page.includes(`id="${card.id}"`), `Admin has no card ${card.id}`);
+    if (card.steps !== 'all') for (const id of card.steps) assert.ok(known.has(id), `${card.id}: no step ${id}`);
+  }
+  const { body } = await call('GET', '/api/admin/setup', null, adminCookie);
+  assert.deepEqual(body.cards.map((c) => c.id), CARDS.map((c) => c.id));
+  const done = (id) => body.cards.find((c) => c.id === id).done;
+  // A fresh Roost has nothing finished to fold away.
+  assert.equal(done('setup-panel'), false);
+  assert.equal(done('mail-form'), false);
+  // Optional-only cards are not "finished" before anything is done.
+  assert.equal(done('coffee-form'), false);
 });
