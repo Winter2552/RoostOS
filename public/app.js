@@ -743,7 +743,7 @@ function route() {
   closeMenu(false);
   if (view === 'admin') { loadAdmin(); loadJellyfin(); }
   if (view === 'profile') { if (!isGuest(state.user)) loadStorage(); loadTwoStep(); loadDevices(); }
-  if (view === 'status') loadStatus();
+  if (view === 'status') { loadStatus(); loadUpdate(); }
   if (view === 'galaxies') renderGalaxyPage();
   if (view === 'nest') window.nestOpen(rest);
   if (view === 'glint') window.glintOpen(rest);
@@ -2262,7 +2262,6 @@ async function loadAdmin() {
   loadCoffee();
   loadGalaxies();
   loadBackupAdmin();
-  loadUpdateAdmin();
   loadNestDrive();
   restoreView.night = '';
   browseBackup('');
@@ -3054,7 +3053,7 @@ $('#tls-off').addEventListener('click', async () => {
   try { renderTls(await api('DELETE', '/api/admin/tls')); flash(f, 'HTTPS turned off'); } catch (err) { flash(f, err.message, false); }
 });
 
-// ---------- updates (Admin) ----------
+// ---------- updates (Status page, admins) ----------
 
 let updateTimer = null;
 let updateAsking = false;
@@ -3088,7 +3087,7 @@ function renderUpdate(u) {
   $('#update-state').replaceChildren(el('span', { class: `dot ${dot}` }), el('span', { text: headline }));
 
   const lines = [];
-  if (u.state === 'off') lines.push('Finish “Update Roost from inside Roost” in Setup above.');
+  if (u.state === 'off') lines.push('Finish “Update Roost from inside Roost” in Admin → Setup.');
   if (u.state === 'stopped') lines.push('Check that roost-updater is started in ZimaOS, then reload this page.');
   if (u.head && !['off', 'stopped'].includes(u.state)) lines.push(`Running ${u.head.short}${u.head.date ? `, from ${shortDate(u.head.date)}` : ''}`);
   if (u.checkedAt && !['off', 'stopped'].includes(u.state)) lines.push(`checked ${backupWhen(u.checkedAt)}`);
@@ -3129,13 +3128,13 @@ function renderUpdate(u) {
   $('#update-confirm-text').textContent = `Update Roost now? ${plural(u.behind, 'change', 'changes')} will be installed. Roost is unavailable for a minute or two while it restarts, and the old version is put back if the new one fails.`;
 
   clearTimeout(updateTimer);
-  updateTimer = setTimeout(loadUpdateAdmin, applying || u.requested || u.state === 'checking' ? 3000 : 30000);
+  updateTimer = setTimeout(loadUpdate, applying || u.requested || u.state === 'checking' ? 3000 : 30000);
 }
 
-async function loadUpdateAdmin() {
+async function loadUpdate() {
   clearTimeout(updateTimer);
-  if ($('#view-admin').classList.contains('hidden') || document.hidden) {
-    if (!$('#view-admin').classList.contains('hidden')) updateTimer = setTimeout(loadUpdateAdmin, 30000);
+  if ($('#view-status').classList.contains('hidden') || document.hidden || state.user.role !== 'admin') {
+    if (!$('#view-status').classList.contains('hidden') && state.user.role === 'admin') updateTimer = setTimeout(loadUpdate, 30000);
     return;
   }
   try {
@@ -3144,7 +3143,7 @@ async function loadUpdateAdmin() {
     // While Roost restarts for an update, it simply doesn't answer for a bit.
     if (updateLast && updateLast.state === 'applying' && !err.status) {
       $('#update-state').replaceChildren(el('span', { class: 'dot starting' }), el('span', { text: 'Roost is restarting on the new version…' }));
-      updateTimer = setTimeout(loadUpdateAdmin, 3000);
+      updateTimer = setTimeout(loadUpdate, 3000);
     }
   }
 }
@@ -3153,7 +3152,7 @@ $('#update-check').addEventListener('click', async () => {
   const f = $('#update-form');
   try {
     await api('POST', '/api/admin/update/check');
-    loadUpdateAdmin();
+    loadUpdate();
   } catch (err) { flash(f, err.message, false); }
 });
 
@@ -3175,7 +3174,7 @@ $('#update-yes').addEventListener('click', async () => {
     await api('POST', '/api/admin/update/apply', { confirm: true });
     flash(f, 'Starting the update');
   } catch (err) { flash(f, err.message, false); }
-  loadUpdateAdmin();
+  loadUpdate();
 });
 
 // ---------- where Nest keeps its files (Admin) ----------

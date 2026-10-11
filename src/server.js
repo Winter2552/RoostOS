@@ -1622,7 +1622,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     },
 
     // ---------- updating Roost ----------
-    // Admin → Updates. Roost only leaves requests for the roost-updater service
+    // the Status page's Update card. Roost only leaves requests for the roost-updater service
     // and reads what it reports; it never runs git or Docker itself.
 
     'GET /api/admin/update': (req, res) => {
