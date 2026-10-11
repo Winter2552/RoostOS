@@ -11,6 +11,7 @@ const { hashPassword, verifyPassword, Sessions, RateLimiter, deviceName, SESSION
 const storage = require('./storage');
 const links = require('./links');
 const mail = require('./mail');
+const emailTemplate = require('./email-template');
 const setup = require('./setup');
 const backup = require('./backup');
 const selfUpdate = require('./self-update');
@@ -817,9 +818,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     return `${db().settings.publicUrl}/${kind === 'reset' ? 'r' : 'j'}/${token}`;
   }
 
-  async function deliver(to, subject, text) {
+  // `html` is the styled version; the plain text always goes with it.
+  async function deliver(to, subject, text, html) {
     const m = mailSettings();
-    await sendMail(m, { from: m.from, fromName: db().settings.serverName, to, subject, text });
+    const inline = html ? { cid: emailTemplate.HEADER_CID, type: 'image/gif', data: emailTemplate.HEADER } : undefined;
+    await sendMail(m, { from: m.from, fromName: db().settings.serverName, to, subject, text, html, inline });
   }
 
   function resetEmail(user, token, validFor) {
@@ -833,7 +836,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       linkUrl('reset', token),
       '',
       `The link works once, for ${validFor}. If you didn't ask for this, ignore this email: your password hasn't changed.`,
-    ].join('\n')];
+    ].join('\n'), emailTemplate.render({
+      title: `Reset your ${name} password`,
+      paragraphs: [`Hi ${user.displayName},`, `Someone (hopefully you) asked to reset the password for @${user.username} on ${name}.`],
+      button: { label: 'Choose a new password', url: linkUrl('reset', token) },
+      fine: `The link works once, for ${validFor}. If you didn't ask for this, ignore this email: your password hasn't changed.`,
+    })];
   }
 
   function inviteEmail(admin, token) {
@@ -845,7 +853,13 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       linkUrl('join', token),
       '',
       'The link works once and stops working after 7 days.',
-    ].join('\n')];
+    ].join('\n'), emailTemplate.render({
+      title: `You're invited to ${name}`,
+      paragraphs: [`${admin.displayName} has invited you to ${name}. Choose your username and password and you're in.`],
+      button: { label: `Join ${name}`, url: linkUrl('join', token) },
+      fine: 'The link works once and stops working after 7 days.',
+      signoff: 'Welcome to the Roost',
+    })];
   }
 
   // Only the newest reset link for a user works.
@@ -1869,7 +1883,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (!mail.validEmail(to)) throw new HttpError(400, 'Add your email on Profile first, or type one here');
       if (!mailSettings()) throw new HttpError(400, 'Save the email settings first');
       try {
-        await deliver(to, `Test email from ${db().settings.serverName}`, `This is a test from ${db().settings.serverName}. Email is working.`);
+        const name = db().settings.serverName;
+        await deliver(to, `Test email from ${name}`, `This is a test from ${name}. Email is working.`, emailTemplate.render({ title: 'Email is working', paragraphs: [`This is a test from ${name}. If you can read this, invites and password resets will reach people.`] }));
       } catch (err) {
         throw new HttpError(502, err.message);
       }
