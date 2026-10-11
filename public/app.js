@@ -1497,6 +1497,7 @@ const WEB_LABEL = { online: 'Online', offline: 'Offline', unset: 'Not set up' };
 // otherwise from the web check.
 function appState(a, dockerOk) {
   if (a.containers.length) return containerState(worstContainer(a.containers));
+  if (a.web.galaxies) return { kind: a.web.state, label: WEB_LABEL[a.web.state] };
   if (dockerOk && a.web.state !== 'online') return { kind: a.web.state === 'unset' ? 'unset' : 'offline', label: 'No container' };
   return { kind: a.web.state, label: WEB_LABEL[a.web.state] };
 }
@@ -1635,7 +1636,9 @@ function appStatusCard(a, dockerOk, history) {
   } else if (a.id === 'roost') {
     lines.push(`up ${duration(a.uptime)}`);
   }
-  if (a.id !== 'roost') {
+  if (a.web.galaxies) {
+    for (const g of a.web.galaxies) lines.push(`${g.name} ${g.state}`);
+  } else if (a.id !== 'roost') {
     lines.push(a.web.state === 'online' ? `Web online · ${a.web.ms} ms` : a.web.state === 'offline' ? 'Web offline' : 'No link set');
   }
   lines.push(a.containers.length ? 'Source: Docker' : 'Source: web check');

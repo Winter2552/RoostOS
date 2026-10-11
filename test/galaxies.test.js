@@ -149,6 +149,10 @@ test('with the domain set it switches on, and Check reaches the container', asyn
   assert.equal(listed.find((a) => a.id === 'nova').coffeeUrl, '');
   assert.equal(listed.find((a) => a.id === 'galaxy-books').galaxy, true);
   assert.equal((await call('GET', '/api/apps/status', null, admin)).body.status.nova, 'online');
+  // The Status page's Nova card reports the galaxies behind it, not "No link set".
+  const nv = (await call('GET', '/api/status', null, admin)).body.apps.find((a) => a.id === 'nova');
+  assert.equal(nv.web.state, 'online');
+  assert.deepEqual(nv.web.galaxies.map((g) => [g.name, g.state]), [['Books', 'online']]);
   // Saving the app list back does not store that link.
   await call('PUT', '/api/admin/apps', { apps: listed }, admin);
   assert.equal((await call('GET', '/api/admin/settings', null, admin)).status, 200);

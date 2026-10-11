@@ -355,6 +355,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         uptime.observe(a.id, list.every((c) => c.state === 'running' && c.health !== 'unhealthy'));
         return;
       }
+      // Nova is the galaxies' menu: it is up while every galaxy answers.
+      if (a.id === 'nova' && novaHasGalaxies()) {
+        tracked.push(a.id);
+        if (web) uptime.observe(a.id, (await novaGalaxies()).every((g) => g.state === 'online'));
+        return;
+      }
       // Built-in apps are part of Roost; Roost's own row covers them.
       if (!a.url || builtIn(a.url)) return;
       tracked.push(a.id);
@@ -1248,7 +1254,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const [health, docker, web] = await Promise.all([
         serverHealth({ cpu, disks: diskList }),
         listContainers(dockerHost, probeTimeoutMs),
-        Promise.all(visibleApps(db(), user).map((a) => appProbe(a, host, probeTimeoutMs))),
+        Promise.all(visibleApps(db(), user).map(async (a) => {
+          if (a.id !== 'nova' || !novaHasGalaxies()) return appProbe(a, host, probeTimeoutMs);
+          const galaxies = await novaGalaxies();
+          const down = galaxies.some((g) => g.state !== 'online');
+          return { state: down ? 'offline' : 'online', ms: Math.max(0, ...galaxies.map((g) => g.ms)), galaxies };
+        })),
       ]);
       // Update badges are for admins, the only ones who can act on them.
       const updateOf = user.role === 'admin' ? updates.view(docker.containers || []) : {};
@@ -2575,6 +2586,17 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     if (!g) return null;
     const out = await galaxyGateway(g).health(coffeeOptions.fetchImpl, probeTimeoutMs);
     return out.ok ? 'online' : 'offline';
+  }
+
+  // Each galaxy's gateway, asked live: Coffee Galaxy plus every Docker galaxy.
+  async function novaGalaxies() {
+    const list = [];
+    if (coffee.enabled()) list.push({ name: coffee.name, gateway: coffee });
+    for (const g of galaxyList()) if (g.enabled && g.secret) list.push({ name: g.name, gateway: galaxyGateway(g) });
+    return Promise.all(list.map(async ({ name, gateway }) => {
+      const r = await gateway.health(coffeeOptions.fetchImpl, probeTimeoutMs);
+      return { name, state: r.ok ? 'online' : 'offline', ms: r.ms || 0 };
+    }));
   }
 
   const novaHasGalaxies = () => coffee.enabled() || galaxyList().some((g) => g.enabled && g.secret);
