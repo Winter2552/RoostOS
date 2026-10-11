@@ -176,6 +176,12 @@ test('admin can add a user limited to some apps', async () => {
   assert.deepEqual(body.apps.map((a) => a.id), ['jellyfin', 'glint']);
 });
 
+test('system stats add the drives together and report the Nest drive on its own', async () => {
+  const { body } = await call('GET', '/api/system', null, userCookie);
+  assert.ok(body.disk.total > 0 && body.nestDisk.total > 0);
+  assert.equal(body.disk.total, body.drives.reduce((n, d) => n + d.total, 0));
+});
+
 test('admins post a notice everyone sees until it ends or is cleared', async () => {
   assert.equal((await call('PUT', '/api/admin/notice', { text: 'Hi' }, userCookie)).status, 403);
   assert.equal((await call('GET', '/api/system', null, userCookie)).body.notice, null);

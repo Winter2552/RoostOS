@@ -208,7 +208,7 @@ function gbPicker({ label, allowNone = false } = {}) {
   const setMax = (want) => {
     const max = Math.max(Number(range.min) + 1, state.diskGb || 4000, want || 0);
     range.max = max;
-    drive.textContent = state.diskGb ? `Drive ${gb(state.diskGb)}` : '';
+    drive.textContent = state.diskGb ? `Nest drive ${gb(state.diskGb)}` : '';
   };
   range.addEventListener('input', () => { none.checked = false; number.value = range.value; paint(); });
   number.addEventListener('input', () => {
@@ -1322,6 +1322,18 @@ async function saveArrangement() {
 
 // ---------- system panel ----------
 
+// The dashboard's Storage figure is every drive added together; tapping it shows each drive.
+function paintDisk(disk) {
+  const stat = $('#stat-disk');
+  const split = (state.drives || []).length > 1;
+  stat.textContent = !disk ? '—' : state.diskSplit && split
+    ? state.drives.map((d) => `${d.label} ${bytes(d.free)}`).join(' · ')
+    : `${bytes(disk.free)} free`;
+  stat.title = split ? state.drives.map((d) => `${d.label}: ${bytes(d.free)} free of ${bytes(d.total)}`).join('\n') : '';
+  stat.style.cursor = split ? 'pointer' : '';
+  stat.onclick = split ? () => { state.diskSplit = !state.diskSplit; paintDisk(disk); } : null;
+}
+
 async function loadSystem() {
   try {
     const s = await api('GET', '/api/system');
@@ -1330,8 +1342,10 @@ async function loadSystem() {
     $('#stat-uptime').textContent = duration(s.uptime);
     $('#stat-mem').textContent = `${bytes(used)} / ${bytes(s.memory.total)}`;
     $('#stat-load').textContent = s.load ? `${s.load[0].toFixed(2)} · ${s.cpus} cpu` : `${s.cpus} cpu`;
-    $('#stat-disk').textContent = s.disk ? `${bytes(s.disk.free)} free` : '—';
-    if (s.disk) state.diskGb = Math.floor(s.disk.total / 1024 ** 3);
+    state.drives = s.drives || [];
+    paintDisk(s.disk);
+    const nestDisk = s.nestDisk || s.disk;
+    if (nestDisk) state.diskGb = Math.floor(nestDisk.total / 1024 ** 3);
     $('#foot-host').textContent = s.hostname;
   } catch {
     // The panel just keeps its dashes if stats aren't available.
