@@ -52,10 +52,29 @@ function startSmtp() {
   return new Promise((r) => smtp.listen(0, '127.0.0.1', () => { smtpPort = smtp.address().port; r(); }));
 }
 
-function bodyOf(m) {
+// The email as a person's mail app reads it: headers, then parts split on the boundary.
+function partsOf(m) {
+  const text = m.lines.join('\r\n');
+  const boundary = (text.match(/boundary="([^"]+)"/) || [])[1];
   const blank = m.lines.indexOf('');
-  return Buffer.from(m.lines.slice(blank + 1).join(''), 'base64').toString('utf8');
+  if (!boundary) return [{ type: 'text/plain', body: Buffer.from(m.lines.slice(blank + 1).join(''), 'base64') }];
+  const out = [];
+  const walk = (chunk, b) => {
+    for (const piece of chunk.split(`--${b}`).slice(1)) {
+      if (piece.startsWith('--')) break;
+      const [head, ...rest] = piece.replace(/^\r\n/, '').split('\r\n\r\n');
+      const body = rest.join('\r\n\r\n');
+      const inner = head.match(/boundary="([^"]+)"/);
+      if (inner) { walk(body, inner[1]); continue; }
+      out.push({ type: head.match(/Content-Type: ([^;\r\n]+)/)[1], head, body: Buffer.from(body.replace(/\s+/g, ''), 'base64') });
+    }
+  };
+  walk(m.lines.slice(blank + 1).join('\r\n'), boundary);
+  return out;
 }
+
+const bodyOf = (m) => partsOf(m).find((p) => p.type === 'text/plain').body.toString('utf8');
+const htmlOf = (m) => partsOf(m).find((p) => p.type === 'text/html').body.toString('utf8');
 
 function header(m, name) {
   const line = m.lines.find((l) => l.toLowerCase().startsWith(`${name.toLowerCase()}:`));
@@ -150,6 +169,12 @@ test('an invite can be emailed, and the person can add their email when joining'
   const m = inbox.at(-1);
   assert.equal(header(m, 'Subject'), "You're invited to Roost");
   assert.ok(bodyOf(m).includes(`https://roostos.network/j/${made.body.token}`));
+  // The styled version carries the same link, and the Roost header travels inside the email.
+  assert.ok(htmlOf(m).includes(`https://roostos.network/j/${made.body.token}`));
+  assert.match(htmlOf(m), /src="cid:roost-header@roost"/);
+  const gif = partsOf(m).find((p) => p.type === 'image/gif');
+  assert.match(gif.head, /Content-ID: <roost-header@roost>/);
+  assert.equal(gif.body.subarray(0, 3).toString(), 'GIF');
 
   const dup = await call('POST', `/api/links/${made.body.token}`, { username: 'mum', password: 'long enough', email: 'raven@example.com' });
   assert.equal(dup.status, 409);
@@ -188,6 +213,14 @@ test('admins can email a reset link', async () => {
   const res = await call('POST', `/api/admin/users/${mum.id}/reset-link`, { email: true }, adminCookie);
   assert.equal(res.body.emailedTo, 'mum@example.com');
   assert.ok(bodyOf(inbox.at(-1)).includes(`/r/${res.body.token}`));
+});
+
+test('email text is escaped in the styled version', () => {
+  const { render } = require('../src/email-template');
+  const html = render({ title: 'Hi <b>', paragraphs: ['a & b'], button: { label: 'Go', url: 'https://x.test/?a=1&b="2"' } });
+  assert.ok(!html.includes('<b>'));
+  assert.ok(html.includes('a &amp; b'));
+  assert.ok(html.includes('href="https://x.test/?a=1&amp;b=&quot;2&quot;"'));
 });
 
 test('messages are base64 so no line can end the email early', () => {
