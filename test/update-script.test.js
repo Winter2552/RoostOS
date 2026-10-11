@@ -187,7 +187,7 @@ test('with no folder yet it downloads Roost first, and points the updater at it'
     const r = w.run([fresh, '-y']);
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.ok(fs.existsSync(path.join(fresh, '.git')));
-    // Not at the default folder, so Admin → Updates is told where this one is.
+    // Not at the default folder, so the Status page's Update card is told where this one is.
     const override = fs.readFileSync(path.join(fresh, 'docker-compose.override.yml'), 'utf8');
     assert.match(override, new RegExp(`${fresh.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:/src`));
   } finally { w.done(); }

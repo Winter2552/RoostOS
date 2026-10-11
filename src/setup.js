@@ -138,13 +138,13 @@ const STEPS = [
     id: 'self-update',
     group: 'Server',
     title: 'Update Roost from inside Roost',
-    why: 'Admin → Updates shows what is new on GitHub and updates Roost with one button, putting the old version back if the new one fails.',
+    why: 'The Update card on the Status page shows what is new on GitHub and updates Roost with one button, putting the old version back if the new one fails.',
     how: [
       'Keep the roost-updater service from the compose file, and point its /src line at the folder holding Roost\'s files (the one you run docker compose from), e.g. /DATA/AppData/roost-src. That folder must be a git copy: git clone https://github.com/Winter2552/RoostOS.',
       'Redeploy Roost. This ticks off once the updater has looked at GitHub.',
       'Keep your own compose edits (drive folders, time zone) in docker-compose.override.yml next to it, so updates never collide with them.',
     ],
-    action: { label: 'Open Updates', view: 'admin', focus: 'update-form' },
+    action: { label: 'Open Updates', view: 'status', focus: 'update-form' },
     optional: true,
     check: (ctx) => Boolean(ctx.update && ['current', 'available', 'applying', 'checking'].includes(ctx.update.state)),
   },
@@ -507,7 +507,6 @@ const CARDS = [
   { id: 'coffee-form', steps: ['coffee-link', 'coffee-gateway'] },
   { id: 'mail-form', steps: ['email'] },
   { id: 'backup-form', steps: ['backup-drive', 'first-backup'] },
-  { id: 'update-form', steps: ['self-update'] },
 ];
 
 function cardsDone(steps) {
