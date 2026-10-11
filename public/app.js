@@ -1128,6 +1128,10 @@ function renderAppBar() {
       icon(app.icon, 'bar-icon'), el('span', { text: app.name }))));
 }
 
+// Cards rise in, and status dots ping, only the first time each one shows.
+const risen = new Set();
+const pinged = new Set();
+
 function renderApps() {
   const list = $('#apps');
   const total = state.apps.filter((a) => !a.galaxy).length;
@@ -1169,13 +1173,18 @@ function renderApps() {
       head,
       el('p', { text: app.description }),
       el('div', { class: 'app-foot mono' },
-        el('span', {}, el('span', { class: `dot ${status}` }), label),
+        el('span', {}, el('span', { class: `dot ${status}${status === 'online' && !pinged.has(app.id) ? ' ping' : ''}` }), label),
         el('span', { text: app.url || app.openUrl ? 'Open →' : isAdmin ? 'Add link' : '' })),
     ];
+    if (status === 'online') pinged.add(app.id);
+    const rise = !risen.has(app.id);
+    risen.add(app.id);
+    const cls = `card app-card${rise ? ' rise' : ''}`;
+    const style = rise ? `--i:${i}` : null;
     // Apps built into Roost (like Nest) open in place; the rest in a new tab.
     const builtIn = app.url.startsWith('#/');
     return app.url || app.openUrl
-      ? el('a', builtIn ? { class: 'card app-card', href: app.url } : { class: 'card app-card', href: app.openUrl || resolveUrl(app.url), target: '_blank', rel: 'noopener' }, children)
+      ? el('a', builtIn ? { class: cls, style, href: app.url } : { class: cls, style, href: app.openUrl || resolveUrl(app.url), target: '_blank', rel: 'noopener' }, children)
       : el('div', { class: 'card app-card disabled' }, children);
   }));
 }

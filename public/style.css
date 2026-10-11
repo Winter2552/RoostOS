@@ -1402,3 +1402,46 @@ ul.update-changes li > span:last-child { min-width: 0; overflow-wrap: anywhere; 
 .glint-spaces { display: flex; gap: 4px; padding: 4px; margin: 4px 0 12px; border: 1px solid var(--line); border-radius: 999px; }
 .glint-spaces a { flex: 1; text-align: center; text-decoration: none; color: var(--muted); padding: 7px 10px; border-radius: 999px; font-size: 12px; }
 .glint-spaces a.active { color: var(--bg); background: var(--ink); }
+
+/* ---------- Motion: screen switch, first-load rise, status ping ---------- */
+/* Moving between apps: the app's mark builds in the middle of the screen (public/motion.js). */
+.switch { position: fixed; inset: 0; z-index: 1000; display: none; place-items: center; background: var(--bg); color: var(--ink); pointer-events: none; }
+.switch.on { display: grid; animation: sw-bg 1.3s linear both; }
+.switch svg { width: 120px; height: 120px; overflow: visible; }
+.switch .chev { stroke-dasharray: 70; stroke-dashoffset: 70; animation: sw-draw-chev 0.3s 0.1s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+.switch .body { transform-box: fill-box; transform-origin: bottom; transform: scaleY(0); animation: sw-body 0.3s 0.4s cubic-bezier(0.3, 1.5, 0.5, 1) forwards; }
+.switch .mark { animation: sw-hop 0.3s 0.7s ease-out; }
+.switch .eye { opacity: 0; animation: sw-show 0.01s 0.7s forwards, sw-blink 0.16s 0.9s; }
+.switch .bowl, .switch .ring, .switch .ringbg { stroke-dasharray: 1; stroke-dashoffset: 1; animation: sw-line 0.4s 0.7s ease-out forwards; }
+.switch .star, .switch .star2, .switch .planet { transform-box: fill-box; transform-origin: center; opacity: 0; animation: sw-pop 0.3s 0.75s cubic-bezier(0.3, 1.6, 0.5, 1) forwards; }
+.switch .star2 { animation-delay: 0.9s; }
+.switch .planet { animation-delay: 1s; }
+.switch-name { position: absolute; top: calc(50% + 78px); left: 0; right: 0; text-align: center; color: var(--muted); opacity: 0; animation: sw-show 0.3s 0.6s forwards; }
+@keyframes sw-bg { 0% { opacity: 0; } 8%, 78% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes sw-draw-chev { to { stroke-dashoffset: 0; } }
+@keyframes sw-body { to { transform: scaleY(1); } }
+@keyframes sw-hop { 40% { transform: translateY(-8px); } }
+@keyframes sw-show { to { opacity: 1; } }
+@keyframes sw-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+@keyframes sw-line { to { stroke-dashoffset: 0; } }
+@keyframes sw-pop { from { opacity: 0; transform: scale(0) rotate(-60deg); } to { opacity: 1; transform: none; } }
+
+/* Each app card rises in once, the first time it shows after loading. */
+.app-card.rise { animation: card-rise 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.2) both; animation-delay: calc(var(--i, 0) * 0.07s); }
+@keyframes card-rise { from { opacity: 0; transform: translateY(14px); } }
+a.app-card:active { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--shadow); }
+
+/* A status dot pings once the first time its app shows as online. */
+.dot.ping { animation: dot-ping 1s ease-out 1; }
+@keyframes dot-ping { 0% { box-shadow: 0 0 0 0 rgba(184, 245, 160, 0.7); } 100% { box-shadow: 0 0 0 10px rgba(184, 245, 160, 0); } }
+
+/* The sign-in mark draws itself once. */
+.welcome-card .logo-mark path:first-of-type { stroke-dasharray: 70; stroke-dashoffset: 70; animation: sw-draw-chev 0.4s 0.15s ease-out forwards; }
+.welcome-card .logo-mark path:last-of-type { transform-box: fill-box; transform-origin: bottom; animation: sw-body-in 0.35s 0.45s cubic-bezier(0.3, 1.5, 0.5, 1) both; }
+@keyframes sw-body-in { from { transform: scaleY(0); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .switch.on { display: none; }
+  .app-card.rise, .dot.ping, .welcome-card .logo-mark path { animation: none !important; }
+  .welcome-card .logo-mark path:first-of-type { stroke-dashoffset: 0; }
+}

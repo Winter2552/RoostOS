@@ -108,7 +108,12 @@ function validEmail(e) {
   return typeof e === 'string' && e.length <= 254 && /^[^\s@<>"(),;:]+@[^\s@<>"(),;:]+\.[^\s@<>"(),;:]+$/.test(e);
 }
 
-function buildMessage({ from, fromName, to, subject, text }) {
+const wrap64 = (buf) => buf.toString('base64').replace(/.{76}/g, '$&\r\n');
+const part = (headers, body) => `${headers.join('\r\n')}\r\n\r\n${body}`;
+
+// Plain text always; with `html` it becomes text plus a styled version, and
+// `inline` ({ cid, type, data }) travels inside the email for the html to show.
+function buildMessage({ from, fromName, to, subject, text, html, inline }) {
   const domain = from.split('@')[1] || 'roost';
   const headers = [
     `From: ${fromName ? `${headerText(fromName)} <${from}>` : from}`,
@@ -117,11 +122,23 @@ function buildMessage({ from, fromName, to, subject, text }) {
     `Date: ${new Date().toUTCString().replace('GMT', '+0000')}`,
     `Message-ID: <${crypto.randomBytes(12).toString('hex')}@${domain}>`,
     'MIME-Version: 1.0',
-    'Content-Type: text/plain; charset=utf-8',
-    'Content-Transfer-Encoding: base64',
   ];
-  const body = Buffer.from(text.replace(/\r?\n/g, '\r\n')).toString('base64').replace(/.{76}/g, '$&\r\n');
-  return `${headers.join('\r\n')}\r\n\r\n${body}\r\n`;
+  const textPart = (t, type) => part([`Content-Type: ${type}; charset=utf-8`, 'Content-Transfer-Encoding: base64'], wrap64(Buffer.from(t.replace(/\r?\n/g, '\r\n'))));
+  if (!html) return `${headers.concat('Content-Type: text/plain; charset=utf-8', 'Content-Transfer-Encoding: base64').join('\r\n')}\r\n\r\n${wrap64(Buffer.from(text.replace(/\r?\n/g, '\r\n')))}\r\n`;
+  const id = crypto.randomBytes(8).toString('hex');
+  const alt = `alt-${id}`;
+  const rel = `rel-${id}`;
+  const htmlPart = textPart(html, 'text/html');
+  const richPart = inline
+    ? part([`Content-Type: multipart/related; boundary="${rel}"`], [
+      `--${rel}`, htmlPart,
+      `--${rel}`, part([`Content-Type: ${inline.type}`, 'Content-Transfer-Encoding: base64', `Content-ID: <${inline.cid}>`, 'Content-Disposition: inline'], wrap64(inline.data)),
+      `--${rel}--`,
+    ].join('\r\n'))
+    : htmlPart;
+  // The plain text comes first: mail apps show the last version they understand.
+  const body = [`--${alt}`, textPart(text, 'text/plain'), `--${alt}`, richPart, `--${alt}--`].join('\r\n');
+  return `${headers.concat(`Content-Type: multipart/alternative; boundary="${alt}"`).join('\r\n')}\r\n\r\n${body}\r\n`;
 }
 
 // Sends one email. `config` is the saved mail settings plus the password.
