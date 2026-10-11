@@ -1257,8 +1257,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         Promise.all(visibleApps(db(), user).map(async (a) => {
           if (a.id !== 'nova' || !novaHasGalaxies()) return appProbe(a, host, probeTimeoutMs);
           const galaxies = await novaGalaxies();
-          const down = galaxies.some((g) => g.state !== 'online');
-          return { state: down ? 'offline' : 'online', ms: Math.max(0, ...galaxies.map((g) => g.ms)), galaxies };
+          const down = galaxies.filter((g) => g.state !== 'online').length;
+          return { state: !down ? 'online' : down === galaxies.length ? 'offline' : 'partial', ms: Math.max(0, ...galaxies.map((g) => g.ms)), galaxies };
         })),
       ]);
       // Update badges are for admins, the only ones who can act on them.

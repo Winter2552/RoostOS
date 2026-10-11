@@ -853,6 +853,7 @@ a.watch-card:focus-visible { transform: translate(4px, 4px); box-shadow: 3px 3px
 .app-status-head { display: flex; justify-content: space-between; align-items: flex-start; }
 .app-status.unset { border-style: dashed; box-shadow: none; opacity: 0.6; }
 .app-status.offline { border-color: var(--bad); }
+.app-status.warn { border-color: #f5d77a; }
 
 @media (max-width: 600px) {
   .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }

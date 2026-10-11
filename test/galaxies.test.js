@@ -153,6 +153,13 @@ test('with the domain set it switches on, and Check reaches the container', asyn
   const nv = (await call('GET', '/api/status', null, admin)).body.apps.find((a) => a.id === 'nova');
   assert.equal(nv.web.state, 'online');
   assert.deepEqual(nv.web.galaxies.map((g) => [g.name, g.state]), [['Books', 'online']]);
+  // With Coffee Galaxy on but unreachable, one galaxy up and one down is a partial outage.
+  await call('POST', '/api/admin/coffee/secret', null, admin);
+  assert.equal((await call('PUT', '/api/admin/coffee', { enabled: true }, admin)).status, 200);
+  const part = (await call('GET', '/api/status', null, admin)).body.apps.find((a) => a.id === 'nova');
+  assert.deepEqual(part.web.galaxies.map((g) => g.state), ['offline', 'online']);
+  assert.equal(part.web.state, 'partial');
+  await call('PUT', '/api/admin/coffee', { enabled: false }, admin);
   // Saving the app list back does not store that link.
   await call('PUT', '/api/admin/apps', { apps: listed }, admin);
   assert.equal((await call('GET', '/api/admin/settings', null, admin)).status, 200);
