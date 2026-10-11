@@ -1223,10 +1223,28 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
 
     'GET /api/system': (req, res) => {
       requireMember(req);
+      // The dashboard shows every drive Roost uses added together; `nest` is the drive
+      // Nest keeps its files on, which is what the storage limits are measured against.
       let disk = null;
+      let nestDisk = null;
+      let drives = [];
       try {
-        const s = fs.statfsSync(dataDir);
-        disk = { total: s.blocks * s.bsize, free: s.bavail * s.bsize };
+        const nestPath = nestDir || path.join(dataDir, 'nest');
+        const read = (label, p) => {
+          const s = fs.statfsSync(p);
+          return { label, dev: fs.statSync(p).dev, total: s.blocks * s.bsize, free: s.bavail * s.bsize };
+        };
+        const system = read('System', dataDir);
+        let nestDrive = system;
+        try {
+          nestDrive = read('Nest', nestPath);
+        } catch {
+          // Nest's folder isn't made yet; it will sit on the same drive as Roost's data.
+        }
+        const all = nestDrive.dev === system.dev ? [system] : [system, nestDrive];
+        drives = all.map(({ label, total, free }) => ({ label, total, free }));
+        disk = { total: all.reduce((n, d) => n + d.total, 0), free: all.reduce((n, d) => n + d.free, 0) };
+        nestDisk = { total: nestDrive.total, free: nestDrive.free };
       } catch {
         // statfs is unavailable on some platforms; the dashboard just hides it.
       }
@@ -1237,6 +1255,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         cpus: os.cpus().length,
         memory: { total: os.totalmem(), free: os.freemem() },
         disk,
+        nestDisk,
+        drives,
         notice: activeNotice(),
       });
     },
