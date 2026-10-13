@@ -1123,6 +1123,15 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 200, { ok: true });
     },
 
+    // A key for something that can't type a password (an iPhone Shortcut), shown once.
+    'POST /api/me/backup-key': async (req, res) => {
+      const user = requireMember(req);
+      if (!visibleApps(db(), user).some((a) => a.id === 'glint')) throw new HttpError(403, 'You don’t have access to Glint');
+      const body = await readJson(req);
+      const name = str(body.name, 40) || 'iPhone';
+      send(res, 201, { key: sessions.create(user.id, { kind: 'app', name: `${name} backup` }) });
+    },
+
     'POST /api/me/devices/sign-out-others': (req, res) => {
       const user = requireUser(req);
       sessions.destroyUser(user.id, tokenOf(req));

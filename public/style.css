@@ -1467,3 +1467,11 @@ a.app-card:active { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--shad
 @keyframes boot-fade { to { opacity: 0; visibility: hidden; } }
 @media (max-width: 420px) { .boot-word { font-size: 17px; } }
 @media (prefers-reduced-motion: reduce) { .boot { display: none; } }
+
+/* ---------- phone backup key (Profile) ---------- */
+.how { margin: 12px 0; font-size: 14px; }
+.how summary { cursor: pointer; padding: 10px 0; min-height: 44px; display: flex; align-items: center; }
+.how ol { margin: 4px 0 8px; padding-left: 20px; line-height: 1.5; }
+.how li { margin-bottom: 8px; overflow-wrap: anywhere; }
+.how code { font-family: var(--mono, monospace); font-size: 12.5px; background: rgba(255, 255, 255, 0.08); padding: 1px 5px; border-radius: 4px; }
+#backup-key-out { margin-top: 14px; }

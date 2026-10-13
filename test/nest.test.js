@@ -296,3 +296,22 @@ test('a phone signs in with a device key and backs up with it', async () => {
   const have = await fetch(`${base}/api/backup/check`, { method: 'POST', headers: bearer, body: JSON.stringify({ items: [{ id: 'PXL_1' }] }) });
   assert.deepEqual((await have.json()).have, ['PXL_1']);
 });
+
+test('a Shortcut makes a key on Profile, then sends a big video in one request', async () => {
+  const made = await call('POST', '/api/me/backup-key', { name: 'iPhone' }, sam);
+  assert.equal(made.status, 201);
+  assert.equal((await call('POST', '/api/me/backup-key', {})).status, 401);
+  const auth = { Authorization: `Bearer ${made.body.key}` };
+  const q = (id) => new URLSearchParams({ id, name: `${id}.mov`, type: 'video/quicktime', taken: String(Date.UTC(2026, 5, 1)) });
+  assert.deepEqual(await (await fetch(`${base}/api/backup/have?id=VID_1`, { headers: auth })).json(), { have: false });
+  const big = Buffer.alloc(17 * 1024 * 1024 + 5, 7); // more than one Nest piece
+  const put = await fetch(`${base}/api/backup/file?${q('VID_1')}`, { method: 'PUT', headers: { ...auth, 'Content-Type': 'application/octet-stream' }, body: big });
+  const out = await put.json();
+  assert.equal(put.status, 201, JSON.stringify(out));
+  assert.equal(out.item.size, big.length);
+  assert.equal(fs.statSync(path.join(samHome(), 'files', 'Photos', '2026', 'VID_1.mov')).size, big.length);
+  assert.deepEqual(await (await fetch(`${base}/api/backup/have?id=VID_1`, { headers: auth })).json(), { have: true });
+  // Sending the same one again is skipped.
+  const again = await fetch(`${base}/api/backup/file?${q('VID_1')}`, { method: 'PUT', headers: auth, body: Buffer.from('x') });
+  assert.equal((await again.json()).have, true);
+});

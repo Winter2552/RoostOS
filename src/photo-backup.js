@@ -15,14 +15,24 @@
 // and for the ones it doesn't have, sends them with
 //   POST /api/backup/uploads  { id, device, name, size, type, taken }
 //   PUT  /api/backup/uploads/<upload id>?offset=N   (raw bytes, in pieces)
+// A phone that can only make one web request per photo (an iPhone Shortcut)
+// uses the shorter pair instead:
+//   GET  /api/backup/have?id=...                              -> { have: true | false }
+//   PUT  /api/backup/file?id=...&name=...&type=...&taken=...  (the whole file as the body)
 // The phone signs in with a device key (the "device" sign-in the installable
 // app uses), so it never needs a browser cookie.
 
 const { DatabaseSync } = require('node:sqlite');
 const { HttpError, send, readJson, str } = require('./http');
-const { cleanName } = require('./nest');
+const { cleanName, CHUNK } = require('./nest');
 
 const MAX_CHECK = 500; // photos per check
+
+// Milliseconds, or a date a Shortcut can write ("2026-06-01T10:00:00Z"); NaN when neither.
+function takenMs(raw) {
+  const text = String(raw || '');
+  return /^\d+$/.test(text) ? Number(text) : Date.parse(text);
+}
 
 class PhotoBackup {
   constructor({ nest, dbFile }) {
@@ -96,6 +106,64 @@ class PhotoBackup {
     return this.db.prepare('SELECT 1 FROM sent LIMIT 1').get() !== undefined;
   }
 
+  // The whole file in one request: Nest still stores it piece by piece, so a
+  // big video never sits in memory.
+  async putWhole(user, params, req) {
+    const id = str(params.get('id'), 300);
+    if (!id) throw new HttpError(400, 'Each photo needs an id');
+    if (this.has(user, id)) {
+      req.resume();
+      return { have: true };
+    }
+    const size = Number(req.headers['content-length']);
+    if (!Number.isSafeInteger(size) || size < 0) throw new HttpError(411, 'Send the file size (Content-Length)');
+    const device = cleanName(str(params.get('device'), 60)) || 'Phone';
+    const start = this.nest.startUpload(user, {
+      name: params.get('name'),
+      size,
+      type: params.get('type'),
+      path: this.folderFor(takenMs(params.get('taken'))),
+    });
+    let last = start.done ? { done: true, item: start.item } : null;
+    if (!last) {
+      const source = req[Symbol.asyncIterator]();
+      let rest = null;
+      let offset = 0;
+      try {
+        while (offset < size) {
+          const want = Math.min(CHUNK, size - offset);
+          // One piece of the body, then the next, from the same stream.
+          const piece = (async function* () {
+            let got = 0;
+            while (got < want) {
+              let chunk = rest;
+              rest = null;
+              if (!chunk) {
+                const next = await source.next();
+                if (next.done) return;
+                chunk = next.value;
+              }
+              const take = Math.min(chunk.length, want - got);
+              if (take < chunk.length) rest = chunk.subarray(take);
+              got += take;
+              yield chunk.subarray(0, take);
+            }
+          }());
+          last = await this.nest.putChunk(user, start.id, offset, piece);
+          if (last.done) break;
+          if (last.received <= offset) throw new HttpError(400, 'The upload ended early');
+          offset = last.received;
+        }
+        if (!last || !last.done) throw new HttpError(400, 'The upload ended early');
+      } catch (err) {
+        this.nest.cancelUpload(user, start.id);
+        throw err;
+      }
+    }
+    this.q.addSent.run(user.id, id, last.item.id, device, last.item.size, Date.now());
+    return { done: true, item: last.item };
+  }
+
   status(user) {
     const s = this.q.stats.get(user.id);
     return { photos: s.n, bytes: s.bytes, last: s.last || null };
@@ -105,6 +173,13 @@ class PhotoBackup {
     const method = req.method;
     let r;
     if (method === 'GET' && pathname === '/api/backup/status') return send(res, 200, this.status(user));
+    if (method === 'GET' && pathname === '/api/backup/have') {
+      return send(res, 200, { have: this.has(user, str(params.get('id'), 300)) });
+    }
+    if (method === 'PUT' && pathname === '/api/backup/file') {
+      const out = await this.putWhole(user, params, req);
+      return send(res, out.have ? 200 : 201, out);
+    }
     if (method === 'POST' && pathname === '/api/backup/check') {
       return send(res, 200, this.check(user, await readJson(req)));
     }

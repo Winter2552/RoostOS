@@ -394,6 +394,27 @@
         <div class="row hidden" id="devices-others"><button class="btn ghost small" type="button" id="sign-out-others">Sign out everywhere else</button></div>
         <div class="msg" role="status"></div>
       </div>
+      <div class="card panel member-only hidden" id="backup-key-panel">
+        <h3>Back up an iPhone</h3><span class="mono muted">New photos go to Glint on their own, through a Shortcut</span>
+        <details class="how">
+          <summary>How to set it up</summary>
+          <ol>
+            <li>Press Make a backup key below, and keep the address and key somewhere the Shortcut can read them.</li>
+            <li>On the iPhone open Shortcuts → Automation → New Automation → Wi-Fi, pick your home network and choose Run Immediately.</li>
+            <li>Add Find Photos (sorted by Date Added, newest first, limit 50), then Repeat with Each.</li>
+            <li>Inside: make Text <code>[Date Taken as ISO]|[File Size]</code>, then Get Contents of URL <code>GET address/api/backup/have?id=[that text]</code> with header <code>Authorization: Bearer key</code>.</li>
+            <li>If <code>have</code> is no: Get Contents of URL <code>PUT address/api/backup/file?id=[text]&amp;name=[Name]&amp;taken=[Date Taken as ISO]</code>, same header, Request Body File = the photo.</li>
+          </ol>
+          <p class="muted">Needs the phone at home on Wi-Fi. iOS decides when it may run, and may stop it on long videos, so check Glint after the first run.</p>
+        </details>
+        <div class="row"><button class="btn" type="button" id="make-backup-key">Make a backup key</button></div>
+        <div class="hidden" id="backup-key-out">
+          <label class="field"><span>Roost address</span><input type="text" id="backup-key-address" readonly spellcheck="false"></label>
+          <label class="field"><span>Backup key (shown once; make a new one if you lose it)</span><input type="text" id="backup-key-value" readonly spellcheck="false"></label>
+          <div class="row"><button class="btn ghost small" type="button" id="copy-backup-key">Copy key</button></div>
+        </div>
+        <div class="msg" role="status"></div>
+      </div>
       <form class="card panel" id="password-form">
         <h3>Password</h3><span class="mono muted">At least 8 characters</span>
         <div class="form-grid">
