@@ -37,6 +37,7 @@ const family = require('./family');
 const zip = require('./zip');
 const restore = require('./restore');
 const { Glint } = require('./glint');
+const { PhotoBackup } = require('./photo-backup');
 const { Assets } = require('./assets');
 const { TrafficMeter } = require('./traffic');
 const { createSearch, nestSource } = require('./search');
@@ -320,6 +321,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   }
   nest.syncUsage();
   const glint = new Glint({ nest });
+  const photoBackup = new PhotoBackup({ nest, dbFile: path.join(dataDir, 'photo-backup.db') });
   const search = createSearch({ sources: [nestSource(nest)], visibleApps: (user) => visibleApps(db(), user) });
   const sweep = () => nest.sweep().then(() => glint.sweep()).catch((err) => console.error('Nest clean-up failed:', err));
   sweep();
@@ -2738,6 +2740,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         const user = requireUser(req);
         if (!visibleApps(db(), user).some((a) => a.id === 'glint')) throw new HttpError(403, 'You don’t have access to Glint');
         await glint.handle(req, res, spaceOwner(user, searchParams), pathname, searchParams);
+      } else if (pathname.startsWith('/api/backup/')) {
+        // Phone backups are Glint photos in the person's own space, so they need Glint.
+        const user = requireUser(req);
+        if (!visibleApps(db(), user).some((a) => a.id === 'glint')) throw new HttpError(403, 'You don’t have access to Glint');
+        await photoBackup.handle(req, res, user, pathname, searchParams);
       } else if (pathname.startsWith('/api/')) {
         const found = route(req.method, pathname);
         if (!found) throw new HttpError(404, 'Not found');
@@ -2796,10 +2803,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     activity.flush();
     traffic.flush();
     sessions.flush();
+    photoBackup.close();
     nest.close();
   });
   server.nest = nest;
   server.glint = glint;
+  server.photoBackup = photoBackup;
   server.watcher = watcher;
   server.push = push;
   // Save anything still waiting, e.g. when the container is stopped.

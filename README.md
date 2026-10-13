@@ -139,7 +139,15 @@ Glint is Roost's own photo library, built on Nest's storage. Open it from **Phot
 - **Upload** with the + button or by dropping files. On a phone the + opens the photo picker. Photos already in Glint (same name and size) are skipped, and the dates in the photo (the camera's date, not the upload day) decide where it sits in the timeline.
 - **No double work**: Glint uploads go into `Photos/<year>` in Nest, so they share the storage limit (with the same **Ask for more** link when it is full), the trash and zip downloads. Photos and videos you put in Nest yourself show up in Glint too.
 - **Light on the server**: Glint does no image processing. The browser that uploads a photo reads its date and draws the small preview (about 30 KB, kept in `.glint/` next to the user's files); older photos get theirs the first time they scroll into view. A format the browser can't draw, such as HEIC on Windows, shows a placeholder and offers a download instead.
-- **Not included**: automatic background backup (that needs a phone app, so for now it is a tap on Upload), and face or object recognition.
+- **Automatic phone backup**: things that run without anyone at the screen (the Roost Android app, an iPhone Shortcut) sign in with a device key (`POST /api/login` with a `device` name returns a `key`) and send photos through the backup API. It skips photos it already sent, by the phone's own photo ids, and files them in `Photos/<year>` like any other upload, so they share the storage limit and show in the timeline. Works at home on Wi-Fi; an outside address through Cloudflare's free plan stops uploads over 100 MB.
+  ```
+  POST /api/backup/check    { "items": [{ "id": "<photo id>" }] }                  → { "have": ["<id>", ...] }
+  POST /api/backup/uploads  { "id", "device", "name", "size", "type", "taken" }    → { "id", "chunkSize" } or { "have": true }
+  PUT  /api/backup/uploads/<upload id>?offset=N   (raw bytes, one piece at a time) → { "received", "done" }
+  GET  /api/backup/status                                                          → { "photos", "bytes", "last" }
+  Authorization: Bearer <device key>
+  ```
+- **Not included**: face or object recognition.
 
 Files can only be served as a photo or video type a browser can show, with scripts switched off, so an uploaded web page can't run inside Roost.
 
