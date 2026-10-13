@@ -19,6 +19,14 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <!-- The load-up screen: the mark builds, the greeting is written, then it fades into the page (public/motion.js). -->
+  <div id="boot" class="boot" aria-hidden="true">
+    <svg viewBox="0 8 120 120">
+      <path class="chev" d="M22 48 L42 68 L22 88" fill="none" stroke="currentColor" stroke-width="13"/>
+      <g class="mark"><path class="body" d="M58 92 V44 H76 A26 26 0 0 1 102 70 V92 Z" fill="currentColor"/><circle class="eye" cx="86" cy="60" r="4.5" fill="var(--bg)"/></g>
+    </svg>
+    <div class="boot-word"><span id="boot-text"></span><i></i></div>
+  </div>
   <!-- Shown when the server stops answering (public/app.js, "connection") -->
   <div id="conn-banner" class="conn-banner hidden" role="status" aria-live="polite">
     <div class="conn-text">

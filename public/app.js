@@ -717,7 +717,7 @@ function renderUser() {
   const role = isGuest(u) ? `guest until ${shortDate(u.guestUntil)}` : u.role;
   $('#who-role').textContent = role;
   $('#account-btn').setAttribute('aria-label', `Account menu for ${name}`);
-  $('#hero-name').textContent = name;
+  $('#hero-name').textContent = cap(name);
   $('#profile-role').textContent = role;
   $('#profile-form').displayName.value = u.displayName;
   $('#profile-form').username.value = u.username;
@@ -3585,6 +3585,16 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
   navigator.serviceWorker.register('/sw.js').catch(() => {});
 }
 
+// Names are written with a capital first letter on the load-up screen and the dashboard.
+const cap = (n) => (n ? n.charAt(0).toUpperCase() + n.slice(1) : n);
+
+// Tells the load-up screen (public/motion.js) what to write. That script loads after this one.
+function bootText(t) {
+  const go = () => window.roostBoot && window.roostBoot.text(t);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', go, { once: true });
+  else go();
+}
+
 (async function boot() {
   tickClock();
   setInterval(tickClock, 30 * 1000);
@@ -3599,7 +3609,7 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
   setInterval(() => { if (!document.hidden) loadAlerts(); }, ALERTS_REFRESH_MS);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) loadAlerts(); });
   const token = linkToken();
-  if (token) return showJoin(token);
+  if (token) { bootText(null); return showJoin(token); }
   earlyApps = fetch('/api/apps', { credentials: 'same-origin' })
     .then((r) => (r.ok && String(r.headers.get('Content-Type')).includes('application/json') ? r.json() : null))
     .catch(() => null);
@@ -3610,6 +3620,7 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
   // before they have run, the apps would hit a missing function and never draw
   // (until a refresh found the scripts cached). Wait for them first.
   if (document.readyState === 'loading') await new Promise((done) => document.addEventListener('DOMContentLoaded', done, { once: true }));
+  bootText(s.user ? `Welcome home, ${cap(s.user.displayName || s.user.username)}` : `Welcome to ${s.serverName}`);
   if (s.user) await enter(s.user);
   else showWelcome(s.setupRequired);
 })();

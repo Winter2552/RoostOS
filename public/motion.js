@@ -44,6 +44,32 @@
     overlay.classList.add('on');
   }
 
+  // ---------- load-up screen ----------
+  // The markup is in index.html so it shows while the page loads. app.js says
+  // what to write once it knows who is here; text(null) just fades it out.
+  // Tap to skip. If the page never calls text(), it fades on its own.
+  const boot = document.getElementById('boot');
+  if (boot) {
+    const word = boot.querySelector('.boot-word');
+    const span = document.getElementById('boot-text');
+    const finish = () => boot.classList.add('done');
+    boot.addEventListener('animationend', (e) => { if (e.target === boot) boot.remove(); });
+    boot.addEventListener('click', () => boot.remove());
+    window.roostBoot = {
+      text(t) {
+        if (!boot.isConnected || word.classList.contains('typing') || boot.classList.contains('done')) return;
+        if (!t) { finish(); return; }
+        span.textContent = t;
+        // Typing waits for the mark to finish building, and starts at once if it already has.
+        word.style.setProperty('--n', String(t.length));
+        word.style.setProperty('--delay', `${Math.max(0, 800 - performance.now()) / 1000}s`);
+        span.addEventListener('animationend', finish, { once: true });
+        word.classList.add('typing');
+      },
+    };
+    setTimeout(() => window.roostBoot.text(null), 3000);
+  }
+
   window.addEventListener('hashchange', () => {
     const next = appOf();
     if (next === current) return;
