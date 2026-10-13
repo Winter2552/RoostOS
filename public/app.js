@@ -3606,6 +3606,10 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
   const s = await api('GET', '/api/state');
   setServerName(s.serverName);
   state.mailEnabled = s.mailEnabled;
+  // search.js, nest.js and glint.js load after this file. If the server answers
+  // before they have run, the apps would hit a missing function and never draw
+  // (until a refresh found the scripts cached). Wait for them first.
+  if (document.readyState === 'loading') await new Promise((done) => document.addEventListener('DOMContentLoaded', done, { once: true }));
   if (s.user) await enter(s.user);
   else showWelcome(s.setupRequired);
 })();
