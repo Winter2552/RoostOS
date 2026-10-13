@@ -699,7 +699,10 @@ async function enter(user) {
   // Guests get a calm view: their apps and their profile, nothing about the server.
   document.querySelectorAll('.member-only').forEach((n) => n.classList.toggle('hidden', isGuest(user)));
   renderUser();
-  await Promise.all([loadApps(), isGuest(user) ? null : loadSystem()]);
+  // The apps are what people came for: show them as soon as they arrive and
+  // let the server stats fill in behind.
+  if (!isGuest(user)) loadSystem();
+  await loadApps();
   if (!isGuest(user)) loadBackup();
   if (user.role === 'admin') loadAlerts();
   route();
@@ -1096,8 +1099,17 @@ async function removePushDevice(id) {
 
 // ---------- apps ----------
 
+// Opening the installed app asks for the apps list while the sign-in check is
+// still in flight (see boot), so the two trips overlap instead of queueing.
+let earlyApps = null;
+
 async function loadApps() {
-  const { apps, searchable } = await api('GET', '/api/apps');
+  let early = null;
+  if (earlyApps) {
+    early = await earlyApps;
+    earlyApps = null;
+  }
+  const { apps, searchable } = early || await api('GET', '/api/apps');
   state.apps = apps;
   window.searchSetup(searchable || []);
   renderAppBar();
@@ -3588,6 +3600,9 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
   document.addEventListener('visibilitychange', () => { if (!document.hidden) loadAlerts(); });
   const token = linkToken();
   if (token) return showJoin(token);
+  earlyApps = fetch('/api/apps', { credentials: 'same-origin' })
+    .then((r) => (r.ok && String(r.headers.get('Content-Type')).includes('application/json') ? r.json() : null))
+    .catch(() => null);
   const s = await api('GET', '/api/state');
   setServerName(s.serverName);
   state.mailEnabled = s.mailEnabled;
