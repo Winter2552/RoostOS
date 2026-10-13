@@ -54,6 +54,7 @@ Short, calm, plain. Say what happened and what to do next. No exclamation marks,
 ## Motion
 All motion is CSS, runs once, and has a reason.
 - **Screen switch** (`public/motion.js`): moving between Roost, Nest, Glint and Nova builds the app's mark in the middle of the screen for about 1.3 s, with the app's name. Only on a change of app.
+- **Load-up** (every visit): the mark builds, "Welcome home, Name" is written out, it holds for 1.5 s, then fades into the dashboard over 1.5 s. Tap to skip.
 - **Dashboard**: app cards rise in once, press down when tapped, and a status dot pings once the first time its app shows as online.
 - **Sign-in**: the mark draws itself once.
 - **Email**: the header types "roost" and the bird pops up, once.
