@@ -361,6 +361,33 @@ test('turning the link off restores the plain Jellyfin card', async () => {
   assert.equal(apps.body.apps.find((a) => a.id === 'jellyfin').openUrl, undefined);
 });
 
+test('the status page checks Jellyfin where Roost reaches it, and calls it Roostflix', async () => {
+  // Jellyfin on a port the app card's template address (8096) doesn't name.
+  const moved = http.createServer((req, res) => {
+    const ok = /Token="fake-api-key"/.test(req.headers.authorization || '');
+    res.writeHead(ok ? 200 : 401, { 'Content-Type': 'application/json' });
+    res.end(!ok ? '' : req.url === '/Users' ? '[]' : JSON.stringify({ ServerName: 'Home', Version: '10.10.7' }));
+  });
+  await new Promise((r) => moved.listen(0, '127.0.0.1', r));
+  try {
+    const url = `http://127.0.0.1:${moved.address().port}`;
+    assert.equal((await call('PUT', '/api/admin/jellyfin', { url, apiKey: KEY }, admin)).status, 200);
+    const status = (await call('GET', '/api/status', null, admin)).body;
+    const card = status.apps.find((a) => a.id === 'jellyfin');
+    assert.equal(card.web.state, 'online');
+    assert.equal(card.name, 'Roostflix');
+    assert.equal((await call('GET', '/api/apps/status', null, admin)).body.status.jellyfin, 'online');
+    // Skin off: it is Jellyfin again.
+    await call('PUT', '/api/admin/roostflix', { on: false }, admin);
+    assert.equal((await call('GET', '/api/status', null, admin)).body.apps.find((a) => a.id === 'jellyfin').name, 'Jellyfin');
+    await call('PUT', '/api/admin/roostflix', { on: true }, admin);
+  } finally {
+    await call('PUT', '/api/admin/jellyfin', { url: '' }, admin);
+    moved.close();
+    moved.closeAllConnections();
+  }
+});
+
 test('the Roostflix script and stylesheet are served and the script parses', async () => {
   const js = await fetch(`${base}/roostflix/skin.js`);
   assert.equal(js.status, 200);

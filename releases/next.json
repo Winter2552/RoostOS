@@ -1,3 +1,9 @@
 {
-  "items": []
+  "items": [
+    {
+      "title": "Roostflix shows as online",
+      "text": "The dashboard and Server status no longer call Roostflix offline when it is running. The status page now names it Roostflix too.",
+      "image": "roostflix-status.png"
+    }
+  ]
 }

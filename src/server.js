@@ -355,6 +355,13 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     return all.find((t) => sessions.get(t)) || all[all.length - 1];
   }
 
+  // Jellyfin is checked where Roost itself reaches it (Admin → Jellyfin
+  // sign-in), which is known to work, not at the app card's template address
+  // (port 8096 unless edited), which goes stale when Jellyfin moves port.
+  const probeApp = (a) => (a.id === 'jellyfin' && jellyfin.enabled() ? { ...a, url: db().settings.jellyfin.url } : a);
+  // Jellyfin shows as Roostflix while Roost skins it.
+  const shownName = (a) => (a.id === 'jellyfin' && jellyfin.enabled() && db().settings.roostflix !== false ? roostflix.NAME : a.name);
+
   // Uptime history: containers are re-read when Docker reports a change, and
   // apps without one get a web check every few minutes (see src/uptime.js).
   const uptime = new UptimeLog(dataDir);
@@ -382,8 +389,10 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       // Built-in apps are part of Roost; Roost's own row covers them.
       if (!a.url || builtIn(a.url)) return;
       tracked.push(a.id);
-      if (!web || (a.url.includes('{host}') && !uptime.host)) return;
-      const r = await timedProbe(a.url.replace(/\{host\}/g, uptime.host), probeTimeoutMs);
+      if (!web) return;
+      const target = probeApp(a).url;
+      if (target.includes('{host}') && !uptime.host) return;
+      const r = await timedProbe(target.replace(/\{host\}/g, uptime.host), probeTimeoutMs);
       uptime.observe(a.id, r.state === 'online');
     }));
     uptime.forget(tracked);
@@ -1247,7 +1256,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const host = requestHost(req);
       if (localHost(host)) uptime.setHost(host);
       const entries = await Promise.all(
-        appsFor(user).map(async (a) => [a.id, (await galaxyState(a)) || (await appProbe(a, host, probeTimeoutMs)).state]),
+        appsFor(user).map(async (a) => [a.id, (await galaxyState(a)) || (await appProbe(probeApp(a), host, probeTimeoutMs)).state]),
       );
       const status = Object.fromEntries(entries);
       // Coffee Galaxy's own dot, for its square on the Galaxies page.
@@ -1303,7 +1312,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         serverHealth({ cpu, disks: diskList }),
         listContainers(dockerHost, probeTimeoutMs),
         Promise.all(visibleApps(db(), user).map(async (a) => {
-          if (a.id !== 'nova' || !novaHasGalaxies()) return appProbe(a, host, probeTimeoutMs);
+          if (a.id !== 'nova' || !novaHasGalaxies()) return appProbe(probeApp(a), host, probeTimeoutMs);
           const galaxies = await novaGalaxies();
           const down = galaxies.filter((g) => g.state !== 'online').length;
           return { state: !down ? 'online' : down === galaxies.length ? 'offline' : 'partial', ms: Math.max(0, ...galaxies.map((g) => g.ms)), galaxies };
@@ -1329,7 +1338,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
           const containers = claim(containersFor(a, all));
           return {
             id: a.id,
-            name: a.name,
+            name: shownName(a),
             tagline: a.tagline,
             icon: a.icon,
             web: web[i],
