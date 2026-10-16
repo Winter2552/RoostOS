@@ -16,6 +16,14 @@ html, body, .backgroundContainer, .backgroundContainer.withBackdrop, .mainDrawer
   color: var(--rf-cream);
 }
 
+/* ---- start-up screen: Roost's icon instead of Jellyfin's ---- */
+.splashLogo {
+  background-image: url(icon.svg) !important;
+  width: min(30vw, 9rem) !important;
+  height: min(30vw, 9rem) !important;
+  border-radius: 1.4rem;
+}
+
 /* ---- name and logo: the Roost wordmark, drawn by the browser ---- */
 .pageTitleWithDefaultLogo, .pageTitleWithLogo {
   background: none !important;
