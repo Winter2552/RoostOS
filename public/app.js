@@ -699,6 +699,11 @@ async function enter(user) {
   // Guests get a calm view: their apps and their profile, nothing about the server.
   document.querySelectorAll('.member-only').forEach((n) => n.classList.toggle('hidden', isGuest(user)));
   renderUser();
+  const ver = $('#foot-version');
+  ver.textContent = state.version ? `v${state.version}` : '';
+  // Guests have no What's new page, so for them it is just text.
+  if (isGuest(user)) ver.removeAttribute('href');
+  else ver.setAttribute('href', '#/whatsnew');
   // The apps are what people came for: show them as soon as they arrive and
   // let the server stats fill in behind.
   if (!isGuest(user)) loadSystem();
