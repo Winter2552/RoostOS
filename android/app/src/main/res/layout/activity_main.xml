@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="Roost Backup"
+            android:textSize="28sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/intro"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Sends your new photos and videos to your own Roost, on home Wi-Fi."
+            android:textColor="#B0B0B0"
+            android:textSize="15sp" />
+
+        <!-- Sign in -->
+        <LinearLayout
+            android:id="@+id/signInBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:orientation="vertical">
+
+            <EditText
+                android:id="@+id/server"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Roost address (e.g. 192.168.1.20:8080)"
+                android:imeOptions="actionNext"
+                android:inputType="textUri"
+                android:minHeight="48dp"
+                android:singleLine="true"
+                android:textSize="16sp" />
+
+            <EditText
+                android:id="@+id/username"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Username"
+                android:imeOptions="actionNext"
+                android:inputType="textNoSuggestions"
+                android:minHeight="48dp"
+                android:singleLine="true"
+                android:textSize="16sp" />
+
+            <EditText
+                android:id="@+id/password"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Password"
+                android:imeOptions="actionDone"
+                android:inputType="textPassword"
+                android:minHeight="48dp"
+                android:singleLine="true"
+                android:textSize="16sp" />
+
+            <EditText
+                android:id="@+id/code"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Two-step code"
+                android:inputType="number"
+                android:minHeight="48dp"
+                android:singleLine="true"
+                android:textSize="16sp"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/signIn"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:layout_marginTop="16dp"
+                android:text="Sign in" />
+        </LinearLayout>
+
+        <!-- Signed in -->
+        <LinearLayout
+            android:id="@+id/readyBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/who"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:textColor="#B0B0B0"
+                android:textSize="15sp" />
+
+            <CheckBox
+                android:id="@+id/allFolders"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:minHeight="48dp"
+                android:text="Back up every folder, not just the camera's" />
+
+            <CheckBox
+                android:id="@+id/wifiOnly"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="Only on Wi-Fi (recommended; videos are big)" />
+
+            <Button
+                android:id="@+id/backupNow"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:layout_marginTop="16dp"
+                android:text="Back up now" />
+
+            <Button
+                android:id="@+id/signOut"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="8dp"
+                android:text="Sign out" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/message"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:textColor="#FF8A7A"
+            android:textSize="14sp" />
+    </LinearLayout>
+</ScrollView>
