@@ -445,6 +445,21 @@ const STEPS = [
     check: (ctx) => ctx.ticked.includes('phone-photos'),
   },
   {
+    id: 'google-photos',
+    group: 'People',
+    title: 'Move your Google Photos to Glint',
+    why: 'Glint becomes the master copy of your photos on your own drive, so a full Google account stops mattering.',
+    how: [
+      'On a PC, open takeout.google.com, choose Google Photos only and export as .zip (2 GB zips, a few years at a time, keep downloads easy).',
+      'In Glint open Move to Glint, add the zips and press Move to Glint. Dates, albums and favourites carry over and repeats are skipped.',
+      'Look through your photos, then press Delete the zips to get the space back. Keep the originals on Google until the nightly backup has run.',
+    ],
+    optional: true,
+    // Happens in Glint and on Google's site, so Roost can't see it; tick it off yourself.
+    manual: true,
+    check: (ctx) => ctx.ticked.includes('google-photos'),
+  },
+  {
     id: 'phone-alerts',
     group: 'People',
     title: 'Get alerts on your phone',
