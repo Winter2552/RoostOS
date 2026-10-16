@@ -680,6 +680,20 @@ class Nest {
       const body = await readJson(req);
       return send(res, 201, { items: await this.copy(user, idList(body.ids)) });
     }
+    // Move to Nest (src/nest-import.js).
+    if (method === 'GET' && pathname === '/api/nest/import') {
+      return send(res, 200, this.importer.status(user));
+    }
+    if (method === 'POST' && pathname === '/api/nest/import/start') {
+      const body = await readJson(req, 1024);
+      return send(res, 200, this.importer.start(user, { deleteZips: body.deleteZips === true }));
+    }
+    if (method === 'POST' && pathname === '/api/nest/import/stop') {
+      return send(res, 200, this.importer.stop(user));
+    }
+    if (method === 'POST' && pathname === '/api/nest/import/delete-zips') {
+      return send(res, 200, await this.importer.deleteZips(user));
+    }
     if (method === 'POST' && pathname === '/api/nest/trash') {
       const body = await readJson(req);
       return send(res, 200, { trashed: this.trash(user, idList(body.ids)) });

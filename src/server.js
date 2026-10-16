@@ -39,6 +39,7 @@ const zip = require('./zip');
 const restore = require('./restore');
 const { Glint } = require('./glint');
 const { Importer } = require('./glint-import');
+const { NestImporter } = require('./nest-import');
 const { PhotoBackup } = require('./photo-backup');
 const { Assets } = require('./assets');
 const { TrafficMeter } = require('./traffic');
@@ -330,6 +331,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   nest.syncUsage();
   const glint = new Glint({ nest });
   glint.importer = new Importer({ glint, nest });
+  nest.importer = new NestImporter({ glint, nest });
   const photoBackup = new PhotoBackup({ nest, dbFile: path.join(dataDir, 'photo-backup.db') });
   const search = createSearch({ sources: [nestSource(nest)], visibleApps: (user) => visibleApps(db(), user) });
   const sweep = () => nest.sweep().then(() => glint.sweep()).catch((err) => console.error('Nest clean-up failed:', err));

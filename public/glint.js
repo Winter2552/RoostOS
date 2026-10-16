@@ -66,7 +66,6 @@
   const G = {
     space: '',
     mode: 'photos', // photos | favourites | albums | album | trash | move
-    move: null, // Move to Glint: what the server says about the zips and the move
     album: null, // { id, name } when mode is 'album'
     items: [],
     next: null,
@@ -120,7 +119,7 @@
         if (token !== G.token) return;
         G.albums = albums;
       } else if (G.mode === 'move') {
-        G.move = await gapi('GET', '/api/glint/import');
+        await move.fetchStatus();
       } else if (G.mode === 'trash') {
         const d = await gapi('GET', '/api/glint/trash');
         if (token !== G.token) return;
@@ -596,38 +595,38 @@
   }
 
   // ---------- Move to Glint (Google Takeout) ----------
+  // The screen itself is shared with Nest's Move to Nest: public/move.js.
 
-  let moveTimer = null;
-  let moveDelete = false; // the "delete each zip when done" tick
-
-  // The page asks for progress only while a move is running and on screen.
-  function pollMove() {
-    clearTimeout(moveTimer);
-    if (G.mode !== 'move' || view.classList.contains('hidden') || !G.move || !G.move.job || !G.move.job.running) return;
-    moveTimer = setTimeout(loadMove, 1500);
-  }
-
-  async function loadMove() {
-    try {
-      const d = await gapi('GET', '/api/glint/import');
-      if (G.mode !== 'move') return;
-      const was = G.move && G.move.job && G.move.job.running;
-      G.move = d;
-      if (was && !d.job.running) { G.storage = null; }
-      renderMove();
-    } catch { /* try again on the next poll */ }
-    pollMove();
-  }
-
-  async function moveCall(path, body) {
-    try {
-      G.move = await gapi('POST', `/api/glint/import/${path}`, body || {});
-    } catch (err) {
-      toast(err.message);
-    }
-    renderMove();
-    pollMove();
-  }
+  const move = createMove({
+    el, bytes, coarse, toast,
+    noun: 'Glint',
+    call: (method, path, body) => gapi(method, `/api/glint/import${path === '' ? '' : path}`, body),
+    mount: () => body,
+    showing: () => G.mode === 'move' && !view.classList.contains('hidden'),
+    finished: () => { G.storage = null; },
+    intro: 'Move your Google Photos library into Glint, on your own drive. Dates, albums and favourites carry over, and repeats are skipped.',
+    steps: [
+      ['Open ', el('a', { href: 'https://takeout.google.com/', target: '_blank', rel: 'noopener', text: 'takeout.google.com' }), ', choose Google Photos only, and export as .zip. Smaller zips (2 GB) and a few years at a time keep downloads easy.'],
+      'Download the zips and add them here.',
+      'Press Move to Glint. Keep the zips until you have looked through your photos.',
+    ],
+    stats: (c) => [[c.moved + c.nodate, 'moved'], [c.dup, 'already here'], [c.skipped, 'left in Google trash'], [c.problem, 'problems']],
+    note: (c) => (c.nodate ? `${c.nodate.toLocaleString()} had no date from Google; they use the file date until you open them.` : ''),
+    doneText: 'Look through Photos, then delete the zips to get the space back.',
+    addZips: () => pickZips(),
+    deleteZips: async (send) => {
+      const ok = await confirmBox({
+        title: 'Delete the zip files?',
+        text: 'Do this once you have looked through your photos in Glint. The zips are deleted for good and the space comes back. Your photos stay.',
+        ok: 'Delete the zips',
+        danger: true,
+      });
+      if (ok) send('/delete-zips');
+    },
+  });
+  const pollMove = () => move.poll();
+  const loadMove = () => move.refresh();
+  const renderMove = () => move.render();
 
   function pickZips() {
     const input = el('input', { type: 'file', accept: '.zip,application/zip', multiple: true, class: 'hidden' });
@@ -642,78 +641,6 @@
     for (const file of zips) UP.tasks.push({ file, space: G.space, name: file.name, size: file.size, zip: true, sent: 0, live: 0, state: 'queued' });
     renderPanel();
     pump();
-  }
-
-  async function deleteZips() {
-    const ok = await confirmBox({
-      title: 'Delete the zip files?',
-      text: 'Do this once you have looked through your photos in Glint. The zips are deleted for good and the space comes back. Your photos stay.',
-      ok: 'Delete the zips',
-      danger: true,
-    });
-    if (ok) moveCall('delete-zips');
-  }
-
-  function renderMove() {
-    const m = G.move;
-    if (!m) { body.replaceChildren(el('div', { class: 'muted glint-note', text: 'Loading…' })); return; }
-    const job = m.job;
-    const running = Boolean(job && job.running);
-    const c = m.counts;
-    const worked = c.moved + c.nodate + c.dup + c.skipped + c.problem;
-    const li = (...kids) => el('li', {}, ...kids);
-    const out = [];
-
-    out.push(el('div', { class: 'gmove-intro' },
-      el('p', { class: 'muted', text: 'Move your Google Photos library into Glint, on your own drive. Dates, albums and favourites carry over, and repeats are skipped.' }),
-      el('ol', { class: 'gmove-steps' },
-        li('Open ', el('a', { href: 'https://takeout.google.com/', target: '_blank', rel: 'noopener', text: 'takeout.google.com' }), ', choose Google Photos only, and export as .zip. Smaller zips (2 GB) and a few years at a time keep downloads easy.'),
-        li('Download the zips and add them here.'),
-        li('Press Move to Glint. Keep the zips until you have looked through your photos.'))));
-
-    const zipRows = m.zips.map((z) => el('div', { class: 'gmove-zip' },
-      el('span', { class: 'gmove-name', text: z.name }),
-      el('span', { class: 'mono muted', text: `${bytes(z.size)}${z.done ? ` · ${z.done} done` : ''}${z.problems ? ` · ${z.problems} problem${z.problems === 1 ? '' : 's'}` : ''}` })));
-    out.push(el('div', { class: 'gmove-zips' }, ...zipRows,
-      running ? null : el('button', { type: 'button', class: 'btn ghost small', text: m.zips.length ? 'Add more zips' : 'Add Takeout zips', onclick: pickZips }),
-      !m.zips.length && !running ? el('span', { class: 'mono muted', text: coarse.matches ? '' : 'or drop them anywhere on this page' }) : null));
-
-    if (running) {
-      const pct = job.total ? Math.min(100, Math.floor((job.done / job.total) * 100)) : 0;
-      out.push(el('div', { class: 'gmove-run' },
-        el('b', { text: job.phase === 'reading' ? 'Reading your zips…' : `Moving ${job.done.toLocaleString()} of ${job.total.toLocaleString()}` }),
-        el('div', { class: 'meter' }, el('i', { style: `width:${job.phase === 'reading' ? 2 : Math.max(2, pct)}%` })),
-        el('span', { class: 'mono muted gmove-current', text: job.stopping ? 'Stopping after this photo…' : job.current }),
-        job.stopping ? null : el('button', { type: 'button', class: 'btn ghost small', text: 'Stop', onclick: () => moveCall('stop') })));
-    } else if (m.zips.length) {
-      const tick = el('input', { type: 'checkbox', checked: moveDelete, onchange: (e) => { moveDelete = e.target.checked; } });
-      out.push(el('div', { class: 'gmove-start' },
-        el('button', { type: 'button', class: 'btn', text: job && job.finished ? 'Move again' : worked ? 'Carry on moving' : 'Move to Glint', onclick: () => moveCall('start', { deleteZips: moveDelete }) }),
-        el('label', { class: 'gmove-tick' }, tick, el('span', { text: 'Delete each zip when it is done, to free space' }))));
-    }
-
-    if (job && job.error) out.push(el('p', { class: 'gmove-error', role: 'alert', text: job.error }));
-
-    if (worked) {
-      const stat = (n, label) => el('div', { class: 'gmove-stat' }, el('b', { text: n.toLocaleString() }), el('span', { class: 'mono muted', text: label }));
-      out.push(el('div', { class: 'gmove-stats' },
-        stat(c.moved + c.nodate, 'moved'),
-        stat(c.dup, 'already here'),
-        stat(c.skipped, 'left in Google trash'),
-        stat(c.problem, 'problems')));
-      if (c.nodate) out.push(el('p', { class: 'mono muted glint-note', text: `${c.nodate.toLocaleString()} had no date from Google; they use the file date until you open them.` }));
-    }
-    if (m.problems.length) {
-      out.push(el('details', { class: 'gmove-problems' }, el('summary', { text: `Show problems (${c.problem.toLocaleString()})` }),
-        ...m.problems.map((p) => el('div', { class: 'gmove-problem' }, el('b', { text: p.name }), el('span', { class: 'mono muted', text: `${p.zip} · ${p.note}` })))));
-    }
-    if (m.zips.length && !running && job && job.finished) {
-      out.push(el('div', { class: 'gmove-done' },
-        el('b', { text: 'All done' }),
-        el('span', { class: 'muted', text: 'Look through Photos, then delete the zips to get the space back.' }),
-        el('button', { type: 'button', class: 'btn ghost small', text: 'Delete the zips', onclick: deleteZips })));
-    }
-    body.replaceChildren(el('div', { class: 'gmove' }, ...out.filter(Boolean)));
   }
 
   // ---------- viewer ----------
