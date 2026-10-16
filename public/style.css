@@ -1339,6 +1339,32 @@ button.restore-name:hover { text-decoration: underline; text-underline-offset: 3
 .gtrash .mono { font-size: 11px; white-space: nowrap; }
 
 /* Upload progress */
+/* Move to Glint */
+.gmove { display: flex; flex-direction: column; gap: 22px; max-width: 640px; padding: 4px 2px 40px; }
+.gmove-intro p { margin: 0 0 12px; }
+.gmove-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; line-height: 1.5; }
+.gmove-steps a { color: var(--ink); }
+.gmove-zips { display: flex; flex-direction: column; gap: 0; align-items: flex-start; }
+.gmove-zips .btn { margin-top: 12px; }
+.gmove-zip { align-self: stretch; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; border-bottom: 1px solid var(--line); }
+.gmove-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; min-width: 0; }
+.gmove-zip .mono { font-size: 11px; white-space: nowrap; }
+.gmove-zips > .mono { margin-top: 8px; font-size: 11px; }
+.gmove-start { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+.gmove-tick { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); cursor: pointer; }
+.gmove-run { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.gmove-run .meter { align-self: stretch; }
+.gmove-current { font-size: 11px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gmove-error { margin: 0; padding: 12px 14px; border: 1.5px solid var(--line); border-radius: 12px; font-size: 14px; }
+.gmove-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+.gmove-stat { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border: 1.5px solid var(--line); border-radius: 14px; }
+.gmove-stat b { font-size: 24px; font-weight: 500; }
+.gmove-stat .mono { font-size: 11px; }
+.gmove-problems summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.gmove-problem { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-bottom: 1px solid var(--line); min-width: 0; }
+.gmove-problem b { font-weight: 400; font-size: 14px; overflow-wrap: anywhere; }
+.gmove-problem .mono { font-size: 11px; overflow-wrap: anywhere; }
+.gmove-done { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; padding: 16px; border: 1.5px solid var(--line); border-radius: 16px; }
 .glint-up { display: flex; flex-direction: column; gap: 10px; padding: 14px 18px 16px; }
 .glint-up .nup-status { font-size: 11px; }
 
