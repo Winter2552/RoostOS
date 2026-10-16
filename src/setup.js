@@ -431,13 +431,13 @@ const STEPS = [
   {
     id: 'phone-photos',
     group: 'People',
-    title: 'Send a phone\'s photos to Glint',
-    why: 'New photos and videos go to your own drive, so losing a phone doesn\'t lose them.',
+    title: 'Back up phone photos to Glint',
+    why: 'New photos and videos go to your own drive on their own, so losing a phone doesn\'t lose them.',
     how: [
-      'On the phone, open Roost (from the home screen icon) and sign in, then open Glint.',
-      'Tap + and choose the photos and videos; "select all" is fine. Glint skips any it already has, so repeat it whenever you like.',
-      'Keep Roost open until it says they are uploaded; the screen stays on while it sends, and a dropped connection carries on where it stopped.',
-      'Do it at home on Wi-Fi: videos pass over the home connection, and an outside address that goes through Cloudflare\'s free plan stops uploads over 100 MB.',
+      'Android: on GitHub open Actions → "Android app" → the latest run, download roost-backup-apk, unzip it and open app-debug.apk on the phone (allow installing from that source). Open Roost Backup, enter Roost\'s address, sign in, allow photo access. It then sends new photos about hourly on Wi-Fi.',
+      'iPhone: on Profile open Back up an iPhone, press Make a backup key and follow the Shortcut steps there.',
+      'Either way, do the first backup at home on Wi-Fi: videos pass over the home connection, and an outside address that goes through Cloudflare\'s free plan stops uploads over 100 MB.',
+      'You can always tap + in Glint to send photos by hand.',
     ],
     optional: true,
     // Happens on each phone, so Roost can't see it; tick it off yourself.

@@ -257,3 +257,61 @@ test('folders download as a valid zip', async () => {
   }
   assert.deepEqual(names.sort(), ['Zipme/', 'Zipme/Sub/', 'Zipme/one.txt', 'Zipme/two – ü.txt']);
 });
+
+test('phone backup sends each photo once and puts it in Photos by year', async () => {
+  const jan = Date.UTC(2026, 0, 15);
+  const send1 = async (id, data) => {
+    const start = await call('POST', '/api/backup/uploads', { id, device: 'Sam\'s iPhone', name: `${id}.jpg`, size: data.length, type: 'image/jpeg', taken: jan }, sam);
+    if (start.body.have || start.body.done) return start.body;
+    const res = await fetch(`${base}/api/backup/uploads/${start.body.id}?offset=0`, { method: 'PUT', headers: { Cookie: sam, 'Content-Type': 'application/octet-stream' }, body: data });
+    return res.json();
+  };
+  const first = await send1('IMG_1', Buffer.from('photo one'));
+  assert.equal(first.done, true);
+  const checked = await call('POST', '/api/backup/check', { items: [{ id: 'IMG_1' }, { id: 'IMG_2' }] }, sam);
+  assert.deepEqual(checked.body.have, ['IMG_1']);
+  // Sending it again is a no-op, not a second copy.
+  assert.equal((await send1('IMG_1', Buffer.from('photo one'))).have, true);
+  const onDisk = path.join(samHome(), 'files', 'Photos', '2026');
+  assert.deepEqual(fs.readdirSync(onDisk), ['IMG_1.jpg']);
+  assert.equal((await call('GET', '/api/backup/status', null, sam)).body.photos, 1);
+  assert.equal((await call('POST', '/api/backup/check', { items: [] })).status, 401);
+  // A copy deleted by mistake can be sent again.
+  const id = (await list(sam)).items.find((i) => i.name === 'Photos').id;
+  await call('POST', '/api/nest/trash', { ids: [id] }, sam);
+  assert.deepEqual((await call('POST', '/api/backup/check', { items: [{ id: 'IMG_1' }] }, sam)).body.have, []);
+});
+
+test('a phone signs in with a device key and backs up with it', async () => {
+  const login = await call('POST', '/api/login', { username: 'sam', password: 'password1', device: 'Pixel' });
+  const key = login.body.key;
+  assert.ok(key);
+  const bearer = { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
+  const body = Buffer.from('from a pixel');
+  const start = await fetch(`${base}/api/backup/uploads`, { method: 'POST', headers: bearer, body: JSON.stringify({ id: 'PXL_1', device: 'Pixel', name: 'PXL_1.jpg', size: body.length, type: 'image/jpeg' }) });
+  const s = await start.json();
+  assert.equal(start.status, 201);
+  const put = await fetch(`${base}/api/backup/uploads/${s.id}?offset=0`, { method: 'PUT', headers: { Authorization: bearer.Authorization, 'Content-Type': 'application/octet-stream' }, body });
+  assert.equal((await put.json()).done, true);
+  const have = await fetch(`${base}/api/backup/check`, { method: 'POST', headers: bearer, body: JSON.stringify({ items: [{ id: 'PXL_1' }] }) });
+  assert.deepEqual((await have.json()).have, ['PXL_1']);
+});
+
+test('a Shortcut makes a key on Profile, then sends a big video in one request', async () => {
+  const made = await call('POST', '/api/me/backup-key', { name: 'iPhone' }, sam);
+  assert.equal(made.status, 201);
+  assert.equal((await call('POST', '/api/me/backup-key', {})).status, 401);
+  const auth = { Authorization: `Bearer ${made.body.key}` };
+  const q = (id) => new URLSearchParams({ id, name: `${id}.mov`, type: 'video/quicktime', taken: String(Date.UTC(2026, 5, 1)) });
+  assert.deepEqual(await (await fetch(`${base}/api/backup/have?id=VID_1`, { headers: auth })).json(), { have: false });
+  const big = Buffer.alloc(17 * 1024 * 1024 + 5, 7); // more than one Nest piece
+  const put = await fetch(`${base}/api/backup/file?${q('VID_1')}`, { method: 'PUT', headers: { ...auth, 'Content-Type': 'application/octet-stream' }, body: big });
+  const out = await put.json();
+  assert.equal(put.status, 201, JSON.stringify(out));
+  assert.equal(out.item.size, big.length);
+  assert.equal(fs.statSync(path.join(samHome(), 'files', 'Photos', '2026', 'VID_1.mov')).size, big.length);
+  assert.deepEqual(await (await fetch(`${base}/api/backup/have?id=VID_1`, { headers: auth })).json(), { have: true });
+  // Sending the same one again is skipped.
+  const again = await fetch(`${base}/api/backup/file?${q('VID_1')}`, { method: 'PUT', headers: auth, body: Buffer.from('x') });
+  assert.equal((await again.json()).have, true);
+});

@@ -745,7 +745,7 @@ function route() {
   $('#account-btn').classList.toggle('active', ['status', 'profile', 'admin'].includes(view));
   closeMenu(false);
   if (view === 'admin') { loadAdmin(); loadJellyfin(); }
-  if (view === 'profile') { if (!isGuest(state.user)) loadStorage(); loadTwoStep(); loadDevices(); }
+  if (view === 'profile') { if (!isGuest(state.user)) loadStorage(); loadTwoStep(); loadDevices(); $('#backup-key-panel').classList.toggle('hidden', isGuest(state.user) || !hasGlint()); }
   if (view === 'status') { loadStatus(); loadUpdate(); }
   if (view === 'galaxies') renderGalaxyPage();
   if (view === 'nest') window.nestOpen(rest);
@@ -1982,6 +1982,25 @@ $('#sign-out-others').addEventListener('click', async () => {
     await loadDevices();
     flash($('#devices-panel'), 'Signed out everywhere else');
   } catch (err) { flash($('#devices-panel'), err.message, false); }
+});
+
+// ---------- iPhone backup key ----------
+
+$('#make-backup-key').addEventListener('click', async () => {
+  const panel = $('#backup-key-panel');
+  try {
+    const { key } = await api('POST', '/api/me/backup-key', { name: 'iPhone' });
+    $('#backup-key-address').value = location.origin;
+    $('#backup-key-value').value = key;
+    $('#backup-key-out').classList.remove('hidden');
+    flash(panel, 'Key made. It also shows in Signed-in devices, where you can sign it out.');
+    loadDevices();
+  } catch (err) { flash(panel, err.message, false); }
+});
+
+$('#copy-backup-key').addEventListener('click', async () => {
+  await copyText($('#backup-key-value'));
+  flash($('#backup-key-panel'), 'Key copied');
 });
 
 // ---------- two-step in profile ----------
