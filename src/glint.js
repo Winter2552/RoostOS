@@ -41,7 +41,8 @@ const SCHEMA = `
     height INTEGER NOT NULL DEFAULT 0,
     duration REAL NOT NULL DEFAULT 0,  -- seconds, for videos
     thumb INTEGER NOT NULL DEFAULT 0,  -- 0 not yet, 1 made, 2 couldn't be made
-    fav INTEGER NOT NULL DEFAULT 0
+    fav INTEGER NOT NULL DEFAULT 0,
+    date_src INTEGER NOT NULL DEFAULT 0 -- 1 when the date came from Google's data (Move to Glint): the browser leaves it alone
   );
   CREATE INDEX IF NOT EXISTS photos_taken ON photos (owner, taken DESC, id DESC);
   CREATE TABLE IF NOT EXISTS albums (
@@ -101,6 +102,10 @@ class Glint {
     this.nest = nest;
     this.db = nest.db;
     this.db.exec(SCHEMA);
+    // Photos tables made before Move to Glint have no date_src column.
+    if (!this.db.prepare('PRAGMA table_info(photos)').all().some((c) => c.name === 'date_src')) {
+      this.db.exec('ALTER TABLE photos ADD COLUMN date_src INTEGER NOT NULL DEFAULT 0');
+    }
     const q = (sql) => this.db.prepare(sql);
     this.q = {
       // New photos in Nest since last time, dated by when they arrived until a browser reads the real date.
@@ -222,7 +227,7 @@ class Glint {
       await fsp.rename(tmp, file);
       thumb = 1;
     }
-    this.q.describe.run(taken === null ? p.taken : Math.round(taken), Math.round(width), Math.round(height), duration, thumb, id);
+    this.q.describe.run(taken === null || p.date_src ? p.taken : Math.round(taken), Math.round(width), Math.round(height), duration, thumb, id);
     return photoItem(this.photo(user, id));
   }
 
@@ -362,9 +367,11 @@ class Glint {
     if (method === 'POST' && pathname === '/api/glint/uploads') {
       const body = await readJson(req, 16 * 1024);
       const year = num(body.year, YEAR_MIN, YEAR_MAX - 1);
+      // Move to Glint: Google Takeout zips go in their own folder instead.
+      const zipFolder = body.importZip === true && /\.zip$/i.test(String(body.name));
       const out = nest.startUpload(user, {
         parent: 'root',
-        path: `Photos/${year === null ? new Date().getFullYear() : Math.floor(year)}`,
+        path: zipFolder ? this.importer.folder : `Photos/${year === null ? new Date().getFullYear() : Math.floor(year)}`,
         name: body.name,
         size: body.size,
         type: body.type,
@@ -380,6 +387,21 @@ class Glint {
     if (method === 'DELETE' && (r = m(/^\/api\/glint\/uploads\/([\w-]+)$/))) {
       nest.cancelUpload(user, r[1]);
       return send(res, 200, { ok: true });
+    }
+
+    // Move to Glint (src/glint-import.js).
+    if (method === 'GET' && pathname === '/api/glint/import') {
+      return send(res, 200, this.importer.status(user));
+    }
+    if (method === 'POST' && pathname === '/api/glint/import/start') {
+      const body = await readJson(req, 1024);
+      return send(res, 200, this.importer.start(user, { deleteZips: body.deleteZips === true }));
+    }
+    if (method === 'POST' && pathname === '/api/glint/import/stop') {
+      return send(res, 200, this.importer.stop(user));
+    }
+    if (method === 'POST' && pathname === '/api/glint/import/delete-zips') {
+      return send(res, 200, await this.importer.deleteZips(user));
     }
 
     if (method === 'POST' && pathname === '/api/glint/trash') {
@@ -451,4 +473,4 @@ function photoItem(p) {
   };
 }
 
-module.exports = { Glint, PAGE, mediaType };
+module.exports = { Glint, PAGE, mediaType, MEDIA_EXT };
