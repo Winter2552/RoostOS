@@ -34,6 +34,7 @@ const { ActivityLog, clientIp, FILTERS } = require('./activity');
 const { HttpError, send, readJson, str } = require('./http');
 const { Nest, disposition } = require('./nest');
 const family = require('./family');
+const releases = require('./releases');
 const zip = require('./zip');
 const restore = require('./restore');
 const { Glint } = require('./glint');
@@ -50,6 +51,9 @@ const { Watcher, alertSettings, alertsOf } = require('./alerts');
 const { Push } = require('./push');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const RELEASES_DIR = path.join(__dirname, '..', 'releases');
+const RELEASES = releases.load(RELEASES_DIR);
+const APP_VERSION = RELEASES.length ? RELEASES[0].version : '0.1';
 const COOKIE = 'roost_session';
 // Remembers a device that passed two-step sign-in, so it isn't asked again for 30 days.
 const TRUST_COOKIE = 'roost_trust';
@@ -153,6 +157,8 @@ function publicUser(db, u) {
     ...(u.role === 'guest' ? { guestUntil: u.guestUntil } : {}),
     email: u.email || '',
     createdAt: u.createdAt,
+    // Releases this person has not seen yet, for the What's new sheet (guests just pass through).
+    whatsNew: u.role === 'guest' ? [] : releases.unseenFor(RELEASES, u),
     family: family.isMember(db, u),
     twoStep: {
       on: Boolean(u.twoStep),
@@ -260,6 +266,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   const activity = new ActivityLog(dataDir, { saveDelayMs: activitySaveDelayMs });
   const traffic = new TrafficMeter(dataDir);
   const assets = new Assets(PUBLIC_DIR);
+  const releaseImages = new Assets(path.join(RELEASES_DIR, 'img'));
   // Nest and Glint used to be outside apps with no link; they are built in now.
   let linked = false;
   for (const [id, url] of [['nest', '#/nest'], ['glint', '#/glint']]) {
@@ -916,6 +923,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         serverName: db().settings.serverName,
         setupRequired: db().users.length === 0,
         mailEnabled: mailReady(),
+        version: APP_VERSION,
         user: user ? publicUser(db(), user) : null,
       });
     },
@@ -2136,6 +2144,20 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 200, { result, devices: push.devicesOf(admin.id).map(pushDeviceView) });
     },
 
+    // What's new: every release this person can see, newest first.
+    'GET /api/releases': (req, res) => {
+      const user = requireUser(req);
+      send(res, 200, { current: APP_VERSION, releases: releases.visibleTo(RELEASES, user.role) });
+    },
+
+    // Closing the showcase (or opening the page) marks everything up to now as seen.
+    'POST /api/me/whats-new/seen': (req, res) => {
+      const user = requireUser(req);
+      user.seenVersion = APP_VERSION;
+      store.save();
+      send(res, 200, { user: publicUser(db(), user) });
+    },
+
     'GET /api/alerts': (req, res) => {
       requireAdmin(req);
       send(res, 200, alertView());
@@ -2764,6 +2786,9 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         await found[0](req, res, found[1]);
       } else if (pathname === '/manifest.webmanifest' && (req.method === 'GET' || req.method === 'HEAD')) {
         serveManifest(req, res);
+      } else if (pathname.startsWith('/releases/img/') && (req.method === 'GET' || req.method === 'HEAD')) {
+        // The showcase pictures; the name changes whenever the picture does, so they cache well.
+        if (!releaseImages.serve(req, res, pathname.slice('/releases/img'.length), searchParams.get('v'))) send(res, 404, { error: 'Not found' });
       } else if (req.method === 'GET' || req.method === 'HEAD') {
         if (!assets.serve(req, res, pathname, searchParams.get('v'))) send(res, 404, { error: 'Not found' });
       } else {

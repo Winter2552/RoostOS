@@ -706,6 +706,7 @@ async function enter(user) {
   if (!isGuest(user)) loadBackup();
   if (user.role === 'admin') loadAlerts();
   route();
+  window.whatsNewMaybe();
   if (user.role === 'admin' && !location.hash.startsWith('#/admin')) loadSetup();
 }
 
@@ -724,7 +725,7 @@ function renderUser() {
   $('#profile-form').email.value = u.email || '';
 }
 
-const VIEWS = ['apps', 'galaxies', 'nest', 'glint', 'status', 'profile', 'admin'];
+const VIEWS = ['apps', 'galaxies', 'nest', 'glint', 'status', 'whatsnew', 'profile', 'admin'];
 
 const hasNest = () => state.apps.some((a) => a.id === 'nest' && a.url === '#/nest');
 const hasGalaxies = () => state.apps.some((a) => a.id === 'nova' && a.url === '#/galaxies');
@@ -735,18 +736,19 @@ function route() {
   if (!state.user || needsSecureStep(state.user)) return;
   const [first, ...rest] = location.hash.replace(/^#\/?/, '').split('/');
   let view = first || 'apps';
-  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'status' && isGuest(state.user)) || (view === 'galaxies' && !hasGalaxies()) || (view === 'nest' && !hasNest()) || (view === 'glint' && !hasGlint())) view = 'apps';
+  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'status' && isGuest(state.user)) || (view === 'whatsnew' && isGuest(state.user)) || (view === 'galaxies' && !hasGalaxies()) || (view === 'nest' && !hasNest()) || (view === 'glint' && !hasGlint())) view = 'apps';
   for (const v of VIEWS) $(`#view-${v}`).classList.toggle('hidden', v !== view);
   document.querySelectorAll('#account-menu a').forEach((a) => {
     if (a.dataset.view === view) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   });
   document.querySelectorAll('#app-bar a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
-  $('#account-btn').classList.toggle('active', ['status', 'profile', 'admin'].includes(view));
+  $('#account-btn').classList.toggle('active', ['status', 'whatsnew', 'profile', 'admin'].includes(view));
   closeMenu(false);
   if (view === 'admin') { loadAdmin(); loadJellyfin(); }
   if (view === 'profile') { if (!isGuest(state.user)) loadStorage(); loadTwoStep(); loadDevices(); $('#backup-key-panel').classList.toggle('hidden', isGuest(state.user) || !hasGlint()); }
   if (view === 'status') { loadStatus(); loadUpdate(); }
+  if (view === 'whatsnew') { $('#wn-current').textContent = state.version ? `Roost v${state.version}` : ''; window.whatsNewPage(); }
   if (view === 'galaxies') renderGalaxyPage();
   if (view === 'nest') window.nestOpen(rest);
   if (view === 'glint') window.glintOpen(rest);
@@ -3635,6 +3637,7 @@ function bootText(t) {
   const s = await api('GET', '/api/state');
   setServerName(s.serverName);
   state.mailEnabled = s.mailEnabled;
+  state.version = s.version;
   // search.js, nest.js and glint.js load after this file. If the server answers
   // before they have run, the apps would hit a missing function and never draw
   // (until a refresh found the scripts cached). Wait for them first.

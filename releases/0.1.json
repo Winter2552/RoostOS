@@ -1,0 +1,13 @@
+{
+  "version": "0.1",
+  "date": "2026-10-16",
+  "title": "Move your Google Drive to Nest",
+  "summary": "The first Roost release, and it brings your files home.",
+  "items": [
+    {
+      "title": "Move to Nest",
+      "text": "Bring your whole Google Drive into Nest from the zips Google gives you. Folders and dates carry over, and files already in Nest are skipped.",
+      "image": "move-to-nest.png"
+    }
+  ]
+}

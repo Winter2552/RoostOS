@@ -12,6 +12,7 @@ WORKDIR /app
 COPY package.json ./
 COPY src ./src
 COPY public ./public
+COPY releases ./releases
 
 # Runs as root so it can write to a bind-mounted /data that ZimaOS creates as root.
 RUN mkdir -p /data
