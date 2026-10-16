@@ -405,6 +405,21 @@ const STEPS = [
     check: (ctx) => Boolean(ctx.admin.twoStep) && ctx.db.settings.adminsNeedTwoStep !== false,
   },
   {
+    id: 'public-links',
+    group: 'People',
+    title: 'Decide on public file links',
+    why: 'Anyone with a Nest link can open that one file without signing in. Links expire (7 days by default, 30 at most) and can have a password.',
+    how: [
+      'Under Admin → Server, tick or untick "Allow public file links". It is on by default.',
+      'Set up the public address and two-step sign-in first, since a link works from anywhere Roost can be reached.',
+      'People make a link in Nest: pick a file, then Get link.',
+    ],
+    action: { label: 'Open settings', view: 'admin', focus: 'settings-form' },
+    optional: true,
+    covers: ['publicLinks'],
+    check: (ctx) => Boolean(ctx.db.settings.publicUrl),
+  },
+  {
     id: 'invite',
     group: 'People',
     title: 'Invite someone',

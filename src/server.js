@@ -308,6 +308,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       user.storageUsage = { ...user.storageUsage, nest: bytes };
       store.saveSoon();
     },
+    // Public file links: the admin switch, the address links start with, and the activity log.
+    publicOn: () => db().settings.publicLinks !== false,
+    baseUrl: (req) => (db().settings.publicUrl || '').replace(/\/+$/, '') || `${secure(req) ? 'https' : 'http'}://${requestHost(req)}`,
+    isSecure: (req) => secure(req),
+    audit: (req, type, user, detail) => record(req, type, { actor: user.username, detail }),
   });
   // The backup drive, read-only: for browsing and restoring from backups.
   const backups = new restore.Backups(backupDir);
@@ -709,7 +714,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   function settingsView() {
     // The Cloudflare token (in tls) stays on the server.
     const { mail: _mail, jellyfin: _jellyfin, tls: _tls, coffee: _coffee, wireguard: _wireguard, galaxies: _galaxies, ...rest } = db().settings;
-    return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()) };
+    return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()), publicLinks: rest.publicLinks !== false };
   }
 
   // The admin's notice on the dashboard. Expired notices are simply not
@@ -2055,6 +2060,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         if (need !== adminsNeedTwoStep(db())) changes.push(need ? 'admins must use two-step' : 'admins may skip two-step');
         db().settings.adminsNeedTwoStep = need;
       }
+      if (body.publicLinks !== undefined) {
+        const on = body.publicLinks !== false;
+        if (on !== (db().settings.publicLinks !== false)) changes.push(on ? 'public file links on' : 'public file links off');
+        db().settings.publicLinks = on;
+      }
       if (body.mail !== undefined) {
         db().settings.mail = cleanMail(body.mail, mailSettings());
         changes.push(`email ${db().settings.mail ? `via ${db().settings.mail.host}` : 'turned off'}`);
@@ -2722,7 +2732,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // Which app a request counts against on the upload meter.
   function trafficApp(pathname) {
     if (pathname === JELLYFIN_PREFIX || pathname.startsWith(`${JELLYFIN_PREFIX}/`)) return 'jellyfin';
-    if (pathname.startsWith('/api/nest/')) return 'nest';
+    if (pathname.startsWith('/api/nest/') || pathname.startsWith('/s/')) return 'nest';
     return pathname.startsWith('/api/glint/') ? 'glint' : 'roost';
   }
 
@@ -2741,6 +2751,9 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         serveNova(req, res, pathname, new URL(req.url, 'http://roost').search);
       } else if (pathname === JELLYFIN_PREFIX || pathname.startsWith(`${JELLYFIN_PREFIX}/`)) {
         serveJellyfin(req, res, pathname);
+      } else if (pathname.startsWith('/s/')) {
+        // Public file links: the one place Nest answers without a sign-in.
+        await nest.publicHandle(req, res, pathname, clientIp(req, trustProxy));
       } else if (pathname.startsWith('/api/nest/')) {
         const user = requireUser(req);
         if (!visibleApps(db(), user).some((a) => a.id === 'nest')) throw new HttpError(403, 'You don’t have access to Nest');

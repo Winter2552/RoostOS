@@ -33,6 +33,7 @@
     folderPlus: '<path d="M3 6.5h6l2 2.2h10v10.3H3z"/><path d="M12 11.5v5M9.5 14h5"/>',
     chevron: '<path d="M9 6l6 6-6 6"/>',
     check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+    link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   };
 
   function ni(name, cls = '') {
@@ -520,6 +521,7 @@
     return [
       one && one.kind === 'folder' && { icon: 'folder', text: 'Open', run: () => { location.hash = folderUrl(one.id); } },
       { icon: 'download', text: one && one.kind === 'file' ? 'Download' : 'Download as zip', run: () => download(items) },
+      one && one.kind === 'file' && { icon: 'link', text: 'Get link', run: () => linkDialog(one) },
       one && { icon: 'edit', text: 'Rename', run: () => renameDialog(one) },
       { icon: 'move', text: 'Move to…', run: () => moveDialog(items) },
       files && { icon: 'copy', text: items.length > 1 ? 'Make copies' : 'Make a copy', run: () => copy(items) },
@@ -696,6 +698,54 @@
       await api('POST', sp('/api/nest/folders'), { parent: N.folderId, name });
       await load(N.items.length + 1);
     } catch (err) { toast(err.message); }
+  }
+
+  // Public link: anyone with it can open this one file, no sign-in.
+  async function linkDialog(it) {
+    const space = N.space;
+    const field = (label, control) => el('label', { class: 'field' }, el('span', { text: label }), control);
+    const days = el('select', { 'aria-label': 'Link lasts' }, ...[[1, '1 day'], [7, '7 days'], [30, '30 days']].map(([v, t]) => el('option', { value: v, text: t, selected: v === 7 })));
+    const pass = el('input', { type: 'text', placeholder: 'Optional', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', maxlength: 100, 'aria-label': 'Password' });
+    const made = el('div');
+    const existing = el('div', { class: 'muted' });
+    const close = () => dialog.close();
+    const fmt = (t) => new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+    async function showExisting() {
+      try {
+        const { shares, enabled } = await api('GET', sp(`/api/nest/shares?id=${encodeURIComponent(it.id)}`, space));
+        make.disabled = !enabled;
+        if (!enabled) made.replaceChildren(el('p', { class: 'muted', text: 'The admin has turned off public links.' }));
+        existing.replaceChildren(...shares.map((l) => el('div', { class: 'nlink-row' },
+          el('span', { text: `Until ${fmt(l.expires)}${l.password ? ' · password' : ''} · ${l.downloads} download${l.downloads === 1 ? '' : 's'}` }),
+          el('button', { type: 'button', class: 'link-btn', text: 'Stop sharing', onclick: async () => {
+            try { await api('DELETE', sp(`/api/nest/shares/${l.token}`, space)); await showExisting(); } catch (err) { toast(err.message); }
+          } }))));
+      } catch (err) { existing.textContent = err.message; }
+    }
+    const make = el('button', { type: 'button', class: 'btn small', text: 'Make link', onclick: async () => {
+      make.disabled = true;
+      try {
+        const { share } = await api('POST', sp('/api/nest/shares', space), { id: it.id, days: Number(days.value), password: pass.value });
+        const box = el('input', { type: 'text', readonly: true, value: share.url, 'aria-label': 'Link' });
+        made.replaceChildren(box, el('p', { class: 'muted', text: 'Anyone with this link can open the file.' }));
+        box.focus(); box.select();
+        make.textContent = 'Copy link';
+        make.disabled = false;
+        make.onclick = async () => {
+          box.select();
+          try { await navigator.clipboard.writeText(share.url); } catch { document.execCommand('copy'); }
+          toast('Link copied');
+        };
+        pass.value = '';
+        showExisting();
+      } catch (err) { make.disabled = false; toast(err.message); }
+    } });
+    showDialog(`Get link: ${it.name}`, [field('Lasts', days), field('Password', pass), made, existing], [
+      el('button', { type: 'button', class: 'btn ghost small', text: 'Done', onclick: close }),
+      make,
+    ]);
+    dialog.onclose = null;
+    showExisting();
   }
 
   async function renameDialog(it) {

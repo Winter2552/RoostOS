@@ -36,6 +36,8 @@ const KINDS = {
   'app-restarted': 'apps',
   'app-restart-failed': 'apps',
   'settings-changed': 'settings',
+  'share-created': 'storage',
+  'share-removed': 'storage',
   'notice-posted': 'settings',
   'notice-cleared': 'settings',
 };
