@@ -517,6 +517,10 @@ a.app-card:focus-visible {
   font-size: 12px;
 }
 
+/* The version in the footer opens What's new. */
+.foot-version { color: inherit; text-decoration: none; }
+.foot-version[href]:hover, .foot-version[href]:focus-visible { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+
 /* ---------- forms, panels ---------- */
 
 .panel { padding: 26px; margin-bottom: 32px; }
