@@ -460,6 +460,22 @@ const STEPS = [
     check: (ctx) => ctx.ticked.includes('google-photos'),
   },
   {
+    id: 'google-drive',
+    group: 'People',
+    title: 'Move your Google Drive to Nest',
+    why: 'Nest becomes the master copy of your files on your own drive, including files others shared with you.',
+    how: [
+      'On a PC, open takeout.google.com, choose Drive only and export as .zip. Google Docs, Sheets and Slides come as Word, Excel and PowerPoint files.',
+      'For files and folders shared with you (Takeout skips them), open Shared with me in Google Drive, right-click and choose Download, and keep those zips too.',
+      'In Nest open Move to Nest, add all the zips and press Move to Nest. Everything lands in a From Google Drive folder, shared items in Shared with me inside it.',
+      'Look through your files, then press Delete the zips to get the space back.',
+    ],
+    optional: true,
+    // Happens in Nest and on Google's site, so Roost can't see it; tick it off yourself.
+    manual: true,
+    check: (ctx) => ctx.ticked.includes('google-drive'),
+  },
+  {
     id: 'phone-alerts',
     group: 'People',
     title: 'Get alerts on your phone',

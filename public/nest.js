@@ -80,7 +80,7 @@
   const savePrefs = () => { try { localStorage.setItem('nest.prefs', JSON.stringify(prefs)); } catch { /* ignore */ } };
 
   const N = {
-    mode: 'drive', // or 'trash'
+    mode: 'drive', // or 'trash' or 'move' (Move to Nest)
     space: '', // '' is My Drive, 'family' the Family space
     folderId: 'root',
     folder: { id: 'root', name: 'My Drive' },
@@ -110,7 +110,7 @@
       location.hash = '#/nest';
       return;
     }
-    const mode = parts[0] === 'trash' ? 'trash' : 'drive';
+    const mode = parts[0] === 'trash' ? 'trash' : parts[0] === 'move' ? 'move' : 'drive';
     const folderId = mode === 'drive' && parts[0] === 'f' && parts[1] ? parts[1] : 'root';
     const same = mode === N.mode && folderId === N.folderId && space === N.space;
     N.mode = mode;
@@ -160,6 +160,9 @@
         const d = await api('GET', sp('/api/nest/trash'));
         if (t !== N.token) return;
         Object.assign(N, { items: d.items, more: false, total: d.items.length, storage: d.storage, days: d.days });
+      } else if (N.mode === 'move') {
+        await nestMove.fetchStatus();
+        Object.assign(N, { items: [], more: false, total: 0 });
       } else {
         let items = [];
         let d;
@@ -222,7 +225,8 @@
 
   function render() {
     const trash = N.mode === 'trash';
-    const place = trash ? 'trash' : N.space || 'drive';
+    const moving = N.mode === 'move';
+    const place = trash ? 'trash' : moving ? 'move' : N.space || 'drive';
     $('#nest-family-link').classList.toggle('hidden', !state.user.family);
     $('#nest-trash-link').href = `${base()}/trash`;
     document.querySelectorAll('.nest-places a').forEach((a) => {
@@ -230,8 +234,8 @@
       a.classList.toggle('active', on);
       if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
     });
-    $('#nest-new').classList.toggle('hidden', trash);
-    $('#nest-tools').classList.toggle('hidden', trash);
+    $('#nest-new').classList.toggle('hidden', trash || moving);
+    $('#nest-tools').classList.toggle('hidden', trash || moving);
     $('#nest-empty-trash').classList.toggle('hidden', !trash || !N.items.length);
     renderCrumbs();
     renderStorage();
@@ -241,6 +245,11 @@
 
   function renderCrumbs() {
     const c = $('#nest-crumbs');
+    if (N.mode === 'move') {
+      c.replaceChildren(el('h2', { text: 'Move to Nest' }));
+      document.title = `Move to Nest · ${state.serverName}`;
+      return;
+    }
     if (N.mode === 'trash') {
       // Members switch between their own trash and the family's from here.
       const other = N.space ? '' : 'family';
@@ -345,6 +354,13 @@
   }
 
   function renderList() {
+    if (N.mode === 'move') {
+      list.classList.remove('grid');
+      $('#nest-cols').classList.add('hidden');
+      nestMove.render();
+      nestMove.poll();
+      return;
+    }
     if (!N.items.length) {
       const msg = N.mode === 'trash'
         ? ['Trash is empty', `Items in the trash are deleted forever after ${N.days} days.`]
@@ -856,6 +872,7 @@
     if (--dragDepth <= 0) { dragDepth = 0; dropBox.classList.add('hidden'); clearHover(); }
   });
   view.addEventListener('dragover', (e) => {
+    if (N.mode === 'move' && hasFiles(e)) { e.preventDefault(); return; }
     if (N.mode !== 'drive') return;
     const t = dropTarget(e);
     if (dragIds) {
@@ -874,6 +891,7 @@
     }
   });
   view.addEventListener('drop', (e) => {
+    if (N.mode === 'move' && hasFiles(e)) { e.preventDefault(); queueZips([...e.dataTransfer.files]); return; }
     if (N.mode !== 'drive') return;
     e.preventDefault();
     dragDepth = 0;
@@ -913,6 +931,51 @@
     }
     for (const e of entries) await walk(e, '');
     return { files, dirs };
+  }
+
+  // ---------- Move to Nest (Google Drive) ----------
+  // The screen itself is shared with Glint's Move to Glint: public/move.js.
+
+  const MOVE_FOLDER = 'Move to Nest';
+  const nestMove = createMove({
+    el, bytes, coarse, toast,
+    noun: 'Nest',
+    call: (method, path, body) => api(method, sp(`/api/nest/import${path}`), body),
+    mount: () => list,
+    showing: () => N.mode === 'move' && !view.classList.contains('hidden'),
+    finished: () => { N.storage = null; },
+    intro: 'Move your Google Drive into Nest, on your own drive. Folders and dates carry over, and files already here are skipped.',
+    steps: [
+      ['Open ', el('a', { href: 'https://takeout.google.com/', target: '_blank', rel: 'noopener', text: 'takeout.google.com' }), ', choose Drive only, and export as .zip. Smaller zips (2 GB) keep downloads easy. Google Docs, Sheets and Slides come as Word, Excel and PowerPoint files.'],
+      'Files shared with you are not in Takeout. In Google Drive, open Shared with me, right-click a file or folder and choose Download, then add that zip too. It goes into a Shared with me folder.',
+      'Download the zips and add them here, then press Move to Nest. Everything lands in a From Google Drive folder. Keep the zips until you have looked through your files.',
+    ],
+    stats: (c) => [[c.moved, 'moved'], [c.dup, 'already here'], [c.problem, 'problems']],
+    doneText: 'Look through From Google Drive, then delete the zips to get the space back.',
+    addZips: () => pickZips(),
+    deleteZips: async (send) => {
+      const ok = await confirmBox({
+        title: 'Delete the zip files?',
+        text: 'Do this once you have looked through your files in Nest. The zips are deleted for good and the space comes back. Your files stay.',
+        ok: 'Delete the zips',
+        danger: true,
+      });
+      if (ok) send('/delete-zips');
+    },
+  });
+
+  function pickZips() {
+    const input = el('input', { type: 'file', accept: '.zip,application/zip', multiple: true, class: 'hidden' });
+    input.addEventListener('change', () => { queueZips([...input.files]); input.remove(); });
+    document.body.append(input);
+    input.click();
+  }
+
+  // The zips go up like any Nest upload, into the Move to Nest folder.
+  function queueZips(files) {
+    const zips = files.filter((f) => /\.zip$/i.test(f.name));
+    if (zips.length < files.length) toast('Only .zip files can be added here.');
+    if (zips.length) queueUploads(zips.map((file) => ({ file, path: MOVE_FOLDER })), 'root', rootName());
   }
 
   // ---------- uploads ----------
@@ -987,6 +1050,7 @@
   function finish(t) {
     t.state = 'done';
     t.sent = t.live = t.size;
+    if (t.path === MOVE_FOLDER) { if (N.mode === 'move') nestMove.refresh(); return; }
     if (N.mode === 'drive' && N.space === t.space) reloadSoon();
   }
 

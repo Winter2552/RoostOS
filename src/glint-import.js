@@ -35,8 +35,8 @@ const USAGE_EVERY = 25; // tell Roost the new storage use every this many photos
 const MEDIA_RE = new RegExp(`\\.(${MEDIA_EXT.join('|')})$`, 'i');
 const STILL_EXT = ['heic', 'HEIC', 'jpg', 'JPG', 'jpeg', 'JPEG'];
 
-const SCHEMA = `
-  CREATE TABLE IF NOT EXISTS import_items (
+const schema = (items, seen) => `
+  CREATE TABLE IF NOT EXISTS ${items} (
     owner TEXT NOT NULL,
     zip TEXT NOT NULL,
     entry TEXT NOT NULL,
@@ -44,7 +44,7 @@ const SCHEMA = `
     note TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (owner, zip, entry)
   );
-  CREATE TABLE IF NOT EXISTS import_seen (
+  CREATE TABLE IF NOT EXISTS ${seen} (
     owner TEXT NOT NULL,
     key TEXT NOT NULL,      -- "<size>:<crc>" of the file
     photo TEXT NOT NULL,
@@ -96,39 +96,41 @@ function unixMs(t) {
 }
 
 class Importer {
-  constructor({ glint, nest }) {
+  // folder: the Nest folder the zips are put in. items and seen: this move's tables
+  // (Move to Nest has its own, so the two never mix).
+  constructor({ glint, nest, folder = FOLDER, items = 'import_items', seen = 'import_seen' }) {
     this.glint = glint;
     this.nest = nest;
     this.db = nest.db;
-    this.db.exec(SCHEMA);
+    this.db.exec(schema(items, seen));
     const q = (sql) => this.db.prepare(sql);
     this.q = {
       stage: q(`SELECT id FROM nodes WHERE owner = ? AND parent = '' AND kind = 'folder' AND trash_root IS NULL
                 AND name = ? COLLATE NOCASE`),
       zips: q(`SELECT id, name, size FROM nodes WHERE owner = ? AND parent = ? AND kind = 'file' AND trash_root IS NULL
                AND lower(name) LIKE '%.zip' ORDER BY name COLLATE NOCASE`),
-      done: q('SELECT zip, entry FROM import_items WHERE owner = ?'),
-      record: q('INSERT OR REPLACE INTO import_items (owner, zip, entry, status, note) VALUES (?, ?, ?, ?, ?)'),
-      counts: q('SELECT zip, status, COUNT(*) AS n FROM import_items WHERE owner = ? GROUP BY zip, status'),
-      problems: q(`SELECT zip, entry, note FROM import_items WHERE owner = ? AND status = 'problem' ORDER BY rowid DESC LIMIT 100`),
-      zipProblems: q(`SELECT 1 FROM import_items WHERE owner = ? AND zip = ? AND status = 'problem' LIMIT 1`),
-      seen: q('SELECT photo FROM import_seen WHERE owner = ? AND key = ?'),
-      see: q('INSERT OR IGNORE INTO import_seen (owner, key, photo) VALUES (?, ?, ?)'),
+      done: q(`SELECT zip, entry FROM ${items} WHERE owner = ?`),
+      record: q(`INSERT OR REPLACE INTO ${items} (owner, zip, entry, status, note) VALUES (?, ?, ?, ?, ?)`),
+      counts: q(`SELECT zip, status, COUNT(*) AS n FROM ${items} WHERE owner = ? GROUP BY zip, status`),
+      problems: q(`SELECT zip, entry, note FROM ${items} WHERE owner = ? AND status = 'problem' ORDER BY rowid DESC LIMIT 100`),
+      zipProblems: q(`SELECT 1 FROM ${items} WHERE owner = ? AND zip = ? AND status = 'problem' LIMIT 1`),
+      seen: q(`SELECT photo FROM ${seen} WHERE owner = ? AND key = ?`),
+      see: q(`INSERT OR IGNORE INTO ${seen} (owner, key, photo) VALUES (?, ?, ?)`),
       same: q(`SELECT id FROM nodes WHERE owner = ? AND size = ? AND kind = 'file' AND trash_root IS NULL
                AND name = ? COLLATE NOCASE LIMIT 1`),
       photo: q('INSERT OR REPLACE INTO photos (id, owner, taken, fav, date_src) VALUES (?, ?, ?, ?, ?)'),
       albumByName: q('SELECT id FROM albums WHERE owner = ? AND name = ? COLLATE NOCASE LIMIT 1'),
     };
-    this.folder = FOLDER;
+    this.folder = folder;
     this.jobs = new Map(); // user id -> the move that is running or just ran
   }
 
   // ---------- the folder and its zips ----------
 
   stage(user, create = false) {
-    const row = this.q.stage.get(user.id, FOLDER);
+    const row = this.q.stage.get(user.id, this.folder);
     if (row) return row.id;
-    return create ? this.nest.ensurePath(user, '', FOLDER) : '';
+    return create ? this.nest.ensurePath(user, '', this.folder) : '';
   }
 
   zips(user) {
@@ -148,7 +150,7 @@ class Importer {
       byZip.set(r.zip, z);
     }
     return {
-      folder: FOLDER,
+      folder: this.folder,
       zips: this.zips(user).map((z) => ({ id: z.id, name: z.name, size: z.size, ...(byZip.get(z.name) || { done: 0, problems: 0 }) })),
       counts,
       problems: this.q.problems.all(user.id).map((p) => ({ zip: p.zip, name: p.entry.slice(p.entry.lastIndexOf('/') + 1), note: p.note })),
@@ -161,7 +163,7 @@ class Importer {
   start(user, { deleteZips = false } = {}) {
     const old = this.jobs.get(user.id);
     if (old && old.running) throw new HttpError(409, 'A move is already running');
-    if (!this.zips(user).length) throw new HttpError(400, `Put your Google Takeout zip files in the ${FOLDER} folder first`);
+    if (!this.zips(user).length) throw new HttpError(400, `Put your Google Takeout zip files in the ${this.folder} folder first`);
     const job = { running: true, stop: false, phase: 'reading', total: 0, done: 0, current: '', error: '', finished: false, deleteZips: Boolean(deleteZips) };
     this.jobs.set(user.id, job);
     this.run(user, job).catch((err) => {
@@ -391,4 +393,4 @@ class Importer {
   }
 }
 
-module.exports = { Importer, FOLDER, sidecarNames };
+module.exports = { Importer, FOLDER, sidecarNames, SIDECAR_MAX };
