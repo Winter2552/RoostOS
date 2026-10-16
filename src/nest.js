@@ -19,6 +19,7 @@ const { pipeline } = require('stream/promises');
 const { DatabaseSync } = require('node:sqlite');
 const { HttpError, send, readJson, str } = require('./http');
 const zip = require('./zip');
+const { hashPassword, verifyPassword, RateLimiter } = require('./auth');
 
 const CHUNK = 16 * 1024 * 1024; // upload piece size: small enough to retry cheaply
 const PAGE = 200; // items per folder page
@@ -27,6 +28,13 @@ const DAY = 24 * 60 * 60 * 1000;
 const UPLOAD_TTL = DAY; // unfinished uploads are dropped after a day
 const DISK_RESERVE = 1024 ** 3; // always leave 1 GB free on the drive
 const MAX_IDS = 1000;
+const MAX_LINKS = 200; // live public links per person
+const LINK_DAYS = 30; // the longest a public link may last (there is no "never")
+// Types a browser can show without running anything; the rest only download.
+const VIEWABLE = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp',
+  mp4: 'video/mp4', webm: 'video/webm', mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', ogg: 'audio/ogg',
+};
 
 const SORTS = { name: 'name COLLATE NOCASE', modified: 'modified', size: 'size' };
 
@@ -60,6 +68,16 @@ const SCHEMA = `
     created INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS uploads_owner ON uploads (owner);
+  CREATE TABLE IF NOT EXISTS shares (
+    token TEXT PRIMARY KEY,         -- the secret in the link
+    owner TEXT NOT NULL,
+    node TEXT NOT NULL,
+    created INTEGER NOT NULL,
+    expires INTEGER NOT NULL,
+    pass TEXT,                      -- scrypt hash when the link has a password
+    downloads INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS shares_node ON shares (owner, node);
 `;
 
 // Names that work on Linux, Windows and Mac alike, so files can later be
@@ -102,8 +120,16 @@ class Nest {
   // dir: where files go. dbFile: the SQLite file. users(id): look up a Roost
   // user. limitOf(user): { limitBytes, otherBytes } from Roost's storage limits.
   // onUsage(user, bytes): Nest's usage changed.
-  constructor({ dir, dbFile, users, limitOf, onUsage }) {
+  // Public links also take: publicOn() (the admin switch), baseUrl(req) (the
+  // address links start with) and audit(req, type, user, detail) (the activity log).
+  constructor({ dir, dbFile, users, limitOf, onUsage, publicOn, baseUrl, audit, isSecure }) {
     this.dir = dir;
+    this.publicOn = publicOn || (() => true);
+    this.baseUrl = baseUrl || ((req) => `http://${req.headers.host}`);
+    this.audit = audit || (() => {});
+    this.isSecure = isSecure || (() => false);
+    // Only failures count (a bad token or password), per visitor address.
+    this.guesses = new RateLimiter(20, 5 * 60 * 1000);
     this.users = users;
     this.limitOf = limitOf;
     this.onUsage = onUsage;
@@ -158,6 +184,13 @@ class Nest {
       setReceived: q('UPDATE uploads SET received = ? WHERE id = ?'),
       dropUpload: q('DELETE FROM uploads WHERE id = ?'),
       staleUploads: q('SELECT id, owner FROM uploads WHERE created < ?'),
+      addShare: q('INSERT INTO shares (token, owner, node, created, expires, pass) VALUES (?, ?, ?, ?, ?, ?)'),
+      shareCount: q('SELECT COUNT(*) AS n FROM shares WHERE owner = ? AND expires > ?'),
+      sharesOf: q('SELECT * FROM shares WHERE owner = ? AND node = ? AND expires > ? ORDER BY created DESC'),
+      dropShare: q('DELETE FROM shares WHERE token = ? AND owner = ?'),
+      share: q('SELECT * FROM shares WHERE token = ?'),
+      countShare: q('UPDATE shares SET downloads = downloads + 1 WHERE token = ?'),
+      pruneShares: q('DELETE FROM shares WHERE expires < ? OR node NOT IN (SELECT id FROM nodes)'),
     };
     this.pages = new Map();
     this.finds = new Map();
@@ -479,6 +512,7 @@ class Nest {
       await this.forget(user, id);
       touched.add(user);
     }
+    this.q.pruneShares.run(now);
     for (const { id, owner } of this.q.staleUploads.all(now - UPLOAD_TTL)) {
       const user = this.users(owner);
       if (user) await fsp.rm(this.uploadPath(user, id), { force: true });
@@ -646,6 +680,118 @@ class Nest {
     }
   }
 
+  // ---------- public links ----------
+
+  // A link opens one file for anyone who has it, no sign-in. It stops when it
+  // expires, is removed, or the file goes to the trash or is deleted.
+  createShare(user, id, { days, password } = {}) {
+    if (!this.publicOn()) throw new HttpError(403, 'The admin has turned off public links');
+    const n = this.node(user, id, 'file');
+    const now = Date.now();
+    if (this.q.shareCount.get(user.id, now).n >= MAX_LINKS) throw new HttpError(400, 'Too many links; remove some first');
+    const d = Math.min(LINK_DAYS, Math.max(1, Math.floor(Number(days)) || 7));
+    const pass = typeof password === 'string' && password ? password.slice(0, 100) : '';
+    if (pass && pass.length < 4) throw new HttpError(400, 'Use at least 4 characters for the password');
+    const token = crypto.randomBytes(24).toString('base64url');
+    this.q.addShare.run(token, user.id, n.id, now, now + d * DAY, pass ? hashPassword(pass) : null);
+    return this.shareView({ token, expires: now + d * DAY, pass, downloads: 0, created: now });
+  }
+
+  shareView(s, req) {
+    return {
+      token: s.token,
+      url: req ? `${this.baseUrl(req)}/s/${s.token}` : undefined,
+      expires: s.expires,
+      password: Boolean(s.pass),
+      downloads: s.downloads,
+      created: s.created,
+    };
+  }
+
+  listShares(user, id, req) {
+    this.node(user, id, 'file');
+    return this.q.sharesOf.all(user.id, id, Date.now()).map((s) => this.shareView(s, req));
+  }
+
+  removeShare(user, token) {
+    this.q.dropShare.run(token, user.id);
+  }
+
+  // The link's file if the link still works, else null.
+  liveShare(token) {
+    const s = /^[\w-]{20,64}$/.test(token) ? this.q.share.get(token) : null;
+    if (!s || s.expires <= Date.now()) return null;
+    const n = this.q.get.get(s.node, s.owner);
+    const owner = this.users(s.owner);
+    if (!n || n.kind !== 'file' || n.trash_root != null || !owner) return null;
+    return { s, n, owner };
+  }
+
+  // What a visitor's cookie must hold after they type a link's password.
+  unlockValue(s) {
+    return crypto.createHash('sha256').update(`${s.pass}:${s.token}`).digest('hex');
+  }
+
+  unlocked(req, s) {
+    if (!s.pass) return true;
+    const m = new RegExp(`(?:^|; )rs_${s.token.slice(0, 12)}=([0-9a-f]{64})`).exec(req.headers.cookie || '');
+    const want = Buffer.from(this.unlockValue(s));
+    return Boolean(m) && crypto.timingSafeEqual(Buffer.from(m[1]), want);
+  }
+
+  // The pages and files behind /s/<token>. `ip` is the visitor's address.
+  async publicHandle(req, res, pathname, ip) {
+    const gone = (code, text) => {
+      this.guesses.fail(ip);
+      return page(res, code, 'Link not available', `<p class="muted">${text}</p>`);
+    };
+    if (!this.publicOn()) return page(res, 404, 'Links are off', '<p class="muted">Public links are turned off on this Roost.</p>');
+    if (!this.guesses.allow(ip)) return page(res, 429, 'Slow down', '<p class="muted">Too many tries. Wait a few minutes.</p>');
+    const r = /^\/s\/([\w-]+)(?:\/(file|view))?$/.exec(pathname);
+    if (!r || !['GET', 'HEAD', 'POST'].includes(req.method)) throw new HttpError(404, 'Not found');
+    const live = this.liveShare(r[1]);
+    if (!live) return gone(404, 'This link has expired, was removed, or never existed.');
+    const { s, n, owner } = live;
+    const base = `/s/${s.token}`;
+    const ext = path.extname(n.name).slice(1).toLowerCase();
+    const viewType = VIEWABLE[ext] || '';
+
+    if (req.method === 'POST' && !r[2]) {
+      let body = '';
+      for await (const chunk of req) {
+        body += chunk;
+        if (body.length > 4096) throw new HttpError(413, 'Body too large');
+      }
+      const given = new URLSearchParams(body).get('password') || '';
+      if (!s.pass || !verifyPassword(given, s.pass)) {
+        this.guesses.fail(ip);
+        return page(res, 401, n.name, passwordForm(base, 'That password isn’t right.'));
+      }
+      res.writeHead(303, {
+        Location: base,
+        'Set-Cookie': `rs_${s.token.slice(0, 12)}=${this.unlockValue(s)}; Path=${base}; Max-Age=21600; HttpOnly; SameSite=Lax${this.isSecure(req) ? '; Secure' : ''}`,
+        'Cache-Control': 'no-store',
+      });
+      return res.end();
+    }
+    if (req.method === 'POST') throw new HttpError(405, 'Method not allowed');
+
+    if (!this.unlocked(req, s)) return page(res, 401, n.name, passwordForm(base, ''));
+
+    if (r[2]) {
+      if (r[2] === 'view' && !viewType) throw new HttpError(404, 'Not found');
+      if (!req.headers.range && req.method === 'GET') this.q.countShare.run(s.token);
+      return this.download(owner, n.id, req, res, r[2] === 'view' ? { inline: viewType } : {});
+    }
+    const shown = viewType.startsWith('image/') ? `<img src="${base}/view" alt="">`
+      : viewType.startsWith('video/') ? `<video src="${base}/view" controls playsinline preload="metadata"></video>`
+      : viewType.startsWith('audio/') ? `<audio src="${base}/view" controls preload="none"></audio>` : '';
+    const left = Math.max(1, Math.ceil((s.expires - Date.now()) / DAY));
+    return page(res, 200, n.name, `${shown}
+      <p class="muted">${gbText(n.size)} · link works for ${left} more day${left === 1 ? '' : 's'}</p>
+      <p><a class="btn" href="${base}/file" download>Download</a></p>`, { media: Boolean(shown) });
+  }
+
   // ---------- HTTP ----------
 
   async handle(req, res, user, pathname, params) {
@@ -717,6 +863,20 @@ class Nest {
       const ids = idList(String(params.get('ids') || '').split(',').filter(Boolean));
       return this.downloadZip(user, ids, res);
     }
+    if (method === 'POST' && pathname === '/api/nest/shares') {
+      const body = await readJson(req);
+      const link = this.createShare(user, body.id, body);
+      this.audit(req, 'share-created', user, this.q.get.get(body.id, user.id).name);
+      return send(res, 201, { share: { ...link, url: `${this.baseUrl(req)}/s/${link.token}` } });
+    }
+    if (method === 'GET' && pathname === '/api/nest/shares') {
+      return send(res, 200, { shares: this.listShares(user, params.get('id'), req), enabled: this.publicOn() });
+    }
+    if (method === 'DELETE' && (r = m(/^\/api\/nest\/shares\/([\w-]+)$/))) {
+      this.removeShare(user, r[1]);
+      this.audit(req, 'share-removed', user, '');
+      return send(res, 200, { ok: true });
+    }
     if (method === 'POST' && pathname === '/api/nest/uploads') {
       const body = await readJson(req, 16 * 1024);
       return send(res, 201, this.startUpload(user, body));
@@ -733,6 +893,34 @@ class Nest {
     }
     throw new HttpError(404, 'Not found');
   }
+}
+
+const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function passwordForm(base, error) {
+  return `<p class="muted">This file needs a password.</p>${error ? `<p class="err">${esc(error)}</p>` : ''}
+    <form method="post" action="${base}"><input type="password" name="password" aria-label="Password" autocomplete="off" autofocus required>
+    <button class="btn" type="submit">Open</button></form>`;
+}
+
+// The small page a link opens: plain black and white, no scripts.
+function page(res, status, title, body, { media = false } = {}) {
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex"><title>${esc(title)}</title><style>
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:#000;color:#fff;font:16px system-ui,sans-serif}
+main{width:min(92vw,560px);padding:24px 0;text-align:center}h1{font-size:20px;word-break:break-word}
+img,video{max-width:100%;max-height:60vh;border-radius:8px}.muted{color:#999}.err{color:#f66}
+.btn{display:inline-block;background:#fff;color:#000;border:0;border-radius:8px;padding:12px 22px;font:inherit;text-decoration:none;cursor:pointer}
+input{padding:12px;border-radius:8px;border:1px solid #444;background:#111;color:#fff;font:inherit;margin-right:8px;max-width:60%}
+</style></head><body><main><h1>${esc(title)}</h1>${body}</main></body></html>`;
+  res.writeHead(status, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Referrer-Policy': 'no-referrer',
+    'X-Robots-Tag': 'noindex',
+    'Content-Security-Policy': `default-src 'none'; style-src 'unsafe-inline'; form-action 'self'${media ? "; img-src 'self'; media-src 'self'" : ''}`,
+  });
+  res.end(html);
 }
 
 function gbText(bytes) {

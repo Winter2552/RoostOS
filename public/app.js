@@ -2295,6 +2295,7 @@ async function loadAdmin() {
     api('GET', '/api/admin/users'), api('GET', '/api/apps'), api('GET', '/api/admin/storage-requests'), api('GET', '/api/admin/invites'),
     api('GET', '/api/admin/settings'), api('GET', '/api/admin/family')]);
   $('#settings-form').adminsNeedTwoStep.checked = settings.adminsNeedTwoStep;
+  $('#settings-form').publicLinks.checked = settings.publicLinks;
   if (state.notice && !$('#notice-form').text.value) { $('#notice-form').text.value = state.notice.text; previewNotice(); }
   renderMailSettings(settings);
   state.users = users;
@@ -2742,6 +2743,7 @@ $('#settings-form').addEventListener('submit', async (e) => {
       serverName: e.target.serverName.value,
       defaultLimitGb: pickers.default.getValue(),
       adminsNeedTwoStep: e.target.adminsNeedTwoStep.checked,
+      publicLinks: e.target.publicLinks.checked,
       publicUrl: e.target.publicUrl.value,
     });
     setServerName(settings.serverName);
