@@ -1533,8 +1533,34 @@ a.app-card:active { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--shad
 .wn-item .wn-img { height: auto; border: 2px solid var(--line); border-radius: 14px; }
 .wn-item p { margin: 4px 0 0; color: var(--muted); line-height: 1.5; }
 
+/* Motion: the picture rises in and its shadow grows, then the words follow one by one. */
+.wn-slide .wn-shot { opacity: 0; transform: translateY(28px) scale(0.96); box-shadow: 0 0 0 var(--shadow); }
+.wn-slide .wn-copy > * { opacity: 0; transform: translateY(14px); }
+.wn-slide.on .wn-shot { animation: wn-rise 0.55s 0.12s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+.wn-slide.on .wn-copy > * { animation: wn-up 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+.wn-slide.on .wn-copy > :nth-child(1) { animation-delay: 0.35s; }
+.wn-slide.on .wn-copy > :nth-child(2) { animation-delay: 0.43s; }
+.wn-slide.on .wn-copy > :nth-child(3) { animation-delay: 0.51s; }
+@keyframes wn-rise { to { opacity: 1; transform: none; box-shadow: 5px 5px 0 var(--shadow); } }
+@keyframes wn-up { to { opacity: 1; transform: none; } }
+.wn-dots span { transition: width 0.25s ease, background 0.25s ease; }
+.wn-dots span.on { width: 22px; border-radius: 8px; }
+.wn-foot .btn:active { transform: translate(3px, 3px); box-shadow: 1px 1px 0 rgba(242, 239, 233, 0.35); }
+.wn-release { animation: wn-up-in 0.45s both cubic-bezier(0.2, 0.8, 0.2, 1); }
+.wn-release:nth-child(2) { animation-delay: 0.08s; }
+.wn-release:nth-child(3) { animation-delay: 0.16s; }
+@keyframes wn-up-in { from { opacity: 0; transform: translateY(14px); } }
+.wn-dot { animation: wn-pulse 1.6s 0.6s ease-out 2; }
+@keyframes wn-pulse { 0% { box-shadow: 0 0 0 0 rgba(242, 239, 233, 0.6); } 100% { box-shadow: 0 0 0 10px rgba(242, 239, 233, 0); } }
+
 @media (max-width: 600px) {
   .wn-copy h2 { font-size: 28px; }
   .wn-shot { max-height: 44vh; }
 }
-@media (prefers-reduced-motion: reduce) { .wn-sheet { animation: none; } .wn-track { transition: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .wn-sheet, .wn-release, .wn-dot { animation: none; }
+  .wn-track, .wn-dots span { transition: none; }
+  .wn-slide .wn-shot { opacity: 1; transform: none; box-shadow: 5px 5px 0 var(--shadow); }
+  .wn-slide .wn-copy > * { opacity: 1; transform: none; }
+  .wn-slide.on .wn-shot, .wn-slide.on .wn-copy > * { animation: none; }
+}

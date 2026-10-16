@@ -61,7 +61,7 @@
     function go(i) {
       at = Math.max(0, Math.min(slides.length - 1, i));
       track.style.transform = `translateX(${-100 * at}%)`;
-      [...track.children].forEach((n, j) => n.setAttribute('aria-hidden', j === at ? 'false' : 'true'));
+      [...track.children].forEach((n, j) => { n.setAttribute('aria-hidden', j === at ? 'false' : 'true'); n.classList.toggle('on', j === at); });
       [...pager.children].forEach((n, j) => n.classList.toggle('on', j === at));
       pager.classList.toggle('hidden', slides.length < 2);
       next.textContent = at === slides.length - 1 ? 'Done' : 'Next';
