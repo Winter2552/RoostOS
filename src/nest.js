@@ -36,6 +36,18 @@ const VIEWABLE = {
   mp4: 'video/mp4', webm: 'video/webm', mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', ogg: 'audio/ogg',
 };
 
+// What the viewer can show in the page: a type a browser runs without scripts.
+// Text is always sent as plain text, so a .html file shows its source.
+const TEXT_EXT = ['txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'log', 'xml', 'yml', 'yaml', 'ini', 'conf', 'toml',
+  'js', 'mjs', 'ts', 'css', 'html', 'htm', 'py', 'sh', 'bat', 'java', 'c', 'h', 'cpp', 'go', 'rs', 'php', 'rb', 'sql'];
+function viewOf(name) {
+  const ext = path.extname(name).slice(1).toLowerCase();
+  if (VIEWABLE[ext]) return { kind: VIEWABLE[ext].split('/')[0], type: VIEWABLE[ext] };
+  if (ext === 'pdf') return { kind: 'pdf', type: 'application/pdf' };
+  if (TEXT_EXT.includes(ext)) return { kind: 'text', type: 'text/plain; charset=utf-8' };
+  return null;
+}
+
 const SORTS = { name: 'name COLLATE NOCASE', modified: 'modified', size: 'size' };
 
 const SCHEMA = `
@@ -78,6 +90,14 @@ const SCHEMA = `
     downloads INTEGER NOT NULL DEFAULT 0
   );
   CREATE INDEX IF NOT EXISTS shares_node ON shares (owner, node);
+  CREATE TABLE IF NOT EXISTS node_info (
+    id TEXT PRIMARY KEY,            -- the file it describes
+    owner TEXT NOT NULL,
+    data TEXT NOT NULL              -- JSON kept from Google's info file (src/file-info.js)
+  );
+  CREATE TRIGGER IF NOT EXISTS node_info_gone AFTER DELETE ON nodes BEGIN
+    DELETE FROM node_info WHERE id = OLD.id;
+  END;
 `;
 
 // Names that work on Linux, Windows and Mac alike, so files can later be
@@ -173,6 +193,10 @@ class Nest {
       restore: q('UPDATE nodes SET trash_root = NULL WHERE trash_root = ?'),
       restoreRoot: q('UPDATE nodes SET trashed = NULL, parent = ?, name = ? WHERE id = ?'),
       forget: q('DELETE FROM nodes WHERE trash_root = ?'),
+      setInfo: q('INSERT OR REPLACE INTO node_info (id, owner, data) VALUES (?, ?, ?)'),
+      keepInfo: q('INSERT OR IGNORE INTO node_info (id, owner, data) VALUES (?, ?, ?)'),
+      info: q('SELECT data FROM node_info WHERE id = ? AND owner = ?'),
+      copyInfo: q('INSERT OR REPLACE INTO node_info (id, owner, data) SELECT ?, owner, data FROM node_info WHERE id = ?'),
       trashList: q('SELECT * FROM nodes WHERE owner = ? AND trashed IS NOT NULL ORDER BY trashed DESC'),
       expired: q('SELECT id, owner FROM nodes WHERE trashed IS NOT NULL AND trashed < ?'),
       usage: q('SELECT COALESCE(SUM(size), 0) AS n FROM nodes WHERE owner = ?'),
@@ -433,6 +457,7 @@ class Nest {
         this.db.prepare('DELETE FROM nodes WHERE id = ?').run(id);
         throw err;
       }
+      this.q.copyInfo.run(id, f.id);
       out.push(item(this.q.get.get(id, user.id)));
     }
     this.changed(user);
@@ -601,11 +626,34 @@ class Nest {
     this.q.dropUpload.run(id);
   }
 
+  // ---------- file info ----------
+
+  // data: details from src/file-info.js. Only fills a file that has none yet,
+  // unless replace is set.
+  setInfo(user, id, data, replace = false) {
+    (replace ? this.q.setInfo : this.q.keepInfo).run(id, user.id, JSON.stringify(data));
+  }
+
+  // What Info shows: the basics every item has, plus Google's details if kept.
+  info(user, id) {
+    const n = this.node(user, id);
+    const row = this.q.info.get(n.id, user.id);
+    let google = null;
+    try { google = row ? JSON.parse(row.data) : null; } catch { /* unreadable: show the basics only */ }
+    const where = this.q.chain.all(n.id).slice(0, -1).map((c) => c.name);
+    return {
+      id: n.id, name: n.name, kind: n.kind, size: n.size, mime: n.mime,
+      created: n.created, modified: n.modified,
+      where: [user.id === 'family' ? 'Family' : 'My Drive', ...where],
+      google,
+    };
+  }
+
   // ---------- downloads ----------
 
   // inline: a photo or video type to show in the page instead of downloading
   // (Glint passes it only for types a browser can't run as a page).
-  async download(user, id, req, res, { inline = '' } = {}) {
+  async download(user, id, req, res, { inline = '', csp = '' } = {}) {
     const n = this.node(user, id, 'file');
     const file = this.diskPath(user, n.id);
     let stat;
@@ -625,7 +673,8 @@ class Nest {
       ETag: etag,
       'Last-Modified': new Date(stat.mtimeMs).toUTCString(),
     };
-    if (inline) headers['Content-Security-Policy'] = "default-src 'none'; sandbox";
+    if (inline) headers['Content-Security-Policy'] = csp || "default-src 'none'; sandbox";
+    if (csp) headers['X-Frame-Options'] = 'SAMEORIGIN'; // lets Nest's viewer show a PDF in a frame
     if (req.headers['if-none-match'] === etag) {
       res.writeHead(304, headers);
       return res.end();
@@ -837,6 +886,10 @@ class Nest {
     if (method === 'POST' && pathname === '/api/nest/import/stop') {
       return send(res, 200, this.importer.stop(user));
     }
+    if (method === 'POST' && pathname === '/api/nest/import/tidy') {
+      const body = await readJson(req);
+      return send(res, 200, { tidy: await this.importer.tidy(user, body.apply === true) });
+    }
     if (method === 'POST' && pathname === '/api/nest/import/delete-zips') {
       return send(res, 200, await this.importer.deleteZips(user));
     }
@@ -857,7 +910,16 @@ class Nest {
       return send(res, 200, { deleted: await this.deleteForever(user, ids), storage: this.storage(user) });
     }
     if ((method === 'GET' || method === 'HEAD') && (r = m(/^\/api\/nest\/files\/([\w-]+)$/))) {
+      if (params.get('view') === '1') {
+        const n = this.node(user, r[1], 'file');
+        const v = viewOf(n.name);
+        if (!v) throw new HttpError(404, 'This kind of file can’t be shown here');
+        return this.download(user, n.id, req, res, { inline: v.type, csp: v.kind === 'pdf' ? "default-src 'none'; frame-ancestors 'self'" : '' });
+      }
       return this.download(user, r[1], req, res);
+    }
+    if (method === 'GET' && (r = m(/^\/api\/nest\/items\/([\w-]+)\/info$/))) {
+      return send(res, 200, { info: this.info(user, r[1]) });
     }
     if (method === 'GET' && pathname === '/api/nest/zip') {
       const ids = idList(String(params.get('ids') || '').split(',').filter(Boolean));

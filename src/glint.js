@@ -336,6 +336,9 @@ class Glint {
         storage: nest.storage(user),
       });
     }
+    if (method === 'GET' && (r = m(/^\/api\/glint\/info\/([\w-]+)$/))) {
+      return send(res, 200, { info: nest.info(user, this.photo(user, r[1]).id) });
+    }
     if ((method === 'GET' || method === 'HEAD') && (r = m(/^\/api\/glint\/thumbs\/([\w-]+)$/))) {
       return this.sendThumb(user, r[1], req, res);
     }
