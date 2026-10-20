@@ -16,6 +16,7 @@
 //   noun                      -> 'Glint' or 'Nest': the button says "Move to <noun>"
 //   deleteZips()              -> asks, then deletes (the app owns its dialog)
 //   addZips()                 -> opens the file picker
+//   extra(running)            -> optional element shown below everything else
 window.createMove = function createMove(o) {
   const { el, bytes, coarse } = o;
   const M = { status: null, deleteEach: false, timer: null };
@@ -105,6 +106,7 @@ window.createMove = function createMove(o) {
         el('span', { class: 'muted', text: o.doneText }),
         el('button', { type: 'button', class: 'btn ghost small', text: 'Delete the zips', onclick: () => o.deleteZips((path) => send(path)) })));
     }
+    if (o.extra) out.push(o.extra(running));
     body.replaceChildren(el('div', { class: 'gmove' }, ...out.filter(Boolean)));
   }
 

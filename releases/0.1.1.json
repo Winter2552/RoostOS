@@ -1,0 +1,18 @@
+{
+  "version": "0.1.1",
+  "date": "2026-10-20",
+  "title": "Open and inspect your files",
+  "summary": "Open files right in Nest, and see everything Google kept about each one.",
+  "items": [
+    {
+      "title": "Open files in Nest",
+      "text": "Click a picture, video, song, PDF or text file in Nest and it opens right in the page, like Google Drive. Use the arrow keys or swipe to move to the next file.",
+      "image": "nest-viewer.png"
+    },
+    {
+      "title": "Info on every file",
+      "text": "Press i (or choose Info) to see a file's details, including what Google kept when you moved it: who owned it, who it was shared with, the dates, and the original link. The loose .json files are tidied away.",
+      "image": "file-info.png"
+    }
+  ]
+}
