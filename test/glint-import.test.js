@@ -199,3 +199,23 @@ test('delete the zips frees their space; a full limit stops the move with a mess
   await finished(mia);
   assert.equal((await call('GET', '/api/glint/photos', null, mia)).body.total, before + 1);
 });
+
+test('a photo keeps what Google knew about it, for Info', async () => {
+  await putZip(mia, 'takeout-004.zip', makeZip([
+    { name: `${G}Photos from 2018/beach.jpg`, data: 'beach photo bytes' },
+    { name: `${G}Photos from 2018/beach.jpg.supplemental-metadata.json`, data: meta(2018, 8, 1, {
+      title: 'beach.jpg', description: 'On the beach', geoData: { latitude: 50.1, longitude: -5.2 }, people: [{ name: 'Sam' }],
+    }) },
+  ]));
+  await call('POST', '/api/glint/import/start', {}, mia);
+  await finished(mia);
+  const photos = (await call('GET', '/api/glint/photos', null, mia)).body.items;
+  const beach = photos.find((p) => p.name === 'beach.jpg');
+  const got = await call('GET', `/api/glint/info/${beach.id}`, null, mia);
+  assert.equal(got.status, 200, JSON.stringify([got.body, beach]));
+  const { info } = got.body;
+  assert.equal(info.google.source, 'photos');
+  assert.equal(info.google.description, 'On the beach');
+  assert.equal(info.google.lat, 50.1);
+  assert.deepEqual(info.google.people, ['Sam']);
+});

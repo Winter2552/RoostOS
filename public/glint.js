@@ -22,6 +22,7 @@
     trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
     restore: '<path d="M4 12a8 8 0 1 0 2.5-5.8M4 4v4h4"/>',
     close: '<path d="M6 6l12 12M18 6L6 18"/>',
+    info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.8v.4"/>',
     check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
     left: '<path d="M15 6l-6 6 6 6"/>',
     right: '<path d="M9 6l6 6-6 6"/>',
@@ -660,6 +661,7 @@
 
   function closeViewer() {
     if (!V.open) return;
+    fileInfo.close();
     V.open = false;
     V.root.classList.add('hidden');
     V.stage.replaceChildren();
@@ -680,6 +682,7 @@
         el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Close', onclick: closeViewer }, gi('close')),
         V.title,
         V.fav,
+        el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Info', onclick: showInfo }, gi('info')),
         el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Add to album', onclick: () => albumPicker([G.items[V.i]]) }, gi('album')),
         el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Download', onclick: () => download([G.items[V.i]]) }, gi('download')),
         el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Delete', onclick: deleteCurrent }, gi('trash'))),
@@ -690,6 +693,7 @@
       if (e.key === 'Escape') closeViewer();
       else if (e.key === 'ArrowLeft') step(-1);
       else if (e.key === 'ArrowRight') step(1);
+      else if (e.key === 'i' || e.key === 'I') showInfo();
       else if (e.key === 'Tab') { e.preventDefault(); } // keep focus on the viewer itself
     });
     // Swipe sideways to change photo, down to close.
@@ -740,6 +744,11 @@
     }
     V.i += d;
     showPhoto();
+  }
+
+  function showInfo() {
+    const p = G.items[V.i];
+    if (p) fileInfo.open(p.id, G.space, 'glint');
   }
 
   async function favouriteCurrent() {

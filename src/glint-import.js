@@ -25,6 +25,7 @@ const { HttpError } = require('./http');
 const { openZip } = require('./zip-read');
 const { cleanName } = require('./nest');
 const { mediaType, MEDIA_EXT } = require('./glint');
+const { parseSidecar } = require('./file-info');
 
 const FOLDER = 'Move to Glint';
 const SIDECAR_MAX = 1024 * 1024;
@@ -361,7 +362,9 @@ class Importer {
         this.q.see.run(user.id, key, existing);
       }
     }
+    const info = meta ? parseSidecar(meta) : null; // what Info shows for this photo
     if (existing) {
+      if (info) nest.setInfo(user, existing, info);
       this.addToAlbum(user, existing, folder, yearNames, albumIds, touched);
       return { status: 'dup' };
     }
@@ -386,6 +389,7 @@ class Importer {
     }
     const id = newId();
     nest.q.insert.run(id, user.id, parent, name, 'file', entry.size, mediaType({ mime: '', name }) || 'application/octet-stream', Date.now(), taken);
+    if (info) nest.setInfo(user, id, info);
     this.q.photo.run(id, user.id, taken, meta && meta.favorited === true ? 1 : 0, dated ? 1 : 0);
     this.q.see.run(user.id, key, id);
     this.addToAlbum(user, id, folder, yearNames, albumIds, touched);

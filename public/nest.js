@@ -28,6 +28,10 @@
     trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
     restore: '<path d="M4 12a8 8 0 1 0 2.5-5.8M4 4v4h4"/>',
     close: '<path d="M6 6l12 12M18 6L6 18"/>',
+    info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.8v.4"/>',
+    left: '<path d="M15 6l-6 6 6 6"/>',
+    right: '<path d="M9 6l6 6-6 6"/>',
+    open: '<path d="M14 4h6v6M20 4l-8 8M18 14v5H5V6h5"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
     upload: '<path d="M12 20V9M7 14l5-5 5 5M5 4h14"/>',
     folderPlus: '<path d="M3 6.5h6l2 2.2h10v10.3H3z"/><path d="M12 11.5v5M9.5 14h5"/>',
@@ -488,19 +492,25 @@
   });
 
   function activate(it, rowEl) {
-    if (N.mode === 'trash' || (it.kind === 'file' && coarse.matches)) {
+    if (N.mode === 'trash' || (it.kind === 'file' && coarse.matches && !viewKind(it.name))) {
       openMenu(actionsFor([it]), rowEl.querySelector('.nmore'), it.name);
     } else if (it.kind === 'folder') {
       location.hash = folderUrl(it.id);
+    } else if (viewKind(it.name)) {
+      openViewer(it);
     } else {
       download([it]);
     }
   }
 
   document.addEventListener('keydown', (e) => {
-    if (view.classList.contains('hidden') || dialog.open || !menu.classList.contains('hidden')) return;
+    if (view.classList.contains('hidden') || dialog.open || NV.open || fileInfo.isOpen || !menu.classList.contains('hidden')) return;
     if (e.target.closest('input, select, textarea')) return;
     const items = selected();
+    if ((e.key === 'i' || e.key === 'I') && items.length === 1 && N.mode === 'drive' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      fileInfo.open(items[0].id, N.space);
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
       e.preventDefault();
       N.sel = new Set(N.items.map((i) => i.id));
@@ -536,6 +546,8 @@
     const files = items.every((i) => i.kind === 'file');
     return [
       one && one.kind === 'folder' && { icon: 'folder', text: 'Open', run: () => { location.hash = folderUrl(one.id); } },
+      one && one.kind === 'file' && viewKind(one.name) && { icon: 'open', text: 'Open', run: () => openViewer(one) },
+      one && { icon: 'info', text: 'Info', run: () => fileInfo.open(one.id, N.space) },
       { icon: 'download', text: one && one.kind === 'file' ? 'Download' : 'Download as zip', run: () => download(items) },
       one && one.kind === 'file' && { icon: 'link', text: 'Get link', run: () => linkDialog(one) },
       one && { icon: 'edit', text: 'Rename', run: () => renameDialog(one) },
@@ -983,6 +995,131 @@
     return { files, dirs };
   }
 
+  // ---------- viewer ----------
+  // Opens a file in the page, like Google Drive: pictures, video, audio, PDFs
+  // and text. Arrow keys (or a swipe) move through the viewable files in the
+  // folder. Anything else offers the download and Info.
+
+  const VIEW_EXT = {
+    image: /\.(jpe?g|png|gif|webp)$/i,
+    video: /\.(mp4|webm)$/i,
+    audio: /\.(mp3|m4a|wav|ogg)$/i,
+    pdf: /\.pdf$/i,
+    text: /\.(txt|md|markdown|csv|tsv|json|log|xml|ya?ml|ini|conf|toml|m?js|ts|css|html?|py|sh|bat|java|c|h|cpp|go|rs|php|rb|sql)$/i,
+  };
+  const TEXT_CAP = 512 * 1024;
+  const viewKind = (name) => Object.keys(VIEW_EXT).find((k) => VIEW_EXT[k].test(name)) || '';
+  const NV = { open: false, list: [], i: 0, root: null, touch: null, token: 0 };
+  const viewUrl = (it) => sp(`/api/nest/files/${it.id}?view=1`);
+
+  function openViewer(it) {
+    if (N.mode !== 'drive') return;
+    NV.list = N.items.filter((x) => x.kind === 'file' && viewKind(x.name));
+    NV.i = Math.max(0, NV.list.findIndex((x) => x.id === it.id));
+    if (!NV.list.length) return;
+    if (!NV.root) buildViewer();
+    NV.open = true;
+    document.body.classList.add('gview-open');
+    NV.root.classList.remove('hidden');
+    showFile();
+    NV.root.focus();
+  }
+
+  function closeViewer() {
+    if (!NV.open) return;
+    NV.open = false;
+    NV.token++;
+    fileInfo.close();
+    NV.root.classList.add('hidden');
+    NV.stage.replaceChildren();
+    document.body.classList.remove('gview-open');
+  }
+
+  function buildViewer() {
+    NV.stage = el('div', { class: 'gview-stage' });
+    NV.title = el('div', { class: 'gview-title' });
+    NV.prev = el('button', { type: 'button', class: 'gview-nav prev', 'aria-label': 'Previous', onclick: () => stepFile(-1) }, ni('left'));
+    NV.next = el('button', { type: 'button', class: 'gview-nav next', 'aria-label': 'Next', onclick: () => stepFile(1) }, ni('right'));
+    NV.root = el('div', { class: 'gview nview hidden', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'File viewer', tabindex: '-1' },
+      el('div', { class: 'gview-bar' },
+        el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Close', onclick: closeViewer }, ni('close')),
+        NV.title,
+        el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Info', onclick: () => fileInfo.open(NV.list[NV.i].id, N.space) }, ni('info')),
+        el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Download', onclick: () => download([NV.list[NV.i]]) }, ni('download'))),
+      NV.stage, NV.prev, NV.next);
+    document.body.append(NV.root);
+    NV.root.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeViewer();
+      else if (e.key === 'ArrowLeft') stepFile(-1);
+      else if (e.key === 'ArrowRight') stepFile(1);
+      else if (e.key === 'i' || e.key === 'I') fileInfo.open(NV.list[NV.i].id, N.space);
+      else if (e.key === 'Tab') e.preventDefault(); // keep focus on the viewer itself
+    });
+    NV.stage.addEventListener('touchstart', (e) => {
+      NV.touch = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+    }, { passive: true });
+    NV.stage.addEventListener('touchend', (e) => {
+      if (!NV.touch) return;
+      const dx = e.changedTouches[0].clientX - NV.touch.x;
+      const dy = e.changedTouches[0].clientY - NV.touch.y;
+      NV.touch = null;
+      if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) stepFile(dx < 0 ? 1 : -1);
+      else if (dy > 90 && dy > Math.abs(dx) * 1.5) closeViewer();
+    }, { passive: true });
+    NV.stage.addEventListener('click', (e) => { if (e.target === NV.stage) closeViewer(); });
+  }
+
+  addEventListener('hashchange', closeViewer);
+
+  function stepFile(d) {
+    const j = NV.i + d;
+    if (j < 0 || j >= NV.list.length) return;
+    NV.i = j;
+    showFile();
+  }
+
+  function cantShow(it, text) {
+    return el('div', { class: 'gview-fail' }, el('b', { text }),
+      el('button', { type: 'button', class: 'btn small', text: 'Download it', onclick: () => download([it]) }));
+  }
+
+  async function showFile() {
+    const it = NV.list[NV.i];
+    const kind = viewKind(it.name);
+    const mine = ++NV.token;
+    NV.title.replaceChildren(el('b', { text: it.name }), el('span', { class: 'mono muted', text: `${bytes(it.size)} · ${NV.i + 1} of ${NV.list.length}` }));
+    NV.prev.classList.toggle('hidden', NV.i === 0);
+    NV.next.classList.toggle('hidden', NV.i >= NV.list.length - 1);
+    let node;
+    if (kind === 'image') {
+      node = el('img', { src: viewUrl(it), alt: it.name, class: 'gview-media', draggable: 'false' });
+    } else if (kind === 'video') {
+      node = el('video', { src: viewUrl(it), controls: true, autoplay: true, playsinline: true, preload: 'metadata', class: 'gview-media' });
+    } else if (kind === 'audio') {
+      node = el('div', { class: 'nview-audio' }, ni('audio'), el('audio', { src: viewUrl(it), controls: true, autoplay: true, preload: 'metadata' }));
+    } else if (kind === 'pdf') {
+      node = el('iframe', { src: viewUrl(it), title: it.name, class: 'nview-pdf' });
+    } else {
+      NV.stage.replaceChildren(el('div', { class: 'gview-fail muted', text: 'Loading…' }));
+      try {
+        const res = await fetch(viewUrl(it), { headers: { Range: `bytes=0-${TEXT_CAP - 1}` } });
+        if (!res.ok && res.status !== 206) throw new Error();
+        const txt = await res.text();
+        if (mine !== NV.token) return;
+        node = el('div', { class: 'nview-text' },
+          el('pre', { text: txt }),
+          it.size > TEXT_CAP ? el('p', { class: 'mono muted', text: `Showing the first ${bytes(TEXT_CAP)}. Download for the rest.` }) : null);
+      } catch {
+        if (mine === NV.token) NV.stage.replaceChildren(cantShow(it, 'This file couldn’t be opened'));
+        return;
+      }
+    }
+    // A format this browser can't show offers the download instead.
+    node.addEventListener('error', () => NV.stage.replaceChildren(cantShow(it, 'This browser can’t show this file')), true);
+    NV.stage.replaceChildren(node);
+    if (fileInfo.isOpen) fileInfo.open(it.id, N.space); // the panel follows the file
+  }
+
   // ---------- Move to Nest (Google Drive) ----------
   // The screen itself is shared with Glint's Move to Glint: public/move.js.
 
@@ -1003,6 +1140,7 @@
     stats: (c) => [[c.moved, 'moved'], [c.dup, 'already here'], [c.problem, 'problems']],
     doneText: 'Look through From Google Drive, then delete the zips to get the space back.',
     addZips: () => pickZips(),
+    extra: () => tidyBox(),
     deleteZips: async (send) => {
       const ok = await confirmBox({
         title: 'Delete the zip files?',
@@ -1013,6 +1151,39 @@
       if (ok) send('/delete-zips');
     },
   });
+
+  // Info files that earlier moves left beside their files: keep the details in
+  // each file's Info and move the .json files to the trash. Check first, then do it.
+  const tidy = { busy: false, found: null, left: 0, tidied: null };
+
+  async function tidyRun(apply) {
+    tidy.busy = true;
+    nestMove.render();
+    try {
+      const { tidy: r } = await api('POST', sp('/api/nest/import/tidy'), { apply });
+      tidy.left = r.left;
+      if (apply) { tidy.tidied = r.tidied; tidy.found = null; N.storage = null; } else { tidy.found = r.found; tidy.tidied = null; }
+    } catch (err) { toast(err.message); }
+    tidy.busy = false;
+    nestMove.render();
+  }
+
+  function tidyBox() {
+    const note = (text) => el('p', { class: 'muted', text });
+    const out = [el('b', { text: 'Google info files' })];
+    if (tidy.tidied !== null) {
+      out.push(note(`Done. ${tidy.tidied.toLocaleString()} info file${tidy.tidied === 1 ? '' : 's'} moved to the trash, where you can restore them for 30 days. Their details are in each file’s Info.`));
+    } else if (tidy.found === null) {
+      out.push(note('Earlier moves may have left .json info files beside your files. Roost can keep their details in each file’s Info and move them to the trash. A .json with no matching file always stays where it is.'));
+      out.push(el('button', { type: 'button', class: 'btn ghost small', text: tidy.busy ? 'Checking…' : 'Check my files', disabled: tidy.busy, onclick: () => tidyRun(false) }));
+    } else if (!tidy.found) {
+      out.push(note(tidy.left ? `Nothing to tidy. ${tidy.left.toLocaleString()} other .json file${tidy.left === 1 ? ' stays' : 's stay'} as they are.` : 'Nothing to tidy.'));
+    } else {
+      out.push(note(`Found ${tidy.found.toLocaleString()} info file${tidy.found === 1 ? '' : 's'} that match files in Nest.${tidy.left ? ` ${tidy.left.toLocaleString()} other .json file${tidy.left === 1 ? ' stays' : 's stay'} as they are.` : ''}`));
+      out.push(el('button', { type: 'button', class: 'btn small', text: tidy.busy ? 'Working…' : 'Merge and move to trash', disabled: tidy.busy, onclick: () => tidyRun(true) }));
+    }
+    return el('div', { class: 'gmove-tidy' }, ...out);
+  }
 
   function pickZips() {
     const input = el('input', { type: 'file', accept: '.zip,application/zip', multiple: true, class: 'hidden' });
