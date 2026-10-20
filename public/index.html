@@ -404,17 +404,17 @@
         <div class="msg" role="status"></div>
       </div>
       <div class="card panel member-only hidden" id="backup-key-panel">
-        <h3>Back up an iPhone</h3><span class="mono muted">New photos go to Glint on their own, through a Shortcut</span>
+        <h3>Back up an iPhone</h3><span class="mono muted">Send photos you pick to Glint with a Share Sheet shortcut</span>
         <details class="how">
           <summary>How to set it up</summary>
           <ol>
-            <li>Press Make a backup key below, and keep the address and key somewhere the Shortcut can read them.</li>
-            <li>On the iPhone open Shortcuts → Automation → New Automation → Wi-Fi, pick your home network and choose Run Immediately.</li>
-            <li>Add Find Photos (sorted by Date Added, newest first, limit 50), then Repeat with Each.</li>
-            <li>Inside: make Text <code>[Date Taken as ISO]|[File Size]</code>, then Get Contents of URL <code>GET address/api/backup/have?id=[that text]</code> with header <code>Authorization: Bearer key</code>.</li>
-            <li>If <code>have</code> is no: Get Contents of URL <code>PUT address/api/backup/file?id=[text]&amp;name=[Name]&amp;taken=[Date Taken as ISO]</code>, same header, Request Body File = the photo.</li>
+            <li>Press Make a backup key below, and keep the address and key handy.</li>
+            <li>On the iPhone open Shortcuts, press + to make a new shortcut and name it Back up to Roost. Open its details and turn on Show in Share Sheet, accepting Images and Media.</li>
+            <li>Add Repeat with Each over Shortcut Input. Inside it, add Text <code>[Repeat Item Name]|[File Size]</code>, then Get Contents of URL <code>GET address/api/backup/have?id=[that text]</code> with header <code>Authorization: Bearer key</code>.</li>
+            <li>Add If <code>have</code> is no: Get Contents of URL <code>PUT address/api/backup/file?id=[text]&amp;name=[Repeat Item Name]</code>, same header, Request Body File = Repeat Item.</li>
+            <li>To back up: in Photos select the photos, press Share and choose Back up to Roost.</li>
           </ol>
-          <p class="muted">Needs the phone at home on Wi-Fi. iOS decides when it may run, and may stop it on long videos, so check Glint after the first run.</p>
+          <p class="muted">This is by hand, but one tap for as many photos as you pick. iPhone Shortcuts can't reliably back up new photos on their own, so for that use an Android phone or Glint's + button.</p>
         </details>
         <div class="row"><button class="btn" type="button" id="make-backup-key">Make a backup key</button></div>
         <div class="hidden" id="backup-key-out">
