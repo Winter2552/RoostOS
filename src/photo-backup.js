@@ -117,16 +117,22 @@ class PhotoBackup {
     }
     const size = Number(req.headers['content-length']);
     if (!Number.isSafeInteger(size) || size < 0) throw new HttpError(411, 'Send the file size (Content-Length)');
-    const device = cleanName(str(params.get('device'), 60)) || 'Phone';
-    const start = this.nest.startUpload(user, {
-      name: params.get('name'),
+    return this.storeStream(user, {
+      id,
       size,
+      device: params.get('device'),
+      name: params.get('name'),
       type: params.get('type'),
       path: this.folderFor(takenMs(params.get('taken'))),
-    });
+    }, req[Symbol.asyncIterator]());
+  }
+
+  // Stores `size` bytes pulled from `source` (an async iterator of Buffers) as
+  // one photo and remembers it under `id`. Nest takes it piece by piece.
+  async storeStream(user, { id, size, device, name, type, path }, source) {
+    const start = this.nest.startUpload(user, { name, size, type, path });
     let last = start.done ? { done: true, item: start.item } : null;
     if (!last) {
-      const source = req[Symbol.asyncIterator]();
       let rest = null;
       let offset = 0;
       try {
@@ -160,7 +166,7 @@ class PhotoBackup {
         throw err;
       }
     }
-    this.q.addSent.run(user.id, id, last.item.id, device, last.item.size, Date.now());
+    this.q.addSent.run(user.id, id, last.item.id, cleanName(str(device, 60)) || 'Phone', last.item.size, Date.now());
     return { done: true, item: last.item };
   }
 
@@ -224,4 +230,4 @@ class PhotoBackup {
   }
 }
 
-module.exports = { PhotoBackup };
+module.exports = { PhotoBackup, takenMs };

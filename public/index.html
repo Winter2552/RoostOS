@@ -404,9 +404,19 @@
         <div class="msg" role="status"></div>
       </div>
       <div class="card panel member-only hidden" id="backup-key-panel">
-        <h3>Back up an iPhone</h3><span class="mono muted">Send photos you pick to Glint with a Share Sheet shortcut</span>
+        <h3>Back up an iPhone</h3><span class="mono muted">Send new photos to Glint on their own with the free Immich app</span>
         <details class="how">
           <summary>How to set it up</summary>
+          <ol>
+            <li>Press Make a backup key below.</li>
+            <li>On the iPhone install Immich from the App Store (free). Enter the Roost address as the server URL and press Next.</li>
+            <li>Sign in with the email and key shown below (the key goes in the password box).</li>
+            <li>Open Immich's Backup tab, choose the albums to back up (Recents for everything), and turn backup on. Allow photo access, notifications and Background App Refresh when it asks.</li>
+          </ol>
+          <p class="muted">Photos arrive in Glint under Photos by year and are never sent twice. Do the first backup on home Wi-Fi with the screen on; after that iOS runs it in the background when it can.</p>
+        </details>
+        <details class="how">
+          <summary>Without Immich: a Share Sheet shortcut</summary>
           <ol>
             <li>Press Make a backup key below, and keep the address and key handy.</li>
             <li>On the iPhone open Shortcuts, press + to make a new shortcut and name it Back up to Roost. Open its details and turn on Show in Share Sheet, accepting Images and Media.</li>
@@ -419,6 +429,7 @@
         <div class="row"><button class="btn" type="button" id="make-backup-key">Make a backup key</button></div>
         <div class="hidden" id="backup-key-out">
           <label class="field"><span>Roost address</span><input type="text" id="backup-key-address" readonly spellcheck="false"></label>
+          <label class="field"><span>Email (for Immich)</span><input type="text" id="backup-key-email" readonly spellcheck="false"></label>
           <label class="field"><span>Backup key (shown once; make a new one if you lose it)</span><input type="text" id="backup-key-value" readonly spellcheck="false"></label>
           <div class="row"><button class="btn ghost small" type="button" id="copy-backup-key">Copy key</button></div>
         </div>
