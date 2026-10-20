@@ -450,7 +450,7 @@ const STEPS = [
     why: 'New photos and videos go to your own drive on their own, so losing a phone doesn\'t lose them.',
     how: [
       'Android: on GitHub open Actions → "Android app" → the latest run, download roost-backup-apk, unzip it and open app-debug.apk on the phone (allow installing from that source). Open Roost Backup, enter Roost\'s address, sign in, allow photo access. It then sends new photos about hourly on Wi-Fi.',
-      'iPhone: on Profile open Back up an iPhone, press Make a backup key and follow the Shortcut steps there.',
+      'iPhone: on Profile open Back up an iPhone, press Make a backup key and follow the steps to make a Share Sheet shortcut. In Photos you then select photos and share them to it (it is one tap, but not automatic).',
       'Either way, do the first backup at home on Wi-Fi: videos pass over the home connection, and an outside address that goes through Cloudflare\'s free plan stops uploads over 100 MB.',
       'You can always tap + in Glint to send photos by hand.',
     ],

@@ -149,7 +149,7 @@ Glint is Roost's own photo library, built on Nest's storage. Open it from **Phot
   GET  /api/backup/status                                                          → { "photos", "bytes", "last" }
   Authorization: Bearer <device key>
   ```
-  An iPhone Shortcut can only make one web request per photo, so it uses the shorter pair `GET /api/backup/have?id=<id>` and `PUT /api/backup/file?id=<id>&name=<name>&type=<type>&taken=<ms or ISO date>` (the whole file as the body). Its key comes from **Profile → Back up an iPhone → Make a backup key** (`POST /api/me/backup-key`), and shows in Signed-in devices where it can be signed out. The steps are on that Profile card; they need trying on a real iPhone.
+  An iPhone Shortcut can only make one web request per photo, so it uses the shorter pair `GET /api/backup/have?id=<id>` and `PUT /api/backup/file?id=<id>&name=<name>&type=<type>&taken=<ms or ISO date>` (the whole file as the body). Its key comes from **Profile → Back up an iPhone → Make a backup key** (`POST /api/me/backup-key`), and shows in Signed-in devices where it can be signed out. The steps are on that Profile card: a Share Sheet shortcut you run on photos you pick in Photos (iPhone Shortcuts has no dependable way to find new photos on its own); they need trying on a real iPhone.
 - **Not included**: face or object recognition.
 
 Files can only be served as a photo or video type a browser can show, with scripts switched off, so an uploaded web page can't run inside Roost.
