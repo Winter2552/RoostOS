@@ -29,7 +29,7 @@ const { openZip } = require('./zip-read');
 const { cleanName } = require('./nest');
 const { mediaType } = require('./glint');
 const { Importer } = require('./glint-import');
-const { parseBytes, driveInfoNames, SIDECAR_MAX } = require('./file-info');
+const { parseBytes, driveInfoNames, CONVERTED, infoStem, convertedHint, SIDECAR_MAX } = require('./file-info');
 
 const FOLDER = 'Move to Nest';
 const DEST = 'From Google Drive';
@@ -52,8 +52,11 @@ class NestImporter extends Importer {
     // Tidy up: the .json files under From Google Drive, a file beside one, and a file by Drive title and size.
     this.q.jsonIn = this.db.prepare(`${inDest} SELECT * FROM nodes WHERE owner = ?2 AND kind = 'file' AND trash_root IS NULL
                                      AND lower(name) LIKE '%.json' AND parent IN (SELECT id FROM d) ORDER BY id`);
-    this.q.beside = this.db.prepare(`SELECT id FROM nodes WHERE owner = ? AND parent = ? AND kind = 'file' AND trash_root IS NULL
-                                     AND name = ? COLLATE NOCASE AND id != ?`);
+    // A file (first) or folder with this name beside it, then Word/Excel/PowerPoint files that were Google Docs, Sheets or Slides.
+    this.q.beside = this.db.prepare(`SELECT id, kind FROM nodes WHERE owner = ? AND parent = ? AND trash_root IS NULL
+                                     AND name = ? COLLATE NOCASE AND id != ? ORDER BY kind = 'folder'`);
+    this.q.converted = this.db.prepare(`SELECT id, name FROM nodes WHERE owner = ?1 AND parent = ?2 AND kind = 'file' AND trash_root IS NULL
+                                        AND name IN (?3 || '.docx', ?3 || '.xlsx', ?3 || '.pptx') COLLATE NOCASE`);
     this.q.byTitle = this.db.prepare(`${inDest} SELECT id FROM nodes WHERE owner = ?2 AND kind = 'file' AND trash_root IS NULL
                                       AND name = ?3 COLLATE NOCASE AND size = ?4 AND parent IN (SELECT id FROM d) LIMIT 2`);
     this.q.sameAt = this.db.prepare(`SELECT id FROM nodes WHERE owner = ? AND parent = ? AND kind = 'file' AND trash_root IS NULL
@@ -68,6 +71,7 @@ class NestImporter extends Importer {
     const mains = []; // every file that isn't JSON, done or not: sidecars are matched to these
     const jsons = new Map(); // destination folder -> Map(lower-case name -> JSON file)
     const jsonItems = [];
+    const folders = new Set(); // "<destination folder>\0<folder name>" of every folder a file sits in
     let sinceUsage = 0;
 
     try {
@@ -101,6 +105,7 @@ class NestImporter extends Importer {
           }
           if (!file || JUNK.test(file)) continue;
           const it = { z, entry, dir: [...root, ...parts].join('/'), file, done: done.has(`${z.name}\0${entry.name}`) };
+          for (let k = 0; k < parts.length; k++) folders.add(`${[...root, ...parts.slice(0, k)].join('/')}\0${parts[k].toLowerCase()}`);
           if (/\.json$/i.test(file)) {
             if (!jsons.has(it.dir)) jsons.set(it.dir, new Map());
             jsons.get(it.dir).set(file.toLowerCase(), it);
@@ -110,7 +115,7 @@ class NestImporter extends Importer {
           }
         }
       }
-      await this.matchSidecars(mains, jsons, jsonItems);
+      const folderInfos = await this.matchSidecars(mains, jsons, jsonItems, folders);
       for (const it of [...mains, ...jsonItems]) {
         if (!it.done && !it.claimed) files.push(it);
       }
@@ -139,6 +144,10 @@ class NestImporter extends Importer {
         if (item.side && item.side.z !== item.z) item.side.z.refs--;
         if (job.deleteZips) await this.maybeDelete(user, open, item.z, item.side && item.side.z);
       }
+      // Folders' own info (owner, sharing, dates) goes on the folder.
+      if (!job.stop) {
+        for (const f of folderInfos) nest.setInfo(user, nest.ensurePath(user, '', `${f.dir}/${f.name}`), f.meta);
+      }
     } finally {
       nest.changed(user);
       for (const z of open) await z.zip.close().catch(() => {});
@@ -162,8 +171,16 @@ class NestImporter extends Importer {
       let main = null;
       if (meta && meta.source === 'drive') {
         const m = /^(.+?)(-info)?\.json$/i.exec(j.name);
-        const hit = m && this.q.beside.get(user.id, j.parent, m[1], j.id);
+        // The name in the JSON's own name, then Drive's title (Takeout swaps some characters in file names).
+        const names = [...new Set([m && m[1], meta.title, cleanName(meta.title)].filter(Boolean))];
+        const hit = names.map((n) => this.q.beside.get(user.id, j.parent, n, j.id)).find(Boolean);
+        let pick = null;
+        if (!hit && infoStem(j.name)) {
+          const conv = names.flatMap((n) => this.q.converted.all(user.id, j.parent, n));
+          pick = conv.length === 1 ? conv[0] : conv.find((c) => c.name.toLowerCase().endsWith(`.${convertedHint(meta.mime)}`));
+        }
         if (hit) main = hit.id;
+        else if (pick) main = pick.id;
         else if (meta.title && meta.size !== undefined && /-info\.json$/i.test(j.name)) {
           const found = this.q.byTitle.all(dest.id, user.id, meta.title, meta.size);
           if (found.length === 1) main = found[0].id;
@@ -192,7 +209,7 @@ class NestImporter extends Importer {
   // Pairs each main file with its info JSON (item.side, item.meta) and marks the
   // JSON claimed. Only a JSON that has a main file and reads as a Google info
   // file is claimed; every other JSON is left to be copied like any file.
-  async matchSidecars(mains, jsons, jsonItems) {
+  async matchSidecars(mains, jsons, jsonItems, folders = new Set()) {
     const claim = (main, side, meta) => {
       side.claimed = true;
       main.side = side;
@@ -208,11 +225,31 @@ class NestImporter extends Importer {
         if (meta && meta.source === 'drive') { claim(main, side, meta); break; }
       }
     }
+    // Google Docs, Sheets and Slides: "Budget-info.json" for "Budget.xlsx". Only when
+    // one Word/Excel/PowerPoint file fits (or Drive's own type says which).
+    // A folder's info file ("Assets-info.json" for the folder Assets) goes on the folder.
+    const folderInfos = [];
+    for (const side of jsonItems) {
+      const stem = !side.claimed && infoStem(side.file);
+      if (!stem) continue;
+      const meta = await this.readSidecar(side);
+      if (!meta || meta.source !== 'drive') continue;
+      const tries = [...new Set([stem, meta.title].filter(Boolean).map((n) => n.toLowerCase()))];
+      const names = mains.filter((m) => m.dir === side.dir && tries.some((t) => CONVERTED.some((e) => m.file.toLowerCase() === `${t}.${e}`)));
+      const main = names.length === 1 ? names[0] : names.find((m) => m.file.toLowerCase().endsWith(`.${convertedHint(meta.mime)}`));
+      if (main && !main.side) { claim(main, side, meta); continue; }
+      const beside = mains.some((m) => m.dir === side.dir && tries.includes(m.file.toLowerCase()));
+      const folder = tries.find((t) => folders.has(`${side.dir}\0${t}`));
+      if (!names.length && !beside && folder) {
+        side.claimed = true;
+        folderInfos.push({ dir: side.dir, name: folder, meta });
+      }
+    }
     // A sidecar that sits apart from its file (another folder or zip): match on
     // Drive's own title and size, and only when that is unambiguous.
     const loose = mains.filter((m) => !m.side);
     const spare = jsonItems.filter((j) => !j.claimed && /-info\.json$/i.test(j.file));
-    if (!loose.length || !spare.length) return;
+    if (!loose.length || !spare.length) return folderInfos;
     const byTitle = new Map();
     for (const side of spare) {
       const meta = await this.readSidecar(side);
@@ -224,6 +261,7 @@ class NestImporter extends Importer {
       const hit = byTitle.get(`${main.file}\0${main.entry.size}`);
       if (hit && !hit.side.claimed) claim(main, hit.side, hit.meta);
     }
+    return folderInfos;
   }
 
   async readSidecar(side) {

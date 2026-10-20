@@ -1391,6 +1391,7 @@ body.gview-open { overflow: hidden; }
 .gview-nav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; background: rgba(10, 10, 10, 0.55); }
 .gview-nav.prev { left: 10px; }
 .gview-nav.next { right: 10px; }
+.gview-fail .ni svg { width: 56px; height: 56px; }
 .gview-fail { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 24px; text-align: center; }
 @media (hover: hover) {
   .gtile:hover .gtile-tick { opacity: 1; }

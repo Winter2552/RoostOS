@@ -207,3 +207,48 @@ test('the viewer serves pictures, PDFs and text in the page, and nothing else', 
   const plain = await fetch(`${base}/api/nest/files/${files.find((f) => f.name === 'a.txt').id}`, { headers: { Cookie: mia } });
   assert.equal(plain.headers.get('content-type'), 'application/octet-stream', 'a normal download is unchanged');
 });
+
+test('Google Docs, Sheets and Slides and folders have info files without the extension', async () => {
+  const gdoc = (title, mime) => driveInfo(title, 0, { mime_type: mime });
+  await putZip(mia, 'takeout-2.zip', makeZip([
+    { name: `${T}Work/Budget.xlsx`, data: 'sheet' },
+    { name: `${T}Work/Budget-info.json`, data: gdoc('Budget', 'application/vnd.google-apps.spreadsheet') },
+    { name: `${T}Work/Plan.docx`, data: 'doc' },
+    { name: `${T}Work/Plan-info.json`, data: gdoc('Plan', 'application/vnd.google-apps.document') },
+    { name: `${T}Work/Both.docx`, data: 'doc2' },
+    { name: `${T}Work/Both.xlsx`, data: 'sheet2' },
+    { name: `${T}Work/Both-info.json`, data: gdoc('Both', 'application/vnd.google-apps.spreadsheet') },
+    { name: `${T}Work/Assets/logo.txt`, data: 'logo' },
+    { name: `${T}Work/Assets-info.json`, data: gdoc('Assets', 'application/vnd.google-apps.folder') },
+    { name: `${T}Work/Ann's Flowers/list.txt`, data: 'roses' },
+    { name: `${T}Work/Ann_s Flowers-info.json`, data: gdoc("Ann's Flowers", 'application/vnd.google-apps.folder') },
+    { name: `${T}Work/Plain-info.json`, data: driveInfo('Plain', 1) },
+  ]));
+  await call('POST', '/api/nest/import/start', {}, mia);
+  await finished(mia);
+  const work = await listing(mia, 'From Google Drive', 'Work');
+  assert.deepEqual(work.map((i) => i.name).sort(), ['Ann\'s Flowers', 'Assets', 'Both.docx', 'Both.xlsx', 'Budget.xlsx', 'Plain-info.json', 'Plan.docx']);
+  const by = (n) => work.find((i) => i.name === n);
+  assert.equal((await info(mia, by('Budget.xlsx').id)).body.info.google.driveId, 'id-Budget');
+  assert.equal((await info(mia, by('Plan.docx').id)).body.info.google.driveId, 'id-Plan');
+  assert.equal((await info(mia, by('Both.xlsx').id)).body.info.google.driveId, 'id-Both', 'Drive\'s own type picks the spreadsheet');
+  assert.equal((await info(mia, by('Both.docx').id)).body.info.google, null);
+  assert.equal((await info(mia, by('Assets').id)).body.info.google.driveId, 'id-Assets', 'a folder keeps its own info');
+  assert.equal((await info(mia, by('Ann\'s Flowers').id)).body.info.google.driveId, 'id-Ann\'s Flowers', 'matched by Drive title when the file name differs');
+});
+
+test('tidy up also handles Docs, Sheets, Slides and folders', async () => {
+  const dir = 'From Google Drive/Older';
+  await putFile(mia, dir, 'Deck.pptx', Buffer.from('deck'));
+  await putFile(mia, dir, 'Deck-info.json', Buffer.from(driveInfo('Deck', 0, { mime_type: 'application/vnd.google-apps.presentation' })));
+  await putFile(mia, `${dir}/Photos`, 'a.txt', Buffer.from('a'));
+  await putFile(mia, dir, 'Photos-info.json', Buffer.from(driveInfo('Photos', 0, { mime_type: 'application/vnd.google-apps.folder' })));
+  await putFile(mia, dir, 'Orphan-info.json', Buffer.from(driveInfo('Orphan', 0)));
+  const done = (await call('POST', '/api/nest/import/tidy', { apply: true }, mia)).body.tidy;
+  assert.equal(done.tidied, 2);
+  const names = (await listing(mia, 'From Google Drive', 'Older')).map((i) => i.name).sort();
+  assert.deepEqual(names, ['Deck.pptx', 'Orphan-info.json', 'Photos']);
+  const older = await listing(mia, 'From Google Drive', 'Older');
+  assert.equal((await info(mia, older.find((i) => i.name === 'Deck.pptx').id)).body.info.google.driveId, 'id-Deck');
+  assert.equal((await info(mia, older.find((i) => i.name === 'Photos').id)).body.info.google.driveId, 'id-Photos');
+});
