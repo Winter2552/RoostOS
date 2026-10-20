@@ -1,0 +1,13 @@
+{
+  "version": "0.1.3",
+  "date": "2026-10-20",
+  "title": "Your Google comments come along",
+  "summary": "Comments from your Google Docs and Sheets now show under Info.",
+  "items": [
+    {
+      "title": "Your Google comments come along",
+      "text": "Comments from your Google Docs and Sheets, with their replies, now show under Info on the file. The loose comments pages are tidied away, and the \"Check my files\" button on Move to Nest does the same for files you moved earlier.",
+      "image": "file-comments.png"
+    }
+  ]
+}
