@@ -1998,6 +1998,7 @@ $('#make-backup-key').addEventListener('click', async () => {
   try {
     const { key } = await api('POST', '/api/me/backup-key', { name: 'iPhone' });
     $('#backup-key-address').value = location.origin;
+    $('#backup-key-email').value = `${state.user.username}@roost`;
     $('#backup-key-value').value = key;
     $('#backup-key-out').classList.remove('hidden');
     flash(panel, 'Key made. It also shows in Signed-in devices, where you can sign it out.');

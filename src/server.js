@@ -41,6 +41,7 @@ const { Glint } = require('./glint');
 const { Importer } = require('./glint-import');
 const { NestImporter } = require('./nest-import');
 const { PhotoBackup } = require('./photo-backup');
+const { ImmichApi } = require('./immich');
 const { Assets } = require('./assets');
 const { TrafficMeter } = require('./traffic');
 const { createSearch, nestSource } = require('./search');
@@ -338,6 +339,39 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   glint.importer = new Importer({ glint, nest });
   nest.importer = new NestImporter({ glint, nest });
   const photoBackup = new PhotoBackup({ nest, dbFile: path.join(dataDir, 'photo-backup.db') });
+  // The free Immich phone app backing up to Glint (see src/immich.js).
+  const immich = new ImmichApi({
+    photoBackup,
+    log: (line) => console.log(`Immich app asked for something Roost does not answer: ${line}`),
+    signIn: (req, name, secret) => {
+      const ip = clientIp(req, trustProxy);
+      if (!limiter.allow(ip)) throw new HttpError(429, 'Too many attempts, wait a few minutes');
+      const username = str(name, 254).toLowerCase().split('@')[0];
+      const user = db().users.find((u) => u.username === username);
+      const key = typeof secret === 'string' && secret ? sessions.get(secret) : null;
+      const keyOk = Boolean(user && key && key.userId === user.id && key.kind === 'app');
+      const passOk = Boolean(user && !user.twoStep && typeof secret === 'string' && verifyPassword(secret, user.password));
+      if (!keyOk && !passOk) {
+        limiter.fail(ip);
+        record(req, 'sign-in-failed', { target: username || null, detail: 'Immich app' });
+        throw new HttpError(401, user && user.twoStep ? 'This account uses two-step sign-in. Use a backup key from Profile as the password.' : 'Wrong username or password');
+      }
+      if (guestEnded(user)) throw new HttpError(403, 'Your guest pass has ended. Ask whoever invited you for more time.');
+      if (!visibleApps(db(), user).some((a) => a.id === 'glint')) throw new HttpError(403, 'You don’t have access to Glint');
+      record(req, 'sign-in', { actor: user.username, detail: 'Immich app' });
+      return { user, token: keyOk ? secret : sessions.create(user.id, { kind: 'app', name: 'Immich app' }) };
+    },
+    userFor: (req) => {
+      // The app sends its token as a Bearer, as x-immich-user-token or as x-api-key, depending on its version.
+      if (!req.headers.authorization) {
+        const t = req.headers['x-immich-user-token'] || req.headers['x-api-key'];
+        if (t) req.headers.authorization = `Bearer ${t}`;
+      }
+      const user = requireUser(req);
+      if (!visibleApps(db(), user).some((a) => a.id === 'glint')) throw new HttpError(403, 'You don’t have access to Glint');
+      return user;
+    },
+  });
   const search = createSearch({ sources: [nestSource(nest)], visibleApps: (user) => visibleApps(db(), user) });
   const sweep = () => nest.sweep().then(() => glint.sweep()).catch((err) => console.error('Nest clean-up failed:', err));
   sweep();
@@ -2828,10 +2862,14 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         const user = requireUser(req);
         if (!visibleApps(db(), user).some((a) => a.id === 'glint')) throw new HttpError(403, 'You don’t have access to Glint');
         await photoBackup.handle(req, res, user, pathname, searchParams);
+      } else if (immich.matches(pathname)) {
+        await immich.handle(req, res, pathname, searchParams);
       } else if (pathname.startsWith('/api/')) {
         const found = route(req.method, pathname);
         if (!found) throw new HttpError(404, 'Not found');
         await found[0](req, res, found[1]);
+      } else if (pathname === '/.well-known/immich' && req.method === 'GET') {
+        send(res, 200, { api: { endpoint: '/api' } });
       } else if (pathname === '/manifest.webmanifest' && (req.method === 'GET' || req.method === 'HEAD')) {
         serveManifest(req, res);
       } else if (pathname.startsWith('/releases/img/') && (req.method === 'GET' || req.method === 'HEAD')) {
