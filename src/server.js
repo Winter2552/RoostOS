@@ -577,7 +577,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // Jellyfin account gets the same one.
   function syncJellyfinPassword(user, password) {
     if (!jellyfin.enabled() || !canUseJellyfin(user)) return Promise.resolve(null);
-    return jellyfin.ensureAccount(user.username, password).catch((err) => { jellyfinFailed(err); return null; });
+    return jellyfin.ensureAccount(user.username, password, user.role).catch((err) => { jellyfinFailed(err); return null; });
   }
 
   // Signs this browser in to Jellyfin as well, in the background. The token is
@@ -599,10 +599,17 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     jellyfinLinks.set(session.id, work);
   }
 
-  function jellyfinAccessChanged(user) {
+  // Who should have a Jellyfin account: people who may open it, and whose
+  // guest pass hasn't ended.
+  function jellyfinPeople() {
+    return db().users.filter((u) => canUseJellyfin(u) && !guestEnded(u)).map((u) => ({ username: u.username, role: u.role }));
+  }
+
+  function jellyfinAccessChanged(user, roleChanged = false) {
     if (!jellyfin.enabled()) return;
     if (canUseJellyfin(user)) {
       jellyfin.enable(user.username).catch(jellyfinFailed);
+      if (roleChanged) jellyfin.roleChanged(user.username, user.role).catch(jellyfinFailed);
       return;
     }
     for (const s of sessions.list(user.id)) {
@@ -657,7 +664,10 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     const skin = db().settings.roostflix !== false;
     if (!c || !c.url) return { url: '', keySaved: false, connected: false, skin };
     try {
-      return { url: c.url, keySaved: Boolean(c.apiKey), connected: true, skin, ...(await jellyfin.check()) };
+      const info = await jellyfin.check();
+      const have = new Set((await jellyfin.users()).map((u) => u.Name.toLowerCase()));
+      const missing = jellyfinPeople().filter((p) => !have.has(p.username.toLowerCase())).length;
+      return { url: c.url, keySaved: Boolean(c.apiKey), connected: true, skin, ...info, missing };
     } catch (err) {
       return { url: c.url, keySaved: Boolean(c.apiKey), connected: false, skin, error: err.status === 401 ? 'the API key was refused' : err.message };
     }
@@ -1226,6 +1236,22 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 200, { skin: on });
     },
 
+    // One tap: a Jellyfin account for everyone who lacks one. Each person's
+    // own password reaches it the next time they sign in to Roost.
+    'POST /api/admin/jellyfin/accounts': async (req, res) => {
+      const admin = requireAdmin(req);
+      if (!jellyfin.enabled()) throw new HttpError(400, 'Connect Jellyfin first');
+      let created;
+      try {
+        created = await jellyfin.createMissing(jellyfinPeople());
+      } catch (err) {
+        jellyfinFailed(err);
+        throw new HttpError(502, `Jellyfin didn't accept that: ${err.message}`);
+      }
+      if (created) record(req, 'jellyfin-accounts', { actor: admin.username, detail: `${created} created` });
+      send(res, 200, { created, ...(await jellyfinView()) });
+    },
+
     'PUT /api/admin/jellyfin': async (req, res) => {
       requireAdmin(req);
       const body = await readJson(req);
@@ -1475,7 +1501,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         user.trusted = [];
         changes.push('two-step reset');
       }
-      if (body.apps !== undefined || body.role !== undefined) jellyfinAccessChanged(user);
+      if (body.apps !== undefined || body.role !== undefined) jellyfinAccessChanged(user, body.role !== undefined);
       store.save();
       if (changes.length) record(req, 'user-changed', { actor: admin.username, target: user.username, detail: changes.join(', ') });
       send(res, 200, { user: adminView(user) });

@@ -141,7 +141,7 @@ test('a wrong API key is refused and not saved', async () => {
 test('connecting shows the server and never sends the key back', async () => {
   const ok = await call('PUT', '/api/admin/jellyfin', { url: `${jfUrl}/`, apiKey: KEY }, admin);
   assert.equal(ok.status, 200);
-  assert.deepEqual(ok.body, { url: jfUrl, keySaved: true, connected: true, skin: true, serverName: 'Home', version: '10.10.7', accounts: 2 });
+  assert.deepEqual(ok.body, { url: jfUrl, keySaved: true, connected: true, skin: true, serverName: 'Home', version: '10.10.7', accounts: 2, missing: 0 });
   const settings = await call('GET', '/api/admin/settings', null, admin);
   assert.equal(JSON.stringify(settings.body).includes(KEY), false);
   assert.equal(await setupStep(), true);
@@ -395,4 +395,55 @@ test('the Roostflix script and stylesheet are served and the script parses', asy
   const css = await fetch(`${base}/roostflix/skin.css`);
   assert.match(await css.text(), /\.rf-hero/);
   assert.equal((await fetch(`${base}/roostflix/icon.svg`)).status, 200);
+});
+
+test('new accounts get the permissions of their Roost role', async () => {
+  if (!fake.listening) await new Promise((r) => fake.listen(Number(new URL(jfUrl).port), '127.0.0.1', r));
+  await call('PUT', '/api/admin/jellyfin', { url: jfUrl, apiKey: KEY }, admin);
+  await call('POST', '/api/admin/users', { username: 'kim', password: 'kim pass 123', apps: ['jellyfin'] }, admin);
+  await call('POST', '/api/admin/users', { username: 'boss', password: 'boss pass 12', role: 'admin', apps: ['jellyfin'] }, admin);
+  await call('POST', '/api/admin/users', { username: 'gus', password: 'gus pass 123', role: 'guest', guestUntil: new Date(Date.now() + 86400000).toISOString(), apps: ['jellyfin'] }, admin);
+  await settle();
+  assert.equal(jfUser('boss').Policy.IsAdministrator, true);
+  assert.equal(jfUser('kim').Policy.IsAdministrator, false);
+  assert.equal(jfUser('kim').Policy.EnableContentDeletion, false);
+  assert.equal(jfUser('gus').Policy.IsAdministrator, false);
+  assert.equal(jfUser('gus').Policy.EnableContentDownloading, false);
+});
+
+test('one tap makes Jellyfin accounts for people who lack one', async () => {
+  // Roost people made before Jellyfin was connected: no account yet.
+  const users = (await call('GET', '/api/admin/users', null, admin)).body.users;
+  assert.ok(users.length > 0);
+  jf.users = jf.users.filter((u) => u.Name !== 'kim');
+  const view = (await call('GET', '/api/admin/jellyfin', null, admin)).body;
+  assert.equal(view.missing, 1);
+  const made = await call('POST', '/api/admin/jellyfin/accounts', null, admin);
+  assert.equal(made.status, 200);
+  assert.equal(made.body.created, 1);
+  assert.equal(made.body.missing, 0);
+  assert.ok(jfUser('kim'));
+  assert.ok(jfUser('kim').Password.length >= 20, 'starts with a random password');
+  // Their next Roost sign-in sets the real one.
+  await call('POST', '/api/login', { username: 'kim', password: 'kim pass 123' });
+  await settle();
+  assert.equal(jfUser('kim').Password, 'kim pass 123');
+  // Pressing again does nothing; people without Jellyfin access are skipped.
+  assert.equal((await call('POST', '/api/admin/jellyfin/accounts', null, admin)).body.created, 0);
+  assert.equal(jfUser('nofilms'), undefined);
+});
+
+test('changing a role in Roost changes the Jellyfin permissions', async () => {
+  const id = (await call('GET', '/api/admin/users', null, admin)).body.users.find((u) => u.username === 'kim').id;
+  await call('PATCH', `/api/admin/users/${id}`, { role: 'admin' }, admin);
+  await settle();
+  assert.equal(jfUser('kim').Policy.IsAdministrator, true);
+});
+
+test('only admins can create Jellyfin accounts, and only once Jellyfin is connected', async () => {
+  const kim = (await call('POST', '/api/login', { username: 'kim', password: 'kim pass 123' })).cookie;
+  assert.equal((await call('POST', '/api/admin/jellyfin/accounts', null, null)).status, 401);
+  await call('PUT', '/api/admin/jellyfin', { url: '' }, admin);
+  assert.equal((await call('POST', '/api/admin/jellyfin/accounts', null, admin)).status, 400);
+  assert.ok(kim);
 });

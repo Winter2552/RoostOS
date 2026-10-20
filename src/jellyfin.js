@@ -6,6 +6,7 @@
 // Everything here is best effort: if Jellyfin is down or not set up, Roost
 // works as before and Jellyfin just shows its own sign-in page.
 
+const crypto = require('crypto');
 const http = require('http');
 const https = require('https');
 const roostflix = require('./roostflix');
@@ -25,6 +26,14 @@ function authHeader({ token, device = 'Roost', deviceId = 'roost' } = {}) {
   const parts = [`Client="${CLIENT}"`, `Device="${q(device)}"`, `DeviceId="${q(deviceId)}"`, `Version="${VERSION}"`];
   if (token) parts.push(`Token="${token}"`);
   return `MediaBrowser ${parts.join(', ')}`;
+}
+
+// What each Roost role may do in Jellyfin. Everyone else keeps Jellyfin's
+// defaults (watch, no deleting). Guests also can't download or convert.
+function policyFor(role) {
+  if (role === 'admin') return { IsAdministrator: true, EnableContentDeletion: true };
+  if (role === 'guest') return { IsAdministrator: false, EnableContentDeletion: false, EnableContentDownloading: false, EnableMediaConversion: false };
+  return { IsAdministrator: false, EnableContentDeletion: false };
 }
 
 const safeId = (v) => (typeof v === 'string' && /^[A-Za-z0-9-]+$/.test(v) ? v : null);
@@ -142,20 +151,50 @@ class Jellyfin {
     jfUser.Policy.IsDisabled = disabled;
   }
 
+  async applyRole(jfUser, role) {
+    if (jfUser.Policy.IsAdministrator) return;
+    const policy = { ...jfUser.Policy, ...policyFor(role) };
+    await this.call('POST', `/Users/${jfUser.Id}/Policy`, { body: policy });
+    jfUser.Policy = policy;
+  }
+
   // Makes sure a Jellyfin account with this name exists, is switched on and
-  // has this password. Jellyfin admin accounts are never changed: Roost only
-  // tries the password on them.
-  async ensureAccount(username, password) {
+  // has this password. A new account gets the permissions of the Roost role.
+  // Jellyfin admin accounts are never changed: Roost only tries the password
+  // on them.
+  async ensureAccount(username, password, role = 'user') {
     let jfUser = await this.find(username);
     if (!jfUser) {
       jfUser = await this.call('POST', '/Users/New', { body: { Name: username, Password: password } });
       this.cache = null;
+      await this.applyRole(jfUser, role);
       return jfUser;
     }
     if (jfUser.Policy.IsAdministrator) return jfUser;
     await this.setDisabled(jfUser, false);
     await this.call('POST', `/Users/${jfUser.Id}/Password`, { body: { NewPw: password } });
     return jfUser;
+  }
+
+  // Someone's Roost role changed: carry it over to their Jellyfin account.
+  async roleChanged(username, role) {
+    const jfUser = await this.find(username);
+    if (jfUser) await this.applyRole(jfUser, role);
+  }
+
+  // Accounts for people who don't have one yet. Roost can't know existing
+  // passwords, so these start with a random one; the person's next Roost
+  // sign-in sets the real one. Returns how many were made.
+  async createMissing(people) {
+    const have = new Set((await this.users(true)).map((u) => u.Name.toLowerCase()));
+    let created = 0;
+    for (const p of people) {
+      if (have.has(p.username.toLowerCase())) continue;
+      await this.ensureAccount(p.username, crypto.randomBytes(24).toString('base64url'), p.role);
+      have.add(p.username.toLowerCase());
+      created++;
+    }
+    return created;
   }
 
   // Signs in as the user. Each Roost sign-in is its own Jellyfin device, so
@@ -315,4 +354,4 @@ body{display:flex;align-items:center;justify-content:center}</style></head>
 })();
 </script></body></html>`;
 
-module.exports = { Jellyfin, PREFIX, OPENER_HTML, authHeader };
+module.exports = { Jellyfin, policyFor, PREFIX, OPENER_HTML, authHeader };

@@ -2343,6 +2343,9 @@ function renderJellyfin(j) {
     ? `Connected to ${j.serverName} · Jellyfin ${j.version} · ${j.accounts} account${j.accounts === 1 ? '' : 's'}`
     : j.url ? `Can't reach Jellyfin: ${j.error}` : 'Off · Jellyfin keeps its own sign-in';
   $('#jellyfin-off').classList.toggle('hidden', !j.url);
+  const missing = j.connected ? j.missing || 0 : 0;
+  $('#jellyfin-accounts').classList.toggle('hidden', !missing);
+  $('#jellyfin-accounts').textContent = `Create ${missing} missing account${missing === 1 ? '' : 's'}`;
   $('#jellyfin-save').textContent = j.url ? 'Save' : 'Connect';
 }
 
@@ -2364,6 +2367,17 @@ $('#jellyfin-form').skin.addEventListener('change', async (e) => {
     e.target.checked = !e.target.checked;
     flash(f, err.message, false);
   }
+});
+
+$('#jellyfin-accounts').addEventListener('click', async (e) => {
+  const f = $('#jellyfin-form');
+  e.target.disabled = true;
+  try {
+    const r = await api('POST', '/api/admin/jellyfin/accounts');
+    renderJellyfin(r);
+    flash(f, `Created ${r.created} account${r.created === 1 ? '' : 's'}. Each person's password reaches Jellyfin when they next sign in to Roost.`);
+  } catch (err) { flash(f, err.message, false); }
+  e.target.disabled = false;
 });
 
 $('#jellyfin-off').addEventListener('click', async () => {

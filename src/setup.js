@@ -168,7 +168,7 @@ const STEPS = [
     how: [
       'In Jellyfin, open Dashboard → API Keys, press +, name it Roost and copy the key.',
       'Under Admin → Jellyfin sign-in, enter Jellyfin\'s address as Roost reaches it (e.g. http://192.168.1.20:8096) and paste the key.',
-      'Press Connect. Each person is linked the next time they sign in to Roost.',
+      'Press Connect. New people get a Jellyfin account automatically; for people already in Roost, press Create missing accounts (or they get one the next time they sign in).',
     ],
     action: { label: 'Connect Jellyfin', view: 'admin', focus: 'jellyfin-form', field: 'url' },
     covers: ['jellyfin'],
