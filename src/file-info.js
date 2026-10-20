@@ -95,6 +95,25 @@ function driveInfoNames(file) {
   return [`${file}-info.json`, `${file}.json`].map((n) => n.toLowerCase());
 }
 
+// Google Docs, Sheets and Slides come out of Takeout as Word, Excel and
+// PowerPoint files, and their info file drops the extension: "Budget.xlsx" has
+// "Budget-info.json". A folder's info file is "<folder>-info.json" the same way.
+const CONVERTED = ['docx', 'xlsx', 'pptx'];
+
+// "Budget-info.json" -> "Budget" (null for a name that isn't an info file).
+function infoStem(name) {
+  const m = /^(.+)-info\.json$/i.exec(name);
+  return m ? m[1] : null;
+}
+
+// Which converted extension Drive's own type points at, if it says.
+function convertedHint(mime) {
+  if (/document/i.test(mime || '')) return 'docx';
+  if (/spreadsheet/i.test(mime || '')) return 'xlsx';
+  if (/presentation/i.test(mime || '')) return 'pptx';
+  return '';
+}
+
 // Parses a JSON file's bytes (already size-capped by the caller).
 function parseBytes(buf) {
   try {
@@ -104,4 +123,4 @@ function parseBytes(buf) {
   }
 }
 
-module.exports = { parseSidecar, parseBytes, driveInfoNames, SIDECAR_MAX: 1024 * 1024 };
+module.exports = { parseSidecar, parseBytes, driveInfoNames, CONVERTED, infoStem, convertedHint, SIDECAR_MAX: 1024 * 1024 };
