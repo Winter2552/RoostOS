@@ -77,7 +77,23 @@ window.fileInfo = (function fileInfo() {
         row('Starred', g.starred ? 'Yes' : ''),
         row('Google Photos link', g.link ? outside(g.link, 'Open in Google Photos') : '')));
     }
+    if (g.comments && g.comments.length) out.push(commentsGroup(g.comments));
     return out;
+  }
+
+  // Drive comments with their replies, as they were.
+  function commentsGroup(list) {
+    const reply = (r) => el('div', { class: 'finfo-reply' },
+      el('div', {}, el('b', { text: r.author || 'Someone' }), r.action ? el('span', { class: 'muted', text: ` · ${r.action}` }) : null),
+      r.text ? el('div', { class: 'finfo-text', text: r.text }) : null,
+      r.date ? el('div', { class: 'mono muted', text: r.date }) : null);
+    return el('div', { class: 'finfo-group' }, el('h4', { class: 'mono', text: `Comments (${list.length})` }),
+      ...list.map((c) => el('div', { class: 'finfo-comment' },
+        el('div', {}, el('b', { text: c.author || 'Someone' }), c.resolved ? el('span', { class: 'mono muted', text: ' · resolved' }) : null),
+        c.about ? el('blockquote', { class: 'finfo-about', text: c.about }) : null,
+        c.text ? el('div', { class: 'finfo-text', text: c.text }) : null,
+        c.date ? el('div', { class: 'mono muted', text: c.date }) : null,
+        ...(c.replies || []).map(reply))));
   }
 
   function build() {

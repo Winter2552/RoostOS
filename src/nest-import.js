@@ -16,8 +16,9 @@
 //
 // Drive's Takeout also writes a "<file>-info.json" beside every file. When one
 // has its main file it is read, kept as the file's Info (src/file-info.js) and
-// not copied, so it never shows up as a file. A .json with no main file is just
-// a file like any other and is copied as it is.
+// not copied, so it never shows up as a file. Drive's "<file>-comments.html" is
+// handled the same way (its comments are kept in Info). A .json or .html with no
+// main file is just a file like any other and is copied as it is.
 
 const fs = require('fs');
 const fsp = fs.promises;
@@ -29,7 +30,7 @@ const { openZip } = require('./zip-read');
 const { cleanName } = require('./nest');
 const { mediaType } = require('./glint');
 const { Importer } = require('./glint-import');
-const { parseBytes, driveInfoNames, CONVERTED, infoStem, convertedHint, SIDECAR_MAX } = require('./file-info');
+const { parseBytes, driveInfoNames, infoStem, commentsStem, stemOf, chooseMain, parseComments, SIDECAR_MAX, COMMENTS_MAX } = require('./file-info');
 
 const FOLDER = 'Move to Nest';
 const DEST = 'From Google Drive';
@@ -53,10 +54,12 @@ class NestImporter extends Importer {
     this.q.jsonIn = this.db.prepare(`${inDest} SELECT * FROM nodes WHERE owner = ?2 AND kind = 'file' AND trash_root IS NULL
                                      AND lower(name) LIKE '%.json' AND parent IN (SELECT id FROM d) ORDER BY id`);
     // A file (first) or folder with this name beside it, then Word/Excel/PowerPoint files that were Google Docs, Sheets or Slides.
-    this.q.beside = this.db.prepare(`SELECT id, kind FROM nodes WHERE owner = ? AND parent = ? AND trash_root IS NULL
+    this.q.beside = this.db.prepare(`SELECT id, kind, name FROM nodes WHERE owner = ? AND parent = ? AND trash_root IS NULL
                                      AND name = ? COLLATE NOCASE AND id != ? ORDER BY kind = 'folder'`);
-    this.q.converted = this.db.prepare(`SELECT id, name FROM nodes WHERE owner = ?1 AND parent = ?2 AND kind = 'file' AND trash_root IS NULL
-                                        AND name IN (?3 || '.docx', ?3 || '.xlsx', ?3 || '.pptx') COLLATE NOCASE`);
+    this.q.sameStem = this.db.prepare(`SELECT id, name FROM nodes WHERE owner = ?1 AND parent = ?2 AND kind = 'file' AND trash_root IS NULL
+                                       AND name LIKE ?3 ESCAPE '\\'`);
+    this.q.commentsIn = this.db.prepare(`${inDest} SELECT * FROM nodes WHERE owner = ?2 AND kind = 'file' AND trash_root IS NULL
+                                         AND lower(name) LIKE '%-comments.html' AND parent IN (SELECT id FROM d) ORDER BY id`);
     this.q.byTitle = this.db.prepare(`${inDest} SELECT id FROM nodes WHERE owner = ?2 AND kind = 'file' AND trash_root IS NULL
                                       AND name = ?3 COLLATE NOCASE AND size = ?4 AND parent IN (SELECT id FROM d) LIMIT 2`);
     this.q.sameAt = this.db.prepare(`SELECT id FROM nodes WHERE owner = ? AND parent = ? AND kind = 'file' AND trash_root IS NULL
@@ -71,6 +74,7 @@ class NestImporter extends Importer {
     const mains = []; // every file that isn't JSON, done or not: sidecars are matched to these
     const jsons = new Map(); // destination folder -> Map(lower-case name -> JSON file)
     const jsonItems = [];
+    const commentItems = []; // Drive's "<name>-comments.html" files
     const folders = new Set(); // "<destination folder>\0<folder name>" of every folder a file sits in
     let sinceUsage = 0;
 
@@ -110,20 +114,22 @@ class NestImporter extends Importer {
             if (!jsons.has(it.dir)) jsons.set(it.dir, new Map());
             jsons.get(it.dir).set(file.toLowerCase(), it);
             jsonItems.push(it);
+          } else if (commentsStem(file)) {
+            commentItems.push(it);
           } else {
             mains.push(it);
           }
         }
       }
-      const folderInfos = await this.matchSidecars(mains, jsons, jsonItems, folders);
-      for (const it of [...mains, ...jsonItems]) {
+      const folderInfos = await this.matchSidecars(mains, jsons, jsonItems, folders, commentItems);
+      for (const it of [...mains, ...jsonItems, ...commentItems]) {
         if (!it.done && !it.claimed) files.push(it);
       }
       job.total = files.length;
       job.phase = 'moving';
       for (const item of files) {
         item.z.refs++;
-        if (item.side && item.side.z !== item.z) item.side.z.refs++;
+        for (const side of [item.side, item.cside]) if (side && side.z !== item.z) side.z.refs++;
       }
 
       // 2. Copy the files, one at a time.
@@ -141,8 +147,8 @@ class NestImporter extends Importer {
         job.done++;
         if (++sinceUsage >= USAGE_EVERY) { sinceUsage = 0; nest.changed(user); }
         item.z.refs--;
-        if (item.side && item.side.z !== item.z) item.side.z.refs--;
-        if (job.deleteZips) await this.maybeDelete(user, open, item.z, item.side && item.side.z);
+        for (const side of [item.side, item.cside]) if (side && side.z !== item.z) side.z.refs--;
+        if (job.deleteZips) await this.maybeDelete(user, open, item.z, item.side && item.side.z, item.cside && item.cside.z);
       }
       // Folders' own info (owner, sharing, dates) goes on the folder.
       if (!job.stop) {
@@ -154,10 +160,11 @@ class NestImporter extends Importer {
     }
   }
 
-  // Info files that earlier moves left in Nest as ordinary files. Each one that
-  // has its main file is merged into that file's Info and (with apply) moved to
-  // the trash, where it can be restored for 30 days. A .json with no main file
-  // is left exactly where it is. Without apply it only counts.
+  // Info and comments files that earlier moves left in Nest as ordinary files.
+  // Each one that has its main file (or folder) is merged into that item's Info
+  // and (with apply) moved to the trash, where it can be restored for 30 days.
+  // A .json or .html with no main file is left exactly where it is. Without
+  // apply it only counts.
   async tidy(user, apply) {
     const old = this.jobs.get(user.id);
     if (old && old.running) throw new HttpError(409, 'Wait for the move to finish first');
@@ -166,6 +173,15 @@ class NestImporter extends Importer {
     const out = { found: 0, left: 0, tidied: 0 };
     if (!dest) return out;
     const gone = [];
+    const has = (key) => (f) => Boolean((nest.infoOf(user, f.id) || {})[key]);
+    const near = (parent, stem) => this.q.sameStem.all(user.id, parent, `${stem.replace(/[\\%_]/g, '\\$&')}.%`)
+      .filter((r) => !r.name.slice(stem.length + 1).includes('.'));
+    const take = (main, patch, file) => {
+      if (!main) { out.left++; return; }
+      out.found++;
+      if (apply) { nest.setInfo(user, main, patch); gone.push(file.id); }
+    };
+
     for (const j of this.q.jsonIn.all(dest.id, user.id)) {
       const meta = await this.readNode(user, j);
       let main = null;
@@ -175,10 +191,7 @@ class NestImporter extends Importer {
         const names = [...new Set([m && m[1], meta.title, cleanName(meta.title)].filter(Boolean))];
         const hit = names.map((n) => this.q.beside.get(user.id, j.parent, n, j.id)).find(Boolean);
         let pick = null;
-        if (!hit && infoStem(j.name)) {
-          const conv = names.flatMap((n) => this.q.converted.all(user.id, j.parent, n));
-          pick = conv.length === 1 ? conv[0] : conv.find((c) => c.name.toLowerCase().endsWith(`.${convertedHint(meta.mime)}`));
-        }
+        if (!hit && infoStem(j.name)) pick = chooseMain([...new Map(names.flatMap((n) => near(j.parent, n)).map((r) => [r.id, r])).values()], meta.mime, has('source'));
         if (hit) main = hit.id;
         else if (pick) main = pick.id;
         else if (meta.title && meta.size !== undefined && /-info\.json$/i.test(j.name)) {
@@ -186,9 +199,19 @@ class NestImporter extends Importer {
           if (found.length === 1) main = found[0].id;
         }
       }
-      if (!main) { out.left++; continue; }
-      out.found++;
-      if (apply) { nest.setInfo(user, main, meta); gone.push(j.id); }
+      take(main, meta, j);
+    }
+
+    for (const c of this.q.commentsIn.all(dest.id, user.id)) {
+      const comments = await this.readNode(user, c, parseComments, COMMENTS_MAX);
+      let main = null;
+      if (comments) {
+        const stem = commentsStem(c.name);
+        const exact = this.q.beside.all(user.id, c.parent, stem, c.id).filter((r) => r.kind === 'file');
+        main = chooseMain(exact.length ? exact : near(c.parent, stem), '', has('comments'));
+        main = main && main.id;
+      }
+      take(main, { comments }, c);
     }
     if (apply) {
       out.tidied = nest.trash(user, gone).length;
@@ -197,10 +220,11 @@ class NestImporter extends Importer {
     return out;
   }
 
-  async readNode(user, n) {
+  async readNode(user, n, parse = parseBytes, max = SIDECAR_MAX) {
     try {
-      if (n.size > SIDECAR_MAX) return null;
-      return parseBytes(await fsp.readFile(this.nest.diskPath(user, n.id)));
+      if (n.size > max) return null;
+      const buf = await fsp.readFile(this.nest.diskPath(user, n.id));
+      return parse === parseBytes ? parseBytes(buf) : parse(buf.toString('utf8'));
     } catch {
       return null;
     }
@@ -209,7 +233,7 @@ class NestImporter extends Importer {
   // Pairs each main file with its info JSON (item.side, item.meta) and marks the
   // JSON claimed. Only a JSON that has a main file and reads as a Google info
   // file is claimed; every other JSON is left to be copied like any file.
-  async matchSidecars(mains, jsons, jsonItems, folders = new Set()) {
+  async matchSidecars(mains, jsons, jsonItems, folders = new Set(), commentItems = []) {
     const claim = (main, side, meta) => {
       side.claimed = true;
       main.side = side;
@@ -225,9 +249,9 @@ class NestImporter extends Importer {
         if (meta && meta.source === 'drive') { claim(main, side, meta); break; }
       }
     }
-    // Google Docs, Sheets and Slides: "Budget-info.json" for "Budget.xlsx". Only when
-    // one Word/Excel/PowerPoint file fits (or Drive's own type says which).
-    // A folder's info file ("Assets-info.json" for the folder Assets) goes on the folder.
+    // Google Docs, Sheets and Slides: "Budget-info.json" for "Budget.xlsx" (any extension),
+    // when one file fits, or Drive's own type says which. A folder's info file
+    // ("Assets-info.json" for the folder Assets) goes on the folder.
     const folderInfos = [];
     for (const side of jsonItems) {
       const stem = !side.claimed && infoStem(side.file);
@@ -235,15 +259,28 @@ class NestImporter extends Importer {
       const meta = await this.readSidecar(side);
       if (!meta || meta.source !== 'drive') continue;
       const tries = [...new Set([stem, meta.title].filter(Boolean).map((n) => n.toLowerCase()))];
-      const names = mains.filter((m) => m.dir === side.dir && tries.some((t) => CONVERTED.some((e) => m.file.toLowerCase() === `${t}.${e}`)));
-      const main = names.length === 1 ? names[0] : names.find((m) => m.file.toLowerCase().endsWith(`.${convertedHint(meta.mime)}`));
-      if (main && !main.side) { claim(main, side, meta); continue; }
+      const near = mains.filter((m) => m.dir === side.dir && tries.includes(stemOf(m.file).toLowerCase()) && !m.side);
+      const main = chooseMain(near.map((m) => ({ name: m.file, m })), meta.mime);
+      if (main) { claim(main.m, side, meta); continue; }
       const beside = mains.some((m) => m.dir === side.dir && tries.includes(m.file.toLowerCase()));
       const folder = tries.find((t) => folders.has(`${side.dir}\0${t}`));
-      if (!names.length && !beside && folder) {
+      if (!near.length && !beside && folder) {
         side.claimed = true;
         folderInfos.push({ dir: side.dir, name: folder, meta });
       }
+    }
+    // Drive comments: "Budget-comments.html" beside "Budget.xlsx" (or "Budget.xlsx-comments.html").
+    for (const side of commentItems) {
+      const stem = commentsStem(side.file).toLowerCase();
+      const near = mains.filter((m) => m.dir === side.dir && (m.file.toLowerCase() === stem || stemOf(m.file).toLowerCase() === stem));
+      const exact = near.filter((m) => m.file.toLowerCase() === stem);
+      const main = chooseMain((exact.length ? exact : near).map((m) => ({ name: m.file, m })), (near[0] && near[0].meta && near[0].meta.mime) || '', (f) => Boolean(f.m.comments));
+      if (!main) continue;
+      const comments = await this.readComments(side);
+      if (!comments) continue;
+      side.claimed = true;
+      main.m.cside = side;
+      main.m.comments = comments;
     }
     // A sidecar that sits apart from its file (another folder or zip): match on
     // Drive's own title and size, and only when that is unambiguous.
@@ -262,6 +299,17 @@ class NestImporter extends Importer {
       if (hit && !hit.side.claimed) claim(main, hit.side, hit.meta);
     }
     return folderInfos;
+  }
+
+  async readComments(side) {
+    try {
+      if (side.entry.size > COMMENTS_MAX) return null;
+      const chunks = [];
+      for await (const c of await side.z.zip.open(side.entry)) chunks.push(c);
+      return parseComments(Buffer.concat(chunks).toString('utf8'));
+    } catch {
+      return null;
+    }
   }
 
   async readSidecar(side) {
@@ -286,7 +334,7 @@ class NestImporter extends Importer {
     const name = cleanName(item.file) || 'file';
     const same = this.q.sameAt.get(user.id, parent, name, entry.size);
     if (same) {
-      if (item.meta) nest.setInfo(user, same.id, item.meta);
+      if (item.meta || item.comments) nest.setInfo(user, same.id, { ...item.meta, ...(item.comments ? { comments: item.comments } : {}) });
       return { status: 'dup' };
     }
     nest.checkSpace(user, entry.size); // throws an HttpError when the limit or drive is full
@@ -305,7 +353,7 @@ class NestImporter extends Importer {
     }
     const id = newId();
     nest.q.insert.run(id, user.id, parent, final, 'file', entry.size, mediaType({ mime: '', name: final }) || '', Date.now(), modified);
-    if (item.meta) nest.setInfo(user, id, item.meta);
+    if (item.meta || item.comments) nest.setInfo(user, id, { ...item.meta, ...(item.comments ? { comments: item.comments } : {}) });
     return { status: 'moved' };
   }
 }

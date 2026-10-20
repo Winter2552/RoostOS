@@ -194,7 +194,6 @@ class Nest {
       restoreRoot: q('UPDATE nodes SET trashed = NULL, parent = ?, name = ? WHERE id = ?'),
       forget: q('DELETE FROM nodes WHERE trash_root = ?'),
       setInfo: q('INSERT OR REPLACE INTO node_info (id, owner, data) VALUES (?, ?, ?)'),
-      keepInfo: q('INSERT OR IGNORE INTO node_info (id, owner, data) VALUES (?, ?, ?)'),
       info: q('SELECT data FROM node_info WHERE id = ? AND owner = ?'),
       copyInfo: q('INSERT OR REPLACE INTO node_info (id, owner, data) SELECT ?, owner, data FROM node_info WHERE id = ?'),
       trashList: q('SELECT * FROM nodes WHERE owner = ? AND trashed IS NOT NULL ORDER BY trashed DESC'),
@@ -628,18 +627,21 @@ class Nest {
 
   // ---------- file info ----------
 
-  // data: details from src/file-info.js. Only fills a file that has none yet,
-  // unless replace is set.
-  setInfo(user, id, data, replace = false) {
-    (replace ? this.q.setInfo : this.q.keepInfo).run(id, user.id, JSON.stringify(data));
+  // data: details from src/file-info.js (Google's info, comments). Merged into what
+  // the file already has, so a file's info and its comments can arrive separately.
+  setInfo(user, id, data) {
+    this.q.setInfo.run(id, user.id, JSON.stringify({ ...this.infoOf(user, id), ...data }));
+  }
+
+  infoOf(user, id) {
+    const row = this.q.info.get(id, user.id);
+    try { return row ? JSON.parse(row.data) : null; } catch { return null; }
   }
 
   // What Info shows: the basics every item has, plus Google's details if kept.
   info(user, id) {
     const n = this.node(user, id);
-    const row = this.q.info.get(n.id, user.id);
-    let google = null;
-    try { google = row ? JSON.parse(row.data) : null; } catch { /* unreadable: show the basics only */ }
+    const google = this.infoOf(user, n.id);
     const where = this.q.chain.all(n.id).slice(0, -1).map((c) => c.name);
     return {
       id: n.id, name: n.name, kind: n.kind, size: n.size, mime: n.mime,

@@ -252,3 +252,47 @@ test('tidy up also handles Docs, Sheets, Slides and folders', async () => {
   assert.equal((await info(mia, older.find((i) => i.name === 'Deck.pptx').id)).body.info.google.driveId, 'id-Deck');
   assert.equal((await info(mia, older.find((i) => i.name === 'Photos').id)).body.info.google.driveId, 'id-Photos');
 });
+
+const commentsHtml = (title, text) => `<!DOCTYPE html><html><head><title>${title} comments</title></head><body><section class="header"><h1>${title} – Drive file comments</h1></section><section><div id="AAAA1" class="comment"><div class="json">null</div><div class="comment-data"><div class="comment-box"><div class="user-name">Raven Monz</div><div class="comment-status">Resolved</div><div class="created-date">8 Mar 2023, 18:05:44</div><div class="comment-context-intro">Comment on:</div><div class="comment-context-value">the &quot;budget&quot; line</div><div class="comment-content">${text}</div></div><div class="reply-list"><div id="AAAA2" class="reply-box"><div class="reply-data"><div class="user-name">Sam</div><div class="comment-content">Agreed &amp; done</div><div class="created-date">9 Mar 2023, 09:00:00</div></div></div></div></div></div></section></body></html>`;
+
+test('comments files are merged into their file and hidden; other HTML stays', async () => {
+  await putZip(mia, 'takeout-3.zip', makeZip([
+    { name: `${T}Notes/Secret.html`, data: '<html>a page</html>' },
+    { name: `${T}Notes/Secret-info.json`, data: driveInfo('Secret', 0) },
+    { name: `${T}Notes/Sheet.xlsx`, data: 'sheet' },
+    { name: `${T}Notes/Sheet-comments.html`, data: commentsHtml('Sheet', 'Check <b>this</b> total') },
+    { name: `${T}Notes/Plain.html`, data: '<html>just a page</html>' },
+    { name: `${T}Notes/Ghost-comments.html`, data: commentsHtml('Ghost', 'nobody home') },
+    { name: `${T}Notes/Report.pdf`, data: 'pdf' },
+    { name: `${T}Notes/Report-comments.html`, data: '<html><body>not a comments page</body></html>' },
+  ]));
+  await call('POST', '/api/nest/import/start', {}, mia);
+  await finished(mia);
+  const notes = await listing(mia, 'From Google Drive', 'Notes');
+  assert.deepEqual(notes.map((i) => i.name).sort(), ['Ghost-comments.html', 'Plain.html', 'Report-comments.html', 'Report.pdf', 'Secret.html', 'Sheet.xlsx']);
+  const by = (n) => notes.find((i) => i.name === n);
+  assert.equal((await info(mia, by('Secret.html').id)).body.info.google.driveId, 'id-Secret', 'info file beside an .html main file');
+  const sheet = (await info(mia, by('Sheet.xlsx').id)).body.info.google;
+  assert.equal(sheet.comments.length, 1);
+  assert.equal(sheet.comments[0].author, 'Raven Monz');
+  assert.equal(sheet.comments[0].text, 'Check this total');
+  assert.equal(sheet.comments[0].about, 'the "budget" line');
+  assert.equal(sheet.comments[0].resolved, true);
+  assert.equal(sheet.comments[0].replies[0].text, 'Agreed & done');
+});
+
+test('tidy up merges old comments files into the file and keeps its info', async () => {
+  const dir = 'From Google Drive/Comments';
+  await putFile(mia, dir, 'Budget.xlsx', Buffer.from('b'));
+  await putFile(mia, dir, 'Budget-info.json', Buffer.from(driveInfo('Budget', 0)));
+  await putFile(mia, dir, 'Budget-comments.html', Buffer.from(commentsHtml('Budget', 'Why so high?')));
+  await putFile(mia, dir, 'Lonely-comments.html', Buffer.from(commentsHtml('Lonely', 'orphan')));
+  const done = (await call('POST', '/api/nest/import/tidy', { apply: true }, mia)).body.tidy;
+  assert.equal(done.tidied, 2);
+  const left = (await listing(mia, 'From Google Drive', 'Comments')).map((i) => i.name).sort();
+  assert.deepEqual(left, ['Budget.xlsx', 'Lonely-comments.html']);
+  const budget = (await listing(mia, 'From Google Drive', 'Comments')).find((i) => i.name === 'Budget.xlsx');
+  const g = (await info(mia, budget.id)).body.info.google;
+  assert.equal(g.driveId, 'id-Budget');
+  assert.equal(g.comments[0].text, 'Why so high?');
+});

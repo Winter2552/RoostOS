@@ -96,9 +96,9 @@ function driveInfoNames(file) {
 }
 
 // Google Docs, Sheets and Slides come out of Takeout as Word, Excel and
-// PowerPoint files, and their info file drops the extension: "Budget.xlsx" has
-// "Budget-info.json". A folder's info file is "<folder>-info.json" the same way.
-const CONVERTED = ['docx', 'xlsx', 'pptx'];
+// PowerPoint files (other Google files as html, pdf, png...), and their info file
+// drops the extension: "Budget.xlsx" has "Budget-info.json". A folder's info file
+// is "<folder>-info.json" the same way, and Drive comments are "<name>-comments.html".
 
 // "Budget-info.json" -> "Budget" (null for a name that isn't an info file).
 function infoStem(name) {
@@ -106,12 +106,80 @@ function infoStem(name) {
   return m ? m[1] : null;
 }
 
-// Which converted extension Drive's own type points at, if it says.
+function commentsStem(name) {
+  const m = /^(.+)-comments\.html$/i.exec(name);
+  return m ? m[1] : null;
+}
+
+// "Budget.xlsx" -> "Budget"; a name with no extension is its own stem.
+function stemOf(file) {
+  const dot = file.lastIndexOf('.');
+  return dot > 0 ? file.slice(0, dot) : file;
+}
+
+// Which extension Drive's own type points at, if it says (to choose between "Budget.xlsx" and "Budget.pdf").
 function convertedHint(mime) {
   if (/document/i.test(mime || '')) return 'docx';
   if (/spreadsheet/i.test(mime || '')) return 'xlsx';
   if (/presentation/i.test(mime || '')) return 'pptx';
   return '';
+}
+
+// Of several files that could own an info or comments file: the one Drive's type
+// points at, else the only one that has none yet; otherwise none (never guess).
+// files: [{ name }]; has(file) says it already has this kind of details.
+function chooseMain(files, mime, has = () => false) {
+  if (files.length === 1) return files[0];
+  const hinted = files.filter((f) => f.name.toLowerCase().endsWith(`.${convertedHint(mime)}`));
+  if (hinted.length === 1) return hinted[0];
+  const fresh = files.filter((f) => !has(f));
+  return fresh.length === 1 ? fresh[0] : null;
+}
+
+// ---------- comments ----------
+
+const MAX_COMMENTS = 200;
+const MAX_REPLIES = 50;
+const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+const plain = (h, max = 2000) => String(h || '')
+  .replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>/g, '')
+  .replace(/&(#x[0-9a-f]+|#\d+|\w+);/gi, (m, e) => {
+    if (e[0] === '#') {
+      const n = e[1].toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : Number(e.slice(1));
+      return Number.isFinite(n) && n > 0 && n < 0x110000 ? String.fromCodePoint(n) : m;
+    }
+    return ENTITIES[e.toLowerCase()] || m;
+  }).trim().slice(0, max);
+const field = (h, cls) => {
+  const m = new RegExp(`<div class="${cls}">([\\s\\S]*?)</div>`, 'i').exec(h);
+  return m ? plain(m[1]) : '';
+};
+
+// The "<name>-comments.html" Drive writes: comments, who wrote them, the text
+// they were about, replies and whether they were resolved. Returns a list, or
+// null when the page isn't one (so an ordinary .html file is never swallowed).
+function parseComments(html) {
+  if (typeof html !== 'string' || !/class="comment"/.test(html)) return null;
+  const out = [];
+  for (const block of html.split(/<div id="[^"]*" class="comment">/).slice(1, MAX_COMMENTS + 1)) {
+    const [head, replies = ''] = block.split('<div class="reply-list">');
+    const comment = compact({
+      author: field(head, 'user-name'),
+      resolved: /class="comment-status">\s*Resolved/i.test(head),
+      deleted: /class="comment-deleted"/.test(head),
+      date: field(head, 'created-date'),
+      about: field(head, 'comment-context-value'),
+      text: field(head, 'comment-content'),
+      replies: replies.split('<div id="').slice(1, MAX_REPLIES + 1).map((r) => compact({
+        author: field(r, 'user-name'),
+        action: field(r, 'comment-action'),
+        date: field(r, 'created-date'),
+        text: field(r, 'comment-content'),
+      })).filter((r) => r.text || r.action),
+    });
+    if (comment.text || comment.replies || comment.about) out.push(comment);
+  }
+  return out.length ? out : null;
 }
 
 // Parses a JSON file's bytes (already size-capped by the caller).
@@ -123,4 +191,4 @@ function parseBytes(buf) {
   }
 }
 
-module.exports = { parseSidecar, parseBytes, driveInfoNames, CONVERTED, infoStem, convertedHint, SIDECAR_MAX: 1024 * 1024 };
+module.exports = { parseSidecar, parseBytes, driveInfoNames, infoStem, commentsStem, stemOf, convertedHint, chooseMain, parseComments, SIDECAR_MAX: 1024 * 1024, COMMENTS_MAX: 2 * 1024 * 1024 };
