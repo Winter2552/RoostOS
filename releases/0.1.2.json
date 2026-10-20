@@ -1,0 +1,14 @@
+{
+  "version": "0.1.2",
+  "date": "2026-10-20",
+  "title": "Roostflix accounts",
+  "summary": "Accounts made for you, with the right permissions.",
+  "items": [
+    {
+      "title": "Roostflix accounts, made for you",
+      "text": "New people get their Roostflix account the moment they join, with the right permissions for their role. Admins can add accounts for everyone already in Roost with one tap in Admin.",
+      "image": "jellyfin-accounts.png",
+      "admin": true
+    }
+  ]
+}
