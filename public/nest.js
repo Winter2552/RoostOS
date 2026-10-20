@@ -1098,7 +1098,12 @@
     } else if (kind === 'audio') {
       node = el('div', { class: 'nview-audio' }, ni('audio'), el('audio', { src: viewUrl(it), controls: true, autoplay: true, preload: 'metadata' }));
     } else if (kind === 'pdf') {
-      node = el('iframe', { src: viewUrl(it), title: it.name, class: 'nview-pdf' });
+      // Phone browsers show a framed PDF as one page that can't scroll, so on touch
+      // screens it opens in the phone's own PDF viewer in a new tab.
+      node = coarse.matches
+        ? el('div', { class: 'gview-fail' }, ni('doc'), el('b', { text: it.name }),
+          el('a', { class: 'btn small', href: viewUrl(it), target: '_blank', rel: 'noopener', text: 'Open PDF' }))
+        : el('iframe', { src: viewUrl(it), title: it.name, class: 'nview-pdf' });
     } else {
       NV.stage.replaceChildren(el('div', { class: 'gview-fail muted', text: 'Loading…' }));
       try {
