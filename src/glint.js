@@ -35,9 +35,9 @@ const MEDIA_EXT = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 
 const MEDIA = `n.kind = 'file' AND n.mime != 'image/svg+xml' AND (n.mime LIKE 'image/%' OR n.mime LIKE 'video/%' OR ${
   MEDIA_EXT.map((e) => `lower(n.name) LIKE '%.${e}'`).join(' OR ')})`;
 
-// Photos with no date taken inside them (screenshots, messaging apps, scans): still dated by their file.
+// Photos and videos with no date taken inside them (screenshots, messaging apps, scans, clips): still dated by their file.
 // Photos the browser hasn't looked at yet are left out until it has.
-const UNDATED = `AND p.date_src = 0 AND p.exif = 0 AND p.thumb != 0 AND n.mime LIKE 'image/%'`;
+const UNDATED = `AND p.date_src = 0 AND p.exif = 0 AND p.thumb != 0`;
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS photos (
@@ -650,7 +650,7 @@ function photoItem(p) {
     fav: Boolean(p.fav),
     set: Boolean(p.date_src),
     exif: Boolean(p.exif),
-    undated: !p.date_src && !p.exif && p.thumb !== 0 && String(p.mime).startsWith('image/'),
+    undated: !p.date_src && !p.exif && p.thumb !== 0,
     live: p.live || undefined,
   };
 }
