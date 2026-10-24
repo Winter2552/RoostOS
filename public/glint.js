@@ -859,12 +859,17 @@
   // A Live Photo: the picture, with its clip played while the picture or the LIVE button is held.
   function liveView(p) {
     const img = el('img', { src: mediaUrl(p), alt: p.name, class: 'gview-media', draggable: 'false' });
-    const clip = el('video', { src: sp(`/api/glint/media/${p.live}`), muted: true, playsinline: true, loop: true, preload: 'none', class: 'gview-media gview-clip hidden' });
-    clip.muted = true;
+    const clip = el('video', { src: sp(`/api/glint/media/${p.live}`), playsinline: true, loop: true, preload: 'none', class: 'gview-media gview-clip hidden' });
     const badge = el('button', { type: 'button', class: 'gview-live mono', text: 'LIVE', 'aria-label': 'Hold to play' });
     const wrap = el('div', { class: 'gview-livewrap' }, img, clip, badge);
     let timer = 0;
-    const play = () => { clip.classList.remove('hidden'); clip.currentTime = 0; clip.play().catch(() => {}); };
+    // With sound, as a Live Photo has. A browser that won't start sound without a tap (a hold on the picture) gets it silent.
+    const play = () => {
+      clip.classList.remove('hidden');
+      clip.currentTime = 0;
+      clip.muted = false;
+      clip.play().catch(() => { clip.muted = true; clip.play().catch(() => {}); });
+    };
     const stop = () => { clearTimeout(timer); clip.pause(); clip.classList.add('hidden'); };
     badge.addEventListener('pointerdown', (e) => { e.preventDefault(); play(); });
     // On the picture itself a short hold starts it, so a swipe still changes photo.
@@ -922,9 +927,24 @@
     pumpThumbs();
   }, { rootMargin: '300px' });
 
+  // Newest first, so what is on screen now is drawn before what was scrolled past, and a tile that has
+  // scrolled far away by the time its turn comes is put back to be picked up if it returns.
+  function offscreen(p) {
+    const t = body.querySelector(`.gtile[data-id="${p.id}"]`);
+    if (!t) return true;
+    const r = t.getBoundingClientRect();
+    return r.bottom < -600 || r.top > innerHeight + 600;
+  }
+
   function pumpThumbs() {
-    while (thumbBusy < 2 && thumbQueue.length) {
-      const job = thumbQueue.shift();
+    while (thumbBusy < 3 && thumbQueue.length) {
+      const job = thumbQueue.pop();
+      if (!job.file && offscreen(job.p)) {
+        job.p.making = false;
+        const t = body.querySelector(`.gtile[data-id="${job.p.id}"]`);
+        if (t) tileObserver.observe(t);
+        continue;
+      }
       thumbBusy++;
       makePreview(job.p, job.file).catch(() => {}).finally(() => { thumbBusy--; pumpThumbs(); });
     }
