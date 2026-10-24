@@ -27,6 +27,7 @@
     left: '<path d="M15 6l-6 6 6 6"/>',
     right: '<path d="M9 6l6 6-6 6"/>',
     edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/>',
+    calendar: '<rect x="4" y="5.5" width="16" height="14.5" rx="2"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4"/>',
     minus: '<path d="M5 12h14"/>',
     up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
     down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
@@ -67,7 +68,7 @@
   const G = {
     space: '',
     hideNest: false, // show only photos added through Glint, not ones that live elsewhere in Nest
-    mode: 'photos', // photos | favourites | albums | album | trash | move
+    mode: 'photos', // photos | favourites | undated | albums | album | trash | move
     album: null, // { id, name } when mode is 'album'
     items: [],
     next: null,
@@ -110,7 +111,7 @@
     const [a, b] = parts;
     if (space !== G.space) G.storage = null;
     G.space = space;
-    const mode = a === 'favourites' ? 'favourites' : a === 'albums' ? 'albums' : a === 'album' && b ? 'album' : a === 'trash' ? 'trash' : a === 'move' ? 'move' : 'photos';
+    const mode = a === 'favourites' ? 'favourites' : a === 'undated' ? 'undated' : a === 'albums' ? 'albums' : a === 'album' && b ? 'album' : a === 'trash' ? 'trash' : a === 'move' ? 'move' : 'photos';
     G.mode = mode;
     G.album = mode === 'album' ? { id: b, name: '' } : null;
     G.items = [];
@@ -143,6 +144,7 @@
         const q = new URLSearchParams();
         if (!first && G.next) q.set('before', G.next);
         if (G.mode === 'favourites') q.set('fav', '1');
+        if (G.mode === 'undated') q.set('undated', '1');
         if (G.hideNest && (G.mode === 'photos' || G.mode === 'favourites')) q.set('own', '1');
         if (G.mode === 'album') q.set('album', G.album.id);
         const d = await gapi('GET', `/api/glint/photos?${q}`);
@@ -227,7 +229,7 @@
   }
 
   function renderCrumbs() {
-    const names = { photos: 'Photos', favourites: 'Favourites', albums: 'Albums', trash: 'Trash', move: 'Move to Glint' };
+    const names = { photos: 'Photos', favourites: 'Favourites', undated: 'Undated', albums: 'Albums', trash: 'Trash', move: 'Move to Glint' };
     const crumbs = $('#glint-crumbs');
     if (G.mode === 'album') {
       crumbs.replaceChildren(
@@ -246,6 +248,10 @@
     const tools = $('#glint-tools');
     const note = (text) => el('span', { class: 'mono muted glint-count', text });
     if (G.mode === 'photos') tools.replaceChildren(note(G.total ? plural(G.total, 'item') : ''));
+    else if (G.mode === 'undated') {
+      tools.replaceChildren(note(G.total ? plural(G.total, 'photo') : ''),
+        G.items.length ? el('button', { type: 'button', class: 'btn ghost small', text: 'Use file names', onclick: () => dateFromNames(G.items) }) : '');
+    }
     else if (G.mode === 'favourites' || G.mode === 'move') tools.replaceChildren();
     else if (G.mode === 'albums') tools.replaceChildren(el('button', { type: 'button', class: 'btn ghost small', text: 'New album', onclick: () => newAlbum([]) }));
     else if (G.mode === 'album') {
@@ -266,6 +272,7 @@
       const [head, text] = {
         photos: ['No photos yet', coarse.matches ? 'Tap Upload to add photos and videos.' : 'Drop photos here, or press Upload.'],
         favourites: ['No favourites yet', 'Tap the star on a photo to keep it here.'],
+        undated: ['Every photo has a date', 'Photos with no date taken inside them show up here, so you can date them.'],
         album: ['This album is empty', 'Select photos in Photos and choose Add to album.'],
       }[G.mode];
       body.replaceChildren(el('div', { class: 'nest-empty' }, gi('photo'), el('b', { text: head }), el('span', { class: 'muted', text: text })));
@@ -386,6 +393,7 @@
       ? [btn('restore', 'Restore', () => restore(items)), btn('trash', 'Delete forever', () => deleteForever(items))]
       : [
         btn(allFav ? 'star' : 'starFill', allFav ? 'Unfavourite' : 'Favourite', () => favourite(items, !allFav)),
+        btn('calendar', 'Set date', () => setDate(items)),
         btn('album', 'Add to album', () => albumPicker(items)),
         btn('download', 'Download', () => download(items)),
         G.mode === 'album' ? btn('minus', 'Remove from album', () => removeFromAlbum(items)) : null,
@@ -467,6 +475,95 @@
       if (G.mode === 'favourites' && !on) removeLocal(items.map((i) => i.id));
       else { render(); }
     } catch (err) { toast(err.message); }
+  }
+
+  // ---------- dates ----------
+
+  const dayInput = (ms) => {
+    const d = new Date(ms);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+
+  // A date in a file name: IMG_20060801_101112, 2021-03-02 10.11.12, WhatsApp Image 2023-05-04 at 21.02.40,
+  // Screenshot_2021-03-02-10-11-12, PXL_20210302_101112345. Local time of this device; noon when there is no time.
+  function dateFromName(name) {
+    const m = /(?<!\d)((?:19|20)\d\d)[-_.]?(0[1-9]|1[0-2])[-_.]?(0[1-9]|[12]\d|3[01])(?!\d)(?:[\s_.T-]+(?:at\s+)?([01]\d|2[0-3])[-_.: ]?([0-5]\d)[-_.: ]?([0-5]\d)(?!\d))?/i.exec(name);
+    if (!m) return null;
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), m[4] ? Number(m[4]) : 12, m[5] ? Number(m[5]) : 0, m[6] ? Number(m[6]) : 0);
+    // 31 February and the like: not a date.
+    return d.getMonth() === Number(m[2]) - 1 && d.getFullYear() <= new Date().getFullYear() + 1 ? d.getTime() : null;
+  }
+
+  // Send new dates, then show them: photos that are no longer undated leave the Undated page, and the
+  // timeline is put back in order. Undo puts every photo's old date back.
+  async function applyDates(items, body, text) {
+    const before = items.map((i) => ({ id: i.id, taken: i.taken, src: i.set ? 1 : 0, exif: i.exif ? 1 : 0 }));
+    try {
+      const { items: fresh } = await gapi('POST', '/api/glint/date', body);
+      const byFresh = new Map(fresh.map((f) => [f.id, f]));
+      for (const i of G.items) if (byFresh.has(i.id)) Object.assign(i, byFresh.get(i.id));
+      if (G.mode === 'undated') {
+        removeLocal(fresh.filter((f) => !f.undated).map((f) => f.id));
+        if (V.open) { if (!G.items.length) closeViewer(); else { V.i = Math.min(V.i, G.items.length - 1); showPhoto(); } }
+      }
+      else { G.sel.clear(); refresh(); }
+      toast(text(fresh.length), async () => {
+        const { items: back } = await gapi('POST', '/api/glint/date', { restore: before.filter((b) => byFresh.has(b.id)) });
+        for (const b of back) { const i = byId(b.id); if (i) Object.assign(i, b); }
+        refresh();
+      });
+    } catch (err) { toast(err.message); }
+  }
+
+  function dateFromNames(items) {
+    const found = [];
+    for (const i of items) {
+      const taken = dateFromName(i.name);
+      if (taken !== null) found.push({ id: i.id, taken });
+    }
+    if (!found.length) { toast('None of these file names has a date in it'); return; }
+    const mine = items.filter((i) => found.some((f) => f.id === i.id));
+    applyDates(mine, { items: found }, (n) => `Dated ${plural(n, 'photo')} from their file names`);
+  }
+
+  // Choose a date for the selected photos, or move their dates earlier or later (a camera with the wrong clock).
+  function setDate(items) {
+    if (!items.length) return;
+    const first = items[0];
+    const date = el('input', { type: 'date', value: dayInput(first.taken), max: dayInput(Date.now() + 864e5), 'aria-label': 'Date' });
+    const days = el('input', { type: 'number', min: '0', max: '36500', value: '1', inputmode: 'numeric', 'aria-label': 'Days' });
+    const dir = el('select', { 'aria-label': 'Earlier or later' }, el('option', { value: '-1', text: 'earlier' }), el('option', { value: '1', text: 'later' }));
+    const mode = el('select', { 'aria-label': 'How' }, el('option', { value: 'set', text: 'Set to a date' }), el('option', { value: 'shift', text: 'Move by some days' }));
+    const setRow = el('label', { class: 'field' }, el('span', { text: 'Date' }), date);
+    const shiftRow = el('div', { class: 'field hidden' }, el('span', { text: 'Move every date' }), el('div', { class: 'gdate-shift' }, days, el('span', { text: 'days' }), dir));
+    mode.addEventListener('change', () => {
+      setRow.classList.toggle('hidden', mode.value !== 'set');
+      shiftRow.classList.toggle('hidden', mode.value !== 'shift');
+    });
+    const done = (v) => { dialog.onclose = null; dialog.close(); if (v) go(); };
+    const go = () => {
+      if (mode.value === 'set') {
+        if (!date.value) return;
+        const [y, m, d] = date.value.split('-').map(Number);
+        applyDates(items, { ids: items.map((i) => i.id), taken: new Date(y, m - 1, d, 12).getTime() }, (n) => `Dated ${plural(n, 'photo')} ${dayName(new Date(y, m - 1, d).getTime())}`);
+      } else {
+        const n = Math.round(Number(days.value));
+        if (!Number.isFinite(n) || n < 0) return;
+        const shift = Number(dir.value) * n * 864e5;
+        applyDates(items, { ids: items.map((i) => i.id), shift }, (c) => `Moved ${plural(c, 'date')} ${n} ${n === 1 ? 'day' : 'days'} ${shift < 0 ? 'earlier' : 'later'}`);
+      }
+    };
+    showDialog(items.length === 1 ? 'Set date' : `Set date for ${items.length} photos`, [
+      el('label', { class: 'field' }, el('span', { text: 'What to do' }), mode),
+      setRow,
+      shiftRow,
+      el('p', { class: 'muted', text: 'Only Glint’s date changes. The photo files are never touched.' }),
+    ], [
+      el('button', { type: 'button', class: 'btn ghost small', text: 'Cancel', onclick: () => done(false) }),
+      el('button', { type: 'button', class: 'btn small', text: 'Save', onclick: () => done(true) }),
+    ]);
+    dialog.onclose = () => {};
+    date.focus();
   }
 
   function download(items) {
@@ -697,6 +794,7 @@
         V.title,
         V.fav,
         el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Info', onclick: showInfo }, gi('info')),
+        el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Set date', onclick: () => setDate([G.items[V.i]]) }, gi('calendar')),
         el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Add to album', onclick: () => albumPicker([G.items[V.i]]) }, gi('album')),
         el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Download', onclick: () => download([G.items[V.i]]) }, gi('download')),
         el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Delete', onclick: deleteCurrent }, gi('trash'))),
@@ -872,6 +970,7 @@
   async function makePreview(p, file) {
     let blob = file;
     let taken = null;
+    let exif = false;
     let w = 0;
     let h = 0;
     let dur = 0;
@@ -885,6 +984,7 @@
       }
       if (blob && !p.video) {
         taken = exifDate(await blob.slice(0, 131072).arrayBuffer());
+        exif = taken !== null;
         if (taken === null) taken = fileDate(file);
         const bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' });
         w = bmp.width;
@@ -902,6 +1002,7 @@
     }
     const q = new URLSearchParams();
     if (taken !== null) q.set('taken', String(taken));
+    if (exif) q.set('exif', '1');
     if (w) { q.set('w', String(w)); q.set('h', String(h)); }
     if (dur) q.set('dur', String(dur));
     const res = await fetch(sp(`/api/glint/photos/${p.id}/preview?${q}`), {
@@ -915,6 +1016,7 @@
     Object.assign(p, item);
     p.making = false;
     const t = body.querySelector(`.gtile[data-id="${p.id}"]`);
+    if (G.mode === 'undated' && !p.undated) { removeLocal([p.id]); return; }
     if (t) t.replaceWith(tile(p));
     // A new date can change where the photo belongs; the next load puts it in order.
     if (taken !== null) reloadSoon();
@@ -1043,6 +1145,19 @@
   }
 
   let reloadTimer = null;
+  // Back in order after dates changed (the viewer keeps its place; the list catches up when it closes).
+  function refresh() {
+    if (V.open) { showPhoto(); return; }
+    reloadNow();
+  }
+
+  function reloadNow() {
+    if (!['photos', 'favourites', 'undated'].includes(G.mode)) return;
+    G.items = []; G.next = null; G.total = 0; G.sel.clear();
+    render();
+    load(true);
+  }
+
   function reloadSoon() {
     clearTimeout(reloadTimer);
     reloadTimer = setTimeout(() => {
