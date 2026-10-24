@@ -47,7 +47,7 @@
   const gapi = (method, url, body, space) => api(method, sp(url, space), body);
   const base = (space = G.space) => (space ? '#/glint/family' : '#/glint');
   const thumbUrl = (p) => sp(`/api/glint/thumbs/${p.id}`);
-  const mediaUrl = (p) => sp(`/api/glint/media/${p.id}`);
+  const mediaUrl = (p, preview) => sp(`/api/glint/media/${p.id}${preview ? '?preview=1' : ''}`);
 
   function monthName(ms) {
     return new Date(ms).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
@@ -605,7 +605,7 @@
     const left = (ms) => Math.max(0, Math.ceil((ms - Date.now()) / 86400000));
     body.replaceChildren(el('p', { class: 'mono muted glint-note', text: 'Photos here are deleted for good after 30 days.' }),
       el('div', { class: 'glint-trash' }, ...G.items.map((p) => el('div', { class: `gtrash${G.sel.has(p.id) ? ' sel' : ''}`, 'data-id': p.id },
-        el('button', { type: 'button', class: 'gtrash-pick', 'aria-label': `Select ${p.name}`, onclick: () => toggle(p.id) }, gi(G.sel.has(p.id) ? 'check' : p.name.match(/\.(mp4|mov|m4v|webm|3gp)$/i) ? 'play' : 'photo')),
+        el('button', { type: 'button', class: 'gtrash-pick', 'aria-label': `Select ${p.name}`, onclick: () => toggle(p.id) }, gi(G.sel.has(p.id) ? 'check' : p.name.match(/\.(mp4|mov|m4v|webm|3gp|mkv|avi|wmv|flv|mpe?g|mts|m2ts)$/i) ? 'play' : 'photo')),
         el('span', { class: 'gtrash-name', text: p.name }),
         el('span', { class: 'mono muted', text: `${plural(left(p.deletesAt), 'day')} left · ${bytes(p.size)}` }),
         el('button', { type: 'button', class: 'btn ghost small', text: 'Restore', onclick: () => restore([p]) })))));
@@ -739,7 +739,14 @@
       ? el('video', { src: mediaUrl(p), controls: true, autoplay: true, playsinline: true, preload: 'metadata', class: 'gview-media' })
       : el('img', { src: mediaUrl(p), alt: p.name, class: 'gview-media', draggable: 'false' });
     // A format this browser can't show (HEIC on Windows) offers the download instead.
+    // The server makes (once) and sends a JPEG or MP4 copy when it can; the original is never changed.
+    let converted = false;
     node.addEventListener('error', () => {
+      if (!converted) {
+        converted = true;
+        node.src = mediaUrl(p, true);
+        return;
+      }
       V.stage.replaceChildren(el('div', { class: 'gview-fail' }, el('b', { text: 'This browser can’t show this file' }),
         el('button', { type: 'button', class: 'btn small', text: 'Download it', onclick: () => download([p]) })));
     });
@@ -908,7 +915,15 @@
       if (blob && !p.video) {
         taken = exifDate(await blob.slice(0, 131072).arrayBuffer());
         if (taken === null) taken = fileDate(file);
-        const bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+        let bmp;
+        try {
+          bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+        } catch {
+          // HEIC on Windows and the like: draw from the server's JPEG copy instead.
+          const conv = await fetch(mediaUrl(p, true));
+          if (!conv.ok) throw new Error('unavailable');
+          bmp = await createImageBitmap(await conv.blob(), { imageOrientation: 'from-image' });
+        }
         w = bmp.width;
         h = bmp.height;
         jpeg = await toJpeg(drawSmall(bmp, w, h));
@@ -950,8 +965,13 @@
       v.preload = 'auto';
       const url = file ? URL.createObjectURL(file) : mediaUrl(p);
       const done = (fn, val) => { clearTimeout(timer); v.removeAttribute('src'); v.load(); if (file) URL.revokeObjectURL(url); fn(val); };
-      const timer = setTimeout(() => done(reject, new Error('timeout')), 15000);
-      v.addEventListener('error', () => done(reject, new Error('unsupported')));
+      const timer = setTimeout(() => done(reject, new Error('timeout')), 90000);
+      let converted = false;
+      v.addEventListener('error', () => {
+        // MKV, 3GP and the like: draw from the server's MP4 copy (made once) instead.
+        if (!converted) { converted = true; v.src = mediaUrl(p, true); return; }
+        done(reject, new Error('unsupported'));
+      });
       v.addEventListener('loadeddata', () => { v.currentTime = Math.min(0.5, (v.duration || 1) / 2); });
       v.addEventListener('seeked', async () => {
         try {
@@ -970,7 +990,7 @@
   document.body.append(panel);
 
   async function queueUploads(files) {
-    const media = files.filter((f) => /^(image|video)\//.test(f.type) || /\.(jpe?g|png|gif|webp|heic|heif|avif|bmp|mp4|mov|m4v|webm|3gp)$/i.test(f.name));
+    const media = files.filter((f) => /^(image|video)\//.test(f.type) || /\.(jpe?g|png|gif|webp|heic|heif|avif|bmp|tiff?|mp4|mov|m4v|webm|3gp|mkv|avi|wmv|flv|mpe?g|mts|m2ts)$/i.test(f.name));
     const skippedType = files.length - media.length;
     const space = G.space;
     if (!media.length) { if (skippedType) toast('Glint takes photos and videos. Use Files for everything else.'); return; }

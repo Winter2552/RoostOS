@@ -1,0 +1,13 @@
+{
+  "version": "0.1.5",
+  "date": "2026-10-24",
+  "title": "More photo and video formats open",
+  "summary": "HEIC, TIFF, MKV, AVI, 3GP and more now open in Nest and Glint.",
+  "items": [
+    {
+      "title": "More photo and video formats open",
+      "text": "iPhone HEIC photos, TIFF scans and videos like MKV, AVI and 3GP now open in Nest and Glint on any browser. Roost makes a viewing copy the first time and keeps it; your original is never changed.",
+      "image": "more-formats.png"
+    }
+  ]
+}

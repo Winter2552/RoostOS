@@ -1001,8 +1001,8 @@
   // folder. Anything else offers the download and Info.
 
   const VIEW_EXT = {
-    image: /\.(jpe?g|png|gif|webp)$/i,
-    video: /\.(mp4|webm)$/i,
+    image: /\.(jpe?g|png|gif|webp|heic|heif|hif|tiff?)$/i,
+    video: /\.(mp4|webm|3gp|3g2|mkv|avi|wmv|flv|mpe?g|mts|m2ts|ts|mov|m4v|ogv|vob|asf)$/i,
     audio: /\.(mp3|m4a|wav|ogg)$/i,
     pdf: /\.pdf$/i,
     text: /\.(txt|md|markdown|csv|tsv|json|log|xml|ya?ml|ini|conf|toml|m?js|ts|css|html?|py|sh|bat|java|c|h|cpp|go|rs|php|rb|sql)$/i,
@@ -1010,7 +1010,27 @@
   const TEXT_CAP = 512 * 1024;
   const viewKind = (name) => Object.keys(VIEW_EXT).find((k) => VIEW_EXT[k].test(name)) || '';
   const NV = { open: false, list: [], i: 0, root: null, touch: null, token: 0 };
-  const viewUrl = (it) => sp(`/api/nest/files/${it.id}?view=1`);
+  const viewUrl = (it, preview) => sp(`/api/nest/files/${it.id}?view=1${preview ? '&preview=1' : ''}`);
+  // HEIC, MKV, 3GP...: try the file as it is; if this browser can't, the server
+  // makes (once) and sends a JPEG or MP4 copy. The original is never changed.
+  const CONVERTIBLE = /\.(heic|heif|hif|tiff?|3gp|3g2|mkv|avi|wmv|flv|mpe?g|mts|m2ts|ts|mov|m4v|ogv|vob|asf)$/i;
+  function withFallback(node, it, mine) {
+    let tried = false;
+    node.dataset.fallback = '1';
+    node.addEventListener('error', () => {
+      if (!tried && CONVERTIBLE.test(it.name)) {
+        tried = true;
+        node.src = viewUrl(it, true);
+        NV.stage.append(el('div', { class: 'gview-fail muted nview-prep', text: 'Getting it ready to view…' }));
+      } else if (mine === NV.token) {
+        NV.stage.replaceChildren(cantShow(it, 'This file couldn’t be opened'));
+      }
+    });
+    const ready = () => NV.stage.querySelector('.nview-prep')?.remove();
+    node.addEventListener('load', ready);
+    node.addEventListener('loadeddata', ready);
+    return node;
+  }
 
   function openViewer(it) {
     if (N.mode !== 'drive') return;
@@ -1092,9 +1112,9 @@
     NV.next.classList.toggle('hidden', NV.i >= NV.list.length - 1);
     let node;
     if (kind === 'image') {
-      node = el('img', { src: viewUrl(it), alt: it.name, class: 'gview-media', draggable: 'false' });
+      node = withFallback(el('img', { src: viewUrl(it), alt: it.name, class: 'gview-media', draggable: 'false' }), it, mine);
     } else if (kind === 'video') {
-      node = el('video', { src: viewUrl(it), controls: true, autoplay: true, playsinline: true, preload: 'metadata', class: 'gview-media' });
+      node = withFallback(el('video', { src: viewUrl(it), controls: true, autoplay: true, playsinline: true, preload: 'metadata', class: 'gview-media' }), it, mine);
     } else if (kind === 'audio') {
       node = el('div', { class: 'nview-audio' }, ni('audio'), el('audio', { src: viewUrl(it), controls: true, autoplay: true, preload: 'metadata' }));
     } else if (kind === 'pdf') {
@@ -1120,7 +1140,7 @@
       }
     }
     // A format this browser can't show offers the download instead.
-    node.addEventListener('error', () => NV.stage.replaceChildren(cantShow(it, 'This browser can’t show this file')), true);
+    if (!node.dataset || !node.dataset.fallback) node.addEventListener('error', () => NV.stage.replaceChildren(cantShow(it, 'This browser can’t show this file')), true);
     NV.stage.replaceChildren(node);
     if (fileInfo.isOpen) fileInfo.open(it.id, N.space); // the panel follows the file
   }

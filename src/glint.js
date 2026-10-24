@@ -31,7 +31,7 @@ const LIVE_MAX_SECONDS = 6;
 const LIVE_MAX_BYTES = 20 * 1024 * 1024;
 
 // What counts as a photo or video: by type, or by name when the browser sent no type.
-const MEDIA_EXT = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'bmp', 'mp4', 'mov', 'm4v', 'webm', '3gp'];
+const MEDIA_EXT = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'bmp', 'mp4', 'mov', 'm4v', 'webm', '3gp', 'mkv', 'avi', 'wmv', 'flv', 'mpg', 'mpeg', 'mts', 'm2ts', 'tif', 'tiff'];
 const MEDIA = `n.kind = 'file' AND n.mime != 'image/svg+xml' AND (n.mime LIKE 'image/%' OR n.mime LIKE 'video/%' OR ${
   MEDIA_EXT.map((e) => `lower(n.name) LIKE '%.${e}'`).join(' OR ')})`;
 
@@ -70,11 +70,12 @@ const SCHEMA = `
 
 // Image and video types a browser can show directly. Anything else is sent
 // as a download, so an uploaded web page can never run as part of Roost.
-const INLINE = /^(image\/(jpeg|png|gif|webp|avif|heic|heif|bmp)|video\/(mp4|quicktime|webm|x-m4v|3gpp))$/;
+const INLINE = /^(image\/(jpeg|png|gif|webp|avif|heic|heif|bmp|tiff)|video\/(mp4|quicktime|webm|x-m4v|3gpp|x-matroska|x-msvideo|x-ms-wmv|x-flv|mpeg|mp2t))$/;
 const BY_EXT = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', avif: 'image/avif',
   heic: 'image/heic', heif: 'image/heif', bmp: 'image/bmp', mp4: 'video/mp4', m4v: 'video/x-m4v', mov: 'video/quicktime',
-  webm: 'video/webm', '3gp': 'video/3gpp',
+  webm: 'video/webm', '3gp': 'video/3gpp', mkv: 'video/x-matroska', avi: 'video/x-msvideo', wmv: 'video/x-ms-wmv',
+  flv: 'video/x-flv', mpg: 'video/mpeg', mpeg: 'video/mpeg', mts: 'video/mp2t', m2ts: 'video/mp2t', tif: 'image/tiff', tiff: 'image/tiff',
 };
 
 function mediaType(n) {
@@ -441,6 +442,7 @@ class Glint {
     }
     if ((method === 'GET' || method === 'HEAD') && (r = m(/^\/api\/glint\/media\/([\w-]+)$/))) {
       const p = this.photo(user, r[1]);
+      if (params.get('preview') === '1') return nest.sendConverted(user, p.id, req, res);
       return nest.download(user, p.id, req, res, { inline: mediaType(p) });
     }
     if ((method === 'GET' || method === 'HEAD') && (r = m(/^\/api\/glint\/download\/([\w-]+)$/))) {
