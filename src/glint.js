@@ -167,20 +167,25 @@ class Glint {
 
   // A page of photos, newest first. `before` is the last photo of the
   // previous page ("<taken>.<id>"); album and favourites narrow the list.
-  timeline(user, { before = '', album = '', favourites = false } = {}) {
+  timeline(user, { before = '', album = '', favourites = false, own = false } = {}) {
     if (!before) this.q.index.run(user.id);
     if (album && !this.q.album.get(album, user.id)) throw new HttpError(404, 'That album no longer exists');
-    const key = `${Boolean(before)}|${Boolean(album)}|${favourites}`;
+    const key = `${Boolean(before)}|${Boolean(album)}|${favourites}|${own}`;
+    // "Own" shows only what Glint put in Photos/ (and Photos/<year>), not photos that live elsewhere in Nest.
+    const ownSql = own ? `AND n.parent IN (SELECT f.id FROM nodes f WHERE f.owner = :owner AND f.kind = 'folder'
+          AND f.trash_root IS NULL AND (f.id = :photos OR f.parent = :photos))` : '';
     if (!this.pages.has(key)) {
       this.pages.set(key, this.db.prepare(`SELECT p.*, n.name, n.mime, n.size FROM photos p
         JOIN nodes n ON n.id = p.id
         ${album ? 'JOIN album_photos ap ON ap.photo = p.id AND ap.album = :album' : ''}
         WHERE p.owner = :owner AND n.trash_root IS NULL
         ${favourites ? 'AND p.fav = 1' : ''}
+        ${ownSql}
         ${before ? 'AND (p.taken < :taken OR (p.taken = :taken AND p.id < :id))' : ''}
         ORDER BY p.taken DESC, p.id DESC LIMIT :limit`));
     }
     const params = { owner: user.id, limit: PAGE + 1 };
+    if (own) params.photos = (this.nest.q.findFolder.get(user.id, '', 'Photos') || { id: '-' }).id;
     if (album) params.album = album;
     if (before) {
       const dot = before.indexOf('.');
@@ -195,8 +200,13 @@ class Glint {
     return {
       items,
       next: rows.length > PAGE ? `${last.taken}.${last.id}` : null,
-      total: before ? undefined : this.q.count.get(user.id).n,
+      total: before ? undefined : own ? this.ownCount(user, params.photos, ownSql) : this.q.count.get(user.id).n,
     };
+  }
+
+  ownCount(user, photos, ownSql) {
+    return this.db.prepare(`SELECT COUNT(*) AS n FROM photos p JOIN nodes n ON n.id = p.id
+      WHERE p.owner = :owner AND n.trash_root IS NULL ${ownSql}`).get({ owner: user.id, photos }).n;
   }
 
   find(user, id) {
@@ -343,7 +353,7 @@ class Glint {
 
     if (method === 'GET' && pathname === '/api/glint/photos') {
       return send(res, 200, {
-        ...this.timeline(user, { before: str(params.get('before'), 80), album: str(params.get('album'), 40), favourites: params.get('fav') === '1' }),
+        ...this.timeline(user, { before: str(params.get('before'), 80), album: str(params.get('album'), 40), favourites: params.get('fav') === '1', own: params.get('own') === '1' }),
         storage: nest.storage(user),
       });
     }
