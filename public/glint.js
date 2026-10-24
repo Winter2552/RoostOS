@@ -922,9 +922,24 @@
     pumpThumbs();
   }, { rootMargin: '300px' });
 
+  // Newest first, so what is on screen now is drawn before what was scrolled past, and a tile that has
+  // scrolled far away by the time its turn comes is put back to be picked up if it returns.
+  function offscreen(p) {
+    const t = body.querySelector(`.gtile[data-id="${p.id}"]`);
+    if (!t) return true;
+    const r = t.getBoundingClientRect();
+    return r.bottom < -600 || r.top > innerHeight + 600;
+  }
+
   function pumpThumbs() {
-    while (thumbBusy < 2 && thumbQueue.length) {
-      const job = thumbQueue.shift();
+    while (thumbBusy < 3 && thumbQueue.length) {
+      const job = thumbQueue.pop();
+      if (!job.file && offscreen(job.p)) {
+        job.p.making = false;
+        const t = body.querySelector(`.gtile[data-id="${job.p.id}"]`);
+        if (t) tileObserver.observe(t);
+        continue;
+      }
       thumbBusy++;
       makePreview(job.p, job.file).catch(() => {}).finally(() => { thumbBusy--; pumpThumbs(); });
     }
