@@ -996,6 +996,17 @@
 
   // Reads one photo or video (from the File just uploaded, or from the server
   // for older ones) and sends back its date, size and preview.
+  async function imageFromBlob(blob) {
+    const url = URL.createObjectURL(blob);
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      if (!img.naturalWidth) throw new Error('empty');
+      return img;
+    } finally { URL.revokeObjectURL(url); }
+  }
+
   async function makePreview(p, file) {
     let blob = file;
     let taken = null;
@@ -1019,15 +1030,19 @@
         try {
           bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' });
         } catch {
-          // HEIC on Windows and the like: draw from the server's JPEG copy instead.
-          const conv = await fetch(mediaUrl(p, true));
-          if (!conv.ok) throw new Error('unavailable');
-          bmp = await createImageBitmap(await conv.blob(), { imageOrientation: 'from-image' });
+          // An iPhone can show HEIC in an image even when createImageBitmap won't take it: try that before asking the server.
+          bmp = await imageFromBlob(blob).catch(() => null);
+          if (!bmp) {
+            // HEIC on Windows and the like: draw from the server's JPEG copy instead.
+            const conv = await fetch(mediaUrl(p, true));
+            if (!conv.ok) throw new Error('unavailable');
+            bmp = await createImageBitmap(await conv.blob(), { imageOrientation: 'from-image' });
+          }
         }
-        w = bmp.width;
-        h = bmp.height;
+        w = bmp.width || bmp.naturalWidth;
+        h = bmp.height || bmp.naturalHeight;
         jpeg = await toJpeg(drawSmall(bmp, w, h));
-        bmp.close();
+        if (bmp.close) bmp.close();
       } else if (p.video) {
         const out = await videoPreview(file ? file : null, p);
         ({ w, h, dur } = out);
