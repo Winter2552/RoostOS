@@ -66,6 +66,7 @@
 
   const G = {
     space: '',
+    hideNest: false, // show only photos added through Glint, not ones that live elsewhere in Nest
     mode: 'photos', // photos | favourites | albums | album | trash | move
     album: null, // { id, name } when mode is 'album'
     items: [],
@@ -79,6 +80,18 @@
     storage: null,
   };
 
+  try { G.hideNest = localStorage.getItem('glint.hideNest') === '1'; } catch { /* private mode */ }
+  // Show only photos added through Glint, not ones that live elsewhere in Nest (e.g. moved in from Google Drive).
+  const hideNest = $('#glint-hide-nest');
+  hideNest.checked = G.hideNest;
+  hideNest.addEventListener('change', () => {
+    G.hideNest = hideNest.checked;
+    try { localStorage.setItem('glint.hideNest', G.hideNest ? '1' : '0'); } catch { /* private mode */ }
+    if (G.mode !== 'photos' && G.mode !== 'favourites') return;
+    G.items = []; G.next = null; G.total = 0; G.sel.clear();
+    render();
+    load(true);
+  });
   const body = $('#glint-body');
   const view = $('#view-glint');
   const byId = (id) => G.items.find((i) => i.id === id);
@@ -130,6 +143,7 @@
         const q = new URLSearchParams();
         if (!first && G.next) q.set('before', G.next);
         if (G.mode === 'favourites') q.set('fav', '1');
+        if (G.hideNest && (G.mode === 'photos' || G.mode === 'favourites')) q.set('own', '1');
         if (G.mode === 'album') q.set('album', G.album.id);
         const d = await gapi('GET', `/api/glint/photos?${q}`);
         if (token !== G.token) return;

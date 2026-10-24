@@ -26,7 +26,7 @@ before(async () => {
   base = `http://127.0.0.1:${server.address().port}`;
   admin = (await call('POST', '/api/setup', { username: 'raven', password: 'correct horse' })).cookie;
   await setUpTwoStep(call, admin);
-  const made = await call('POST', '/api/admin/users', { username: 'mia', password: 'password1', limitGb: 1, apps: ['nest'] }, admin);
+  const made = await call('POST', '/api/admin/users', { username: 'mia', password: 'password1', limitGb: 1, apps: ['nest', 'glint'] }, admin);
   miaId = made.body.user.id;
   mia = (await call('POST', '/api/login', { username: 'mia', password: 'password1' })).cookie;
 });
@@ -161,4 +161,24 @@ test('a full limit stops it with a message, delete the zips frees space, Move to
   // Glint's own move sees none of these.
   const g = await call('GET', '/api/glint/import', null, admin);
   assert.deepEqual(g.body.counts, { moved: 0, nodate: 0, dup: 0, skipped: 0, problem: 0 });
+});
+
+test('photos moved in from Drive sit in Glint on their original date, not the day they arrived', async () => {
+  const old = Date.UTC(2006, 7, 1, 9, 46, 0);
+  await putZip(mia, 'takeout-photos.zip', makeZip([
+    { name: `${T}Kids/Photos/P1010003.jpg`, data: 'an old photo with no exif', mtime: old },
+  ]));
+  await call('POST', '/api/nest/import/start', {}, mia);
+  await finished(mia);
+  const page = (await call('GET', '/api/glint/photos', null, mia)).body;
+  const p = page.items.find((i) => i.name === 'P1010003.jpg');
+  assert.ok(Math.abs(p.taken - old) < 3000, new Date(p.taken).toISOString());
+
+  // Photos already in Glint with the arrival date get fixed too, once, and a real date is left alone.
+  const db = server.glint.db;
+  db.prepare('UPDATE photos SET taken = (SELECT created FROM nodes WHERE id = photos.id) WHERE id = ?').run(p.id);
+  assert.equal(server.glint.repairDates(), 1);
+  assert.ok(Math.abs((await call('GET', '/api/glint/photos', null, mia)).body.items.find((i) => i.id === p.id).taken - old) < 3000);
+  db.prepare('UPDATE photos SET taken = ? WHERE id = ?').run(Date.UTC(2006, 7, 2), p.id);
+  assert.equal(server.glint.repairDates(), 0);
 });

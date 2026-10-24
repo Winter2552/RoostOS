@@ -250,3 +250,22 @@ test("Glint's trash only empties photos, never other Nest files", async () => {
   const nestTrash = (await call('GET', '/api/nest/trash', null, sam)).body.items;
   assert.deepEqual(nestTrash.map((t) => t.name), ['tax.pdf']);
 });
+
+test('"Hide Nest photos" shows only photos added through Glint', async () => {
+  const mine = await upload(sam, 'IMG_own.jpg', 'added through glint', { year: 2022 });
+  // A photo that lives elsewhere in Nest (a folder of its own, like a Drive move).
+  const start = await call('POST', '/api/nest/uploads', { parent: 'root', path: 'From Google Drive/Kids', name: 'old.jpg', size: 9, type: 'image/jpeg' }, sam);
+  assert.equal(start.status, 201);
+  await fetch(`${base}/api/nest/uploads/${start.body.id}?offset=0`, { method: 'PUT', headers: { Cookie: sam, 'Content-Type': 'application/octet-stream' }, body: Buffer.from('elsewhere') });
+
+  const all = await photos(sam);
+  const own = await photos(sam, '?own=1');
+  const names = (p) => p.items.map((i) => i.name);
+  assert.ok(names(all).includes('old.jpg') && names(all).includes('IMG_own.jpg'));
+  assert.ok(names(own).includes('IMG_own.jpg') && !names(own).includes('old.jpg'));
+  assert.equal(own.total, all.total - 1);
+  assert.equal(own.items.some((i) => i.id === mine.id), true);
+  // A person with no Photos folder yet just sees nothing, not an error.
+  const empty = await photos(admin, '?own=1');
+  assert.equal(empty.items.length, 0);
+});
