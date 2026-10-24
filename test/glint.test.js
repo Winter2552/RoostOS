@@ -274,6 +274,8 @@ test('photos with no date inside them can be dated by hand, and the browser leav
   const a = await upload(sam, 'scan_a.jpg', 'aaaa', { year: 2024 });
   const b = await upload(sam, 'scan_b.jpg', 'bbbb', { year: 2024 });
   const c = await upload(sam, 'dated.jpg', 'cccc', { year: 2024 });
+  const clip = await upload(sam, 'scan_clip.mp4', 'vvvv', { year: 2024, type: 'video/mp4' });
+  await preview(sam, clip.id, `taken=${Date.UTC(2024, 0, 1)}&dur=30`);
   const fileDate = Date.UTC(2024, 0, 1);
   await preview(sam, a.id, `taken=${fileDate}`);
   await preview(sam, b.id, `taken=${fileDate}`);
@@ -281,7 +283,7 @@ test('photos with no date inside them can be dated by hand, and the browser leav
 
   const undated = await photos(sam, '?undated=1');
   const scans = (p) => p.items.map((i) => i.name).filter((n) => n.startsWith('scan_')).sort();
-  assert.deepEqual(scans(undated), ['scan_a.jpg', 'scan_b.jpg']);
+  assert.deepEqual(scans(undated), ['scan_a.jpg', 'scan_b.jpg', 'scan_clip.mp4']);
   assert.equal(undated.items.some((i) => i.name === 'dated.jpg'), false);
   assert.equal(undated.items[0].undated, true);
 
@@ -290,7 +292,7 @@ test('photos with no date inside them can be dated by hand, and the browser leav
   const set = await call('POST', '/api/glint/date', { ids: [b.id, a.id], taken: day }, sam);
   assert.equal(set.status, 200);
   assert.deepEqual(Object.fromEntries(set.body.items.map((i) => [i.name, i.taken])), { 'scan_a.jpg': day, 'scan_b.jpg': day + 1000 });
-  assert.deepEqual(scans(await photos(sam, '?undated=1')), []);
+  assert.deepEqual(scans(await photos(sam, '?undated=1')), ['scan_clip.mp4']);
 
   // The browser reading the file's own date later doesn't undo it.
   const again = await preview(sam, a.id, `taken=${fileDate}&exif=1`);
