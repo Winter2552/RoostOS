@@ -1,9 +1,3 @@
 {
-  "items": [
-    {
-      "title": "Give photos a date",
-      "text": "Photos with no date inside them now collect under Undated in Glint. Select some and choose Set date, move their dates earlier or later, or let Glint read the date from names like IMG_20060801. Only Glint’s date changes, never your files.",
-      "image": "set-date.png"
-    }
-  ]
+  "items": []
 }
