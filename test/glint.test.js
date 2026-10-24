@@ -308,3 +308,47 @@ test('photos with no date inside them can be dated by hand, and the browser leav
   assert.equal((await call('POST', '/api/glint/date', { ids: [a.id], shift: 1e20 }, sam)).status, 400);
   assert.deepEqual((await call('POST', '/api/glint/date', { ids: [a.id], taken: day }, mia)).body.items, []);
 });
+
+test('a photo and a short clip with the same name are one Live Photo', async () => {
+  await call('POST', '/api/admin/users', { username: 'liv', password: 'password1', apps: ['glint'] }, admin);
+  const liv = (await call('POST', '/api/login', { username: 'liv', password: 'password1' })).cookie;
+  const still = await upload(liv, 'IMG_5666.HEIC', 'photo-bytes', { year: 2024, type: 'image/heic' });
+  const clip = await upload(liv, 'IMG_5666.MP4', 'clip-bytes', { year: 2024, type: 'video/mp4' });
+  const lone = await upload(liv, 'IMG_9000.MP4', 'film-bytes', { year: 2024, type: 'video/mp4' });
+  const other = await upload(liv, 'IMG_9001.JPG', 'jpg-bytes', { year: 2024 });
+
+  // One tile for the pair; the clip's id rides on the photo; an unpaired video stays a video.
+  let list = await photos(liv);
+  assert.equal(list.total, 3);
+  assert.deepEqual(list.items.map((i) => i.id).sort(), [still.id, lone.id, other.id].sort());
+  assert.equal(list.items.find((i) => i.id === still.id).live, clip.id);
+  assert.equal(list.items.find((i) => i.id === lone.id).live, undefined);
+  // The clip itself can still be played.
+  assert.equal((await fetch(`${base}/api/glint/media/${clip.id}`, { headers: { Cookie: liv } })).status, 200);
+
+  // A clip the browser finds too long is a video of its own.
+  assert.equal((await preview(liv, clip.id, 'dur=30')).status, 200);
+  list = await photos(liv);
+  assert.equal(list.total, 4);
+  assert.equal(list.items.find((i) => i.id === still.id).live, undefined);
+  assert.equal((await preview(liv, clip.id, 'dur=3')).status, 200);
+  assert.equal((await photos(liv)).total, 3);
+
+  // Trash, restore and delete take both files, and the trash shows one item.
+  await call('POST', '/api/glint/trash', { ids: [still.id] }, liv);
+  assert.equal((await photos(liv)).total, 2);
+  let trash = (await call('GET', '/api/glint/trash', null, liv)).body.items;
+  assert.deepEqual(trash.map((t) => t.id), [still.id]);
+  const back = await call('POST', '/api/glint/restore', { ids: [still.id] }, liv);
+  assert.equal(back.body.restored.length, 2);
+  list = await photos(liv);
+  assert.equal(list.total, 3);
+  assert.equal(list.items.find((i) => i.id === still.id).live, clip.id);
+
+  await call('POST', '/api/glint/trash', { ids: [still.id] }, liv);
+  const gone = await call('POST', '/api/glint/trash/delete', { ids: [still.id] }, liv);
+  assert.equal(gone.body.deleted.length, 2);
+  assert.equal((await photos(liv)).total, 2);
+  trash = (await call('GET', '/api/glint/trash', null, liv)).body.items;
+  assert.equal(trash.length, 0);
+});

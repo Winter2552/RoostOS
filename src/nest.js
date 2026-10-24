@@ -19,6 +19,7 @@ const { pipeline } = require('stream/promises');
 const { DatabaseSync } = require('node:sqlite');
 const { HttpError, send, readJson, str } = require('./http');
 const zip = require('./zip');
+const convert = require('./convert');
 const { hashPassword, verifyPassword, RateLimiter } = require('./auth');
 
 const CHUNK = 16 * 1024 * 1024; // upload piece size: small enough to retry cheaply
@@ -43,6 +44,9 @@ const TEXT_EXT = ['txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'log', 'xml', '
 function viewOf(name) {
   const ext = path.extname(name).slice(1).toLowerCase();
   if (VIEWABLE[ext]) return { kind: VIEWABLE[ext].split('/')[0], type: VIEWABLE[ext] };
+  // HEIC, MKV, 3GP...: the browser tries the file itself, then asks for a converted copy (?preview=1).
+  const conv = convert.convertKind(name);
+  if (conv) return { kind: conv, type: convert.typeOf(name) };
   if (ext === 'pdf') return { kind: 'pdf', type: 'application/pdf' };
   if (TEXT_EXT.includes(ext)) return { kind: 'text', type: 'text/plain; charset=utf-8' };
   return null;
@@ -524,6 +528,7 @@ class Nest {
 
   async forget(user, id) {
     await fsp.rm(path.join(this.home(user), 'trash', id), { recursive: true, force: true });
+    for (const kind of ['image', 'video']) await fsp.rm(path.join(this.home(user), '.preview', convert.previewName(id, kind)), { force: true });
     this.q.forget.run(id);
   }
 
@@ -655,9 +660,10 @@ class Nest {
 
   // inline: a photo or video type to show in the page instead of downloading
   // (Glint passes it only for types a browser can't run as a page).
-  async download(user, id, req, res, { inline = '', csp = '' } = {}) {
+  // file: send this file (a converted copy) instead of the stored one.
+  async download(user, id, req, res, { inline = '', csp = '', file: other = '' } = {}) {
     const n = this.node(user, id, 'file');
-    const file = this.diskPath(user, n.id);
+    const file = other || this.diskPath(user, n.id);
     let stat;
     try {
       stat = fs.statSync(file);
@@ -702,6 +708,20 @@ class Nest {
     res.writeHead(status, headers);
     if (req.method === 'HEAD' || !stat.size) return res.end();
     await pipeline(fs.createReadStream(file, { start, end }), res).catch(() => {});
+  }
+
+  // A browser-friendly copy (JPEG or MP4) of a HEIC, MKV, 3GP... file, made once and kept.
+  async sendConverted(user, id, req, res) {
+    const n = this.node(user, id, 'file');
+    const kind = convert.convertKind(n.name);
+    if (!kind) throw new HttpError(404, 'This kind of file doesn’t need converting');
+    let file;
+    try {
+      file = await convert.previewFile(this.diskPath(user, n.id), path.join(this.home(user), '.preview'), n.id, kind);
+    } catch {
+      throw new HttpError(422, 'This file couldn’t be converted for viewing');
+    }
+    return this.download(user, n.id, req, res, { inline: convert.previewType(kind), file });
   }
 
   async downloadZip(user, ids, res) {
@@ -914,6 +934,7 @@ class Nest {
     if ((method === 'GET' || method === 'HEAD') && (r = m(/^\/api\/nest\/files\/([\w-]+)$/))) {
       if (params.get('view') === '1') {
         const n = this.node(user, r[1], 'file');
+        if (params.get('preview') === '1') return this.sendConverted(user, n.id, req, res);
         const v = viewOf(n.name);
         if (!v) throw new HttpError(404, 'This kind of file can’t be shown here');
         return this.download(user, n.id, req, res, { inline: v.type, csp: v.kind === 'pdf' ? "default-src 'none'; frame-ancestors 'self'" : '' });

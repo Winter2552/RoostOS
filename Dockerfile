@@ -8,6 +8,10 @@ ENV NODE_ENV=production \
 # WireGuard tools, for the private link to the Coffee Galaxy server (Admin → Coffee Galaxy).
 RUN apk add --no-cache wireguard-tools
 
+# Viewing HEIC photos and MKV, AVI, 3GP... videos in browsers that can't play them
+# (src/convert.js): copies are made on first view; originals are never touched.
+RUN apk add --no-cache ffmpeg libheif-tools
+
 WORKDIR /app
 COPY package.json ./
 COPY src ./src

@@ -1322,6 +1322,7 @@ button.restore-name:hover { text-decoration: underline; text-underline-offset: 3
 .gtile-blank .ni svg { width: 30px; height: 30px; }
 .gtile-video { position: absolute; left: 6px; bottom: 6px; display: inline-flex; align-items: center; gap: 3px; padding: 2px 8px 2px 4px; border-radius: 999px; background: rgba(10, 10, 10, 0.72); font-size: 11px; }
 .gtile-video .ni svg { width: 14px; height: 14px; fill: currentColor; }
+.gtile-live { position: absolute; left: 6px; bottom: 6px; padding: 2px 8px; border-radius: 999px; background: rgba(10, 10, 10, 0.72); font-size: 10px; letter-spacing: 0.08em; }
 .gtile-fav { position: absolute; right: 6px; bottom: 6px; color: var(--ink); filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.8)); }
 .gtile-fav .ni svg { width: 16px; height: 16px; }
 .gtile-tick { position: absolute; top: 6px; left: 6px; width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border-radius: 50%; border: 2px solid var(--ink); background: rgba(10, 10, 10, 0.55); color: transparent; cursor: pointer; opacity: 0; }
@@ -1390,6 +1391,9 @@ body.gview-open { overflow: hidden; }
 .gview-btn .ni svg, .gview-nav .ni svg { width: 24px; height: 24px; }
 .gview-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 56px 0 env(safe-area-inset-bottom); }
 .gview-media { display: block; width: 100%; height: 100%; object-fit: contain; }
+.gview-livewrap { position: relative; width: 100%; height: 100%; -webkit-touch-callout: none; user-select: none; }
+.gview-livewrap .gview-clip { position: absolute; inset: 0; }
+.gview-live { position: absolute; left: 12px; bottom: 12px; min-height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--ink); background: rgba(10, 10, 10, 0.6); color: var(--ink); font-size: 11px; letter-spacing: 0.08em; cursor: pointer; touch-action: none; }
 .gview-nav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; background: rgba(10, 10, 10, 0.55); }
 .gview-nav.prev { left: 10px; }
 .gview-nav.next { right: 10px; }
