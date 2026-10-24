@@ -1,3 +1,9 @@
 {
-  "items": []
+  "items": [
+    {
+      "title": "Live Photos stay in one piece",
+      "text": "An iPhone Live Photo and its short clip (IMG_5666.HEIC and IMG_5666.MP4) now show as one photo marked LIVE, so your gallery is half as crowded. Hold the photo to play it. Both files stay in Nest as they were, and deleting one takes both.",
+      "image": "live-photos.png"
+    }
+  ]
 }

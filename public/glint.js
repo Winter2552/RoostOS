@@ -300,6 +300,7 @@
     if (p.thumb === 1) t.append(el('img', { src: thumbUrl(p), alt: '', loading: 'lazy', decoding: 'async', draggable: 'false' }));
     else if (p.thumb === 2) t.append(el('span', { class: 'gtile-blank' }, gi(p.video ? 'play' : 'photo')));
     else { t.dataset.need = '1'; t.append(el('span', { class: 'gtile-blank' }, gi(p.video ? 'play' : 'photo'))); }
+    if (p.live) t.append(el('span', { class: 'gtile-live mono', text: 'LIVE' }));
     if (p.video) t.append(el('span', { class: 'gtile-video mono' }, gi('play'), p.dur ? clock(p.dur) : ''));
     if (p.fav) t.append(el('span', { class: 'gtile-fav' }, gi('starFill')));
     t.append(el('button', { type: 'button', class: 'gtile-tick', 'aria-label': G.sel.has(p.id) ? 'Deselect' : 'Select', 'data-tick': '1' }, gi('check')));
@@ -453,8 +454,9 @@
 
   function removeLocal(ids) {
     const gone = new Set(ids);
+    const before = G.items.length;
     G.items = G.items.filter((i) => !gone.has(i.id));
-    G.total = Math.max(0, G.total - gone.size);
+    G.total = Math.max(0, G.total - (before - G.items.length)); // a Live Photo's clip isn't a tile of its own
     for (const id of gone) G.sel.delete(id);
     render();
     watchEnd();
@@ -733,7 +735,7 @@
     V.fav.setAttribute('aria-label', p.fav ? 'Unfavourite' : 'Favourite');
     V.prev.classList.toggle('hidden', V.i === 0);
     V.next.classList.toggle('hidden', V.i >= G.items.length - 1 && !G.next);
-    const node = p.video
+    const node = p.live ? liveView(p) : p.video
       ? el('video', { src: mediaUrl(p), controls: true, autoplay: true, playsinline: true, preload: 'metadata', class: 'gview-media' })
       : el('img', { src: mediaUrl(p), alt: p.name, class: 'gview-media', draggable: 'false' });
     // A format this browser can't show (HEIC on Windows) offers the download instead.
@@ -746,7 +748,27 @@
     if (G.next && !G.loading && V.i > G.items.length - 6) load(false);
     // Warm up the neighbour so swiping is instant.
     const n = G.items[V.i + 1];
-    if (n && !n.video) new Image().src = mediaUrl(n);
+    if (n && !n.video && !n.live) new Image().src = mediaUrl(n);
+  }
+
+  // A Live Photo: the picture, with its clip played while the picture or the LIVE button is held.
+  function liveView(p) {
+    const img = el('img', { src: mediaUrl(p), alt: p.name, class: 'gview-media', draggable: 'false' });
+    const clip = el('video', { src: sp(`/api/glint/media/${p.live}`), muted: true, playsinline: true, loop: true, preload: 'none', class: 'gview-media gview-clip hidden' });
+    clip.muted = true;
+    const badge = el('button', { type: 'button', class: 'gview-live mono', text: 'LIVE', 'aria-label': 'Hold to play' });
+    const wrap = el('div', { class: 'gview-livewrap' }, img, clip, badge);
+    let timer = 0;
+    const play = () => { clip.classList.remove('hidden'); clip.currentTime = 0; clip.play().catch(() => {}); };
+    const stop = () => { clearTimeout(timer); clip.pause(); clip.classList.add('hidden'); };
+    badge.addEventListener('pointerdown', (e) => { e.preventDefault(); play(); });
+    // On the picture itself a short hold starts it, so a swipe still changes photo.
+    img.addEventListener('pointerdown', () => { timer = setTimeout(play, 350); });
+    for (const t of [badge, img]) for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) t.addEventListener(ev, stop);
+    wrap.addEventListener('contextmenu', (e) => e.preventDefault());
+    // The wrapper takes the media's place, so the failure message still shows if the picture can't be drawn.
+    img.addEventListener('error', () => wrap.dispatchEvent(new Event('error')));
+    return wrap;
   }
 
   async function step(d) {

@@ -11,7 +11,7 @@
 // first one to show an older photo) reads its date, draws a small preview and
 // sends both back; Glint just keeps them. What Glint adds on top of Nest
 // lives in the same SQLite file:
-//   photos        date taken, size in pixels, preview, favourite
+//   photos        date taken, size in pixels, preview, favourite, Live Photo pairing
 //   albums        named sets of photos
 //   album_photos  which photos are in which album
 // Previews are small JPEGs in <user's Nest folder>/.glint/<photo id>.jpg.
@@ -26,6 +26,9 @@ const PAGE = 240; // photos per timeline page
 const THUMB_MAX = 512 * 1024; // previews are about 30 KB; this is a ceiling
 const MAX_IDS = 1000;
 const THUMB_NONE = 2; // the browser couldn't draw one (e.g. HEIC on Windows)
+// An iPhone Live Photo is a photo plus a short clip with the same name (IMG_5666.HEIC + IMG_5666.MP4).
+const LIVE_MAX_SECONDS = 6;
+const LIVE_MAX_BYTES = 20 * 1024 * 1024;
 
 // What counts as a photo or video: by type, or by name when the browser sent no type.
 const MEDIA_EXT = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'bmp', 'mp4', 'mov', 'm4v', 'webm', '3gp'];
@@ -42,7 +45,9 @@ const SCHEMA = `
     duration REAL NOT NULL DEFAULT 0,  -- seconds, for videos
     thumb INTEGER NOT NULL DEFAULT 0,  -- 0 not yet, 1 made, 2 couldn't be made
     fav INTEGER NOT NULL DEFAULT 0,
-    date_src INTEGER NOT NULL DEFAULT 0 -- 1 when the date came from Google's data (Move to Glint): the browser leaves it alone
+    date_src INTEGER NOT NULL DEFAULT 0, -- 1 when the date came from Google's data (Move to Glint): the browser leaves it alone
+    live TEXT,                         -- on a photo: the Nest file of its Live Photo clip
+    hide INTEGER NOT NULL DEFAULT 0    -- 1 on a clip that belongs to a photo: the timeline shows the photo only
   );
   CREATE INDEX IF NOT EXISTS photos_taken ON photos (owner, taken DESC, id DESC);
   CREATE TABLE IF NOT EXISTS albums (
@@ -106,6 +111,14 @@ class Glint {
     if (!this.db.prepare('PRAGMA table_info(photos)').all().some((c) => c.name === 'date_src')) {
       this.db.exec('ALTER TABLE photos ADD COLUMN date_src INTEGER NOT NULL DEFAULT 0');
     }
+    // Photos tables made before Live Photos have no live or hide column.
+    for (const [col, def] of [['live', 'TEXT'], ['hide', 'INTEGER NOT NULL DEFAULT 0']]) {
+      if (!this.db.prepare('PRAGMA table_info(photos)').all().some((c) => c.name === col)) {
+        this.db.exec(`ALTER TABLE photos ADD COLUMN ${col} ${def}`);
+      }
+    }
+    this.dirty = new Set(); // owners whose Live Photo pairs need working out again
+    this.paired = new Set(); // owners worked out since start-up
     const q = (sql) => this.db.prepare(sql);
     this.q = {
       // New photos in Nest since last time, dated by the file's modified date (the arrival time for a plain upload,
@@ -122,7 +135,14 @@ class Glint {
       describe: q('UPDATE photos SET taken = ?, width = ?, height = ?, duration = ?, thumb = ? WHERE id = ?'),
       fav: q('UPDATE photos SET fav = ? WHERE id = ? AND owner = ?'),
       count: q(`SELECT COUNT(*) AS n FROM photos p JOIN nodes n ON n.id = p.id
-                WHERE p.owner = ? AND n.trash_root IS NULL`),
+                WHERE p.owner = ? AND n.trash_root IS NULL AND p.hide = 0`),
+      pairable: q(`SELECT p.id, p.duration, n.parent, n.name, n.mime, n.size, n.trash_root IS NOT NULL AS gone
+                   FROM photos p JOIN nodes n ON n.id = p.id WHERE p.owner = ?`),
+      unpair: q('UPDATE photos SET live = NULL, hide = 0 WHERE owner = ? AND (live IS NOT NULL OR hide = 1)'),
+      pairPhoto: q('UPDATE photos SET live = ? WHERE id = ?'),
+      pairClip: q('UPDATE photos SET hide = 1 WHERE id = ?'),
+      clipOf: q('SELECT live FROM photos WHERE id = ? AND owner = ? AND live IS NOT NULL'),
+      hidden: q('SELECT id FROM photos WHERE owner = ? AND hide = 1'),
       // Same name and size as a photo already in Nest: the duplicate check.
       same: q(`SELECT 1 FROM nodes n WHERE n.owner = ? AND n.size = ? AND n.kind = 'file'
                AND n.trash_root IS NULL AND n.name = ? COLLATE NOCASE LIMIT 1`),
@@ -168,7 +188,10 @@ class Glint {
   // A page of photos, newest first. `before` is the last photo of the
   // previous page ("<taken>.<id>"); album and favourites narrow the list.
   timeline(user, { before = '', album = '', favourites = false, own = false } = {}) {
-    if (!before) this.q.index.run(user.id);
+    if (!before) {
+      if (this.q.index.run(user.id).changes) this.dirty.add(user.id);
+      this.pair(user);
+    }
     if (album && !this.q.album.get(album, user.id)) throw new HttpError(404, 'That album no longer exists');
     const key = `${Boolean(before)}|${Boolean(album)}|${favourites}|${own}`;
     // "Own" shows only what Glint put in Photos/ (and Photos/<year>), not photos that live elsewhere in Nest.
@@ -178,7 +201,7 @@ class Glint {
       this.pages.set(key, this.db.prepare(`SELECT p.*, n.name, n.mime, n.size FROM photos p
         JOIN nodes n ON n.id = p.id
         ${album ? 'JOIN album_photos ap ON ap.photo = p.id AND ap.album = :album' : ''}
-        WHERE p.owner = :owner AND n.trash_root IS NULL
+        WHERE p.owner = :owner AND n.trash_root IS NULL AND p.hide = 0
         ${favourites ? 'AND p.fav = 1' : ''}
         ${ownSql}
         ${before ? 'AND (p.taken < :taken OR (p.taken = :taken AND p.id < :id))' : ''}
@@ -206,14 +229,63 @@ class Glint {
 
   ownCount(user, photos, ownSql) {
     return this.db.prepare(`SELECT COUNT(*) AS n FROM photos p JOIN nodes n ON n.id = p.id
-      WHERE p.owner = :owner AND n.trash_root IS NULL ${ownSql}`).get({ owner: user.id, photos }).n;
+      WHERE p.owner = :owner AND n.trash_root IS NULL AND p.hide = 0 ${ownSql}`).get({ owner: user.id, photos }).n;
   }
 
   find(user, id) {
     const p = this.q.photo.get(id, user.id);
     if (p) return p;
     // Just uploaded, or put in Nest since the timeline last loaded.
-    return this.q.indexOne.run(id, user.id).changes ? this.q.photo.get(id, user.id) : null;
+    if (!this.q.indexOne.run(id, user.id).changes) return null;
+    this.dirty.add(user.id);
+    return this.q.photo.get(id, user.id);
+  }
+
+  // ---------- Live Photos ----------
+
+  // A photo and a short clip in the same folder with the same name (IMG_5666.HEIC and IMG_5666.MP4) are one
+  // Live Photo: the timeline shows the photo, marked Live, and the clip plays when it is held. Both files
+  // stay in Nest as they are. Worked out again only after something changed, and a pair in the trash
+  // stays a pair there.
+  pair(user) {
+    if (this.paired.has(user.id) && !this.dirty.has(user.id)) return;
+    this.dirty.delete(user.id);
+    this.paired.add(user.id);
+    const groups = new Map();
+    for (const r of this.q.pairable.all(user.id)) {
+      const type = mediaType(r);
+      const video = type.startsWith('video/');
+      if (!video && !type.startsWith('image/')) continue;
+      if (video && (r.size > LIVE_MAX_BYTES || r.duration > LIVE_MAX_SECONDS)) continue;
+      const key = `${r.gone}|${r.parent}|${r.name.replace(/\.[^.]*$/, '').toLowerCase()}`;
+      const g = groups.get(key) || { photo: null, clip: null };
+      const slot = video ? 'clip' : 'photo';
+      if (!g[slot] || r.id < g[slot]) g[slot] = r.id;
+      groups.set(key, g);
+    }
+    this.db.exec('BEGIN');
+    try {
+      this.q.unpair.run(user.id);
+      for (const g of groups.values()) {
+        if (!g.photo || !g.clip) continue;
+        this.q.pairPhoto.run(g.clip, g.photo);
+        this.q.pairClip.run(g.clip);
+      }
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  // The clips that go with these photos, so trashing or deleting a Live Photo takes both files.
+  withClips(user, ids) {
+    const all = new Set(ids);
+    for (const id of ids) {
+      const c = this.q.clipOf.get(id, user.id);
+      if (c) all.add(c.live);
+    }
+    return [...all];
   }
 
   photo(user, id) {
@@ -248,6 +320,8 @@ class Glint {
       await fsp.rename(tmp, file);
       thumb = 1;
     }
+    // A clip longer than a Live Photo's is a video of its own; a short one may be a clip.
+    if (mediaType(p).startsWith('video/') && (duration > LIVE_MAX_SECONDS) !== (p.duration > LIVE_MAX_SECONDS)) this.dirty.add(user.id);
     this.q.describe.run(taken === null || p.date_src ? p.taken : Math.round(taken), Math.round(width), Math.round(height), duration, thumb, id);
     return photoItem(this.photo(user, id));
   }
@@ -280,7 +354,9 @@ class Glint {
   // ---------- trash (Nest's trash, showing only photos and videos) ----------
 
   listTrash(user) {
-    return this.nest.listTrash(user).filter((t) => t.kind === 'file' && mediaType(t));
+    this.pair(user);
+    const clips = new Set(this.q.hidden.all(user.id).map((r) => r.id));
+    return this.nest.listTrash(user).filter((t) => t.kind === 'file' && mediaType(t) && !clips.has(t.id));
   }
 
   trashIds(user, ids) {
@@ -430,7 +506,9 @@ class Glint {
 
     if (method === 'POST' && pathname === '/api/glint/trash') {
       const body = await readJson(req);
-      const ids = idList(body.ids).filter((id) => this.find(user, id));
+      this.pair(user);
+      const ids = this.withClips(user, idList(body.ids).filter((id) => this.find(user, id)));
+      this.dirty.add(user.id);
       return send(res, 200, { trashed: nest.trash(user, ids) });
     }
     if (method === 'GET' && pathname === '/api/glint/trash') {
@@ -438,11 +516,14 @@ class Glint {
     }
     if (method === 'POST' && pathname === '/api/glint/restore') {
       const body = await readJson(req);
-      return send(res, 200, { restored: nest.restore(user, this.trashIds(user, idList(body.ids))) });
+      const ids = this.withClips(user, this.trashIds(user, idList(body.ids)));
+      this.dirty.add(user.id);
+      return send(res, 200, { restored: nest.restore(user, ids) });
     }
     if (method === 'POST' && pathname === '/api/glint/trash/delete') {
       const body = await readJson(req);
       const ids = body.all === true ? this.listTrash(user).map((t) => t.id) : this.trashIds(user, idList(body.ids));
+      ids.splice(0, ids.length, ...this.withClips(user, ids));
       const deleted = ids.length ? await nest.deleteForever(user, ids) : [];
       await this.sweep();
       return send(res, 200, { deleted, storage: nest.storage(user) });
@@ -494,6 +575,7 @@ function photoItem(p) {
     dur: p.duration,
     thumb: p.thumb,
     fav: Boolean(p.fav),
+    live: p.live || undefined,
   };
 }
 
