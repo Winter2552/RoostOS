@@ -35,6 +35,10 @@ const MEDIA_EXT = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 
 const MEDIA = `n.kind = 'file' AND n.mime != 'image/svg+xml' AND (n.mime LIKE 'image/%' OR n.mime LIKE 'video/%' OR ${
   MEDIA_EXT.map((e) => `lower(n.name) LIKE '%.${e}'`).join(' OR ')})`;
 
+// Photos with no date taken inside them (screenshots, messaging apps, scans): still dated by their file.
+// Photos the browser hasn't looked at yet are left out until it has.
+const UNDATED = `AND p.date_src = 0 AND p.exif = 0 AND p.thumb != 0 AND n.mime LIKE 'image/%'`;
+
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS photos (
     id TEXT PRIMARY KEY,               -- the Nest file
@@ -45,7 +49,8 @@ const SCHEMA = `
     duration REAL NOT NULL DEFAULT 0,  -- seconds, for videos
     thumb INTEGER NOT NULL DEFAULT 0,  -- 0 not yet, 1 made, 2 couldn't be made
     fav INTEGER NOT NULL DEFAULT 0,
-    date_src INTEGER NOT NULL DEFAULT 0, -- 1 when the date came from Google's data (Move to Glint): the browser leaves it alone
+    date_src INTEGER NOT NULL DEFAULT 0, -- 1 when the date was set on purpose (Google's data, or "Set date"): the browser leaves it alone
+    exif INTEGER NOT NULL DEFAULT 0,   -- 1 when the browser found a date taken inside the photo
     live TEXT,                         -- on a photo: the Nest file of its Live Photo clip
     hide INTEGER NOT NULL DEFAULT 0    -- 1 on a clip that belongs to a photo: the timeline shows the photo only
   );
@@ -112,6 +117,13 @@ class Glint {
     if (!this.db.prepare('PRAGMA table_info(photos)').all().some((c) => c.name === 'date_src')) {
       this.db.exec('ALTER TABLE photos ADD COLUMN date_src INTEGER NOT NULL DEFAULT 0');
     }
+    // Photos tables made before Set date don't record whether the date was inside the photo. A date that
+    // differs from both of the file's own dates can only have come from the photo, so call those dated.
+    if (!this.db.prepare('PRAGMA table_info(photos)').all().some((c) => c.name === 'exif')) {
+      this.db.exec('ALTER TABLE photos ADD COLUMN exif INTEGER NOT NULL DEFAULT 0');
+      this.db.exec(`UPDATE photos SET exif = 1 WHERE thumb != 0 AND EXISTS (SELECT 1 FROM nodes n WHERE n.id = photos.id
+        AND n.modified != photos.taken AND n.created != photos.taken)`);
+    }
     // Photos tables made before Live Photos have no live or hide column.
     for (const [col, def] of [['live', 'TEXT'], ['hide', 'INTEGER NOT NULL DEFAULT 0']]) {
       if (!this.db.prepare('PRAGMA table_info(photos)').all().some((c) => c.name === col)) {
@@ -133,7 +145,9 @@ class Glint {
                    WHERE n.id = ? AND n.owner = ? AND n.trash_root IS NULL AND ${MEDIA}`),
       photo: q(`SELECT p.*, n.name, n.mime, n.size FROM photos p JOIN nodes n ON n.id = p.id
                 WHERE p.id = ? AND p.owner = ? AND n.trash_root IS NULL`),
-      describe: q('UPDATE photos SET taken = ?, width = ?, height = ?, duration = ?, thumb = ? WHERE id = ?'),
+      describe: q('UPDATE photos SET taken = ?, exif = ?, width = ?, height = ?, duration = ?, thumb = ? WHERE id = ?'),
+      setDate: q('UPDATE photos SET taken = ?, date_src = 1 WHERE id = ? AND owner = ?'),
+      restoreDate: q('UPDATE photos SET taken = ?, date_src = ?, exif = ? WHERE id = ? AND owner = ?'),
       fav: q('UPDATE photos SET fav = ? WHERE id = ? AND owner = ?'),
       count: q(`SELECT COUNT(*) AS n FROM photos p JOIN nodes n ON n.id = p.id
                 WHERE p.owner = ? AND n.trash_root IS NULL AND p.hide = 0`),
@@ -188,13 +202,13 @@ class Glint {
 
   // A page of photos, newest first. `before` is the last photo of the
   // previous page ("<taken>.<id>"); album and favourites narrow the list.
-  timeline(user, { before = '', album = '', favourites = false, own = false } = {}) {
+  timeline(user, { before = '', album = '', favourites = false, own = false, undated = false } = {}) {
     if (!before) {
       if (this.q.index.run(user.id).changes) this.dirty.add(user.id);
       this.pair(user);
     }
     if (album && !this.q.album.get(album, user.id)) throw new HttpError(404, 'That album no longer exists');
-    const key = `${Boolean(before)}|${Boolean(album)}|${favourites}|${own}`;
+    const key = `${Boolean(before)}|${Boolean(album)}|${favourites}|${own}|${undated}`;
     // "Own" shows only what Glint put in Photos/ (and Photos/<year>), not photos that live elsewhere in Nest.
     const ownSql = own ? `AND n.parent IN (SELECT f.id FROM nodes f WHERE f.owner = :owner AND f.kind = 'folder'
           AND f.trash_root IS NULL AND (f.id = :photos OR f.parent = :photos))` : '';
@@ -204,6 +218,7 @@ class Glint {
         ${album ? 'JOIN album_photos ap ON ap.photo = p.id AND ap.album = :album' : ''}
         WHERE p.owner = :owner AND n.trash_root IS NULL AND p.hide = 0
         ${favourites ? 'AND p.fav = 1' : ''}
+        ${undated ? UNDATED : ''}
         ${ownSql}
         ${before ? 'AND (p.taken < :taken OR (p.taken = :taken AND p.id < :id))' : ''}
         ORDER BY p.taken DESC, p.id DESC LIMIT :limit`));
@@ -224,13 +239,59 @@ class Glint {
     return {
       items,
       next: rows.length > PAGE ? `${last.taken}.${last.id}` : null,
-      total: before ? undefined : own ? this.ownCount(user, params.photos, ownSql) : this.q.count.get(user.id).n,
+      total: before ? undefined : own || undated ? this.countWhere(user, params.photos, own ? ownSql : '', undated) : this.q.count.get(user.id).n,
     };
   }
 
-  ownCount(user, photos, ownSql) {
+  countWhere(user, photos, ownSql, undated) {
+    const params = { owner: user.id };
+    if (ownSql) params.photos = photos;
     return this.db.prepare(`SELECT COUNT(*) AS n FROM photos p JOIN nodes n ON n.id = p.id
-      WHERE p.owner = :owner AND n.trash_root IS NULL AND p.hide = 0 ${ownSql}`).get({ owner: user.id, photos }).n;
+      WHERE p.owner = :owner AND n.trash_root IS NULL AND p.hide = 0 ${ownSql} ${undated ? UNDATED : ''}`).get(params).n;
+  }
+
+  // Set the date on photos, by hand. The files are never touched; the date lives in Glint's own table, and
+  // date_src keeps the browser from reading a date over it later.
+  //   taken   one date for all (several photos keep their name order, a second apart)
+  //   shift   milliseconds added to each photo's own date
+  //   items   a date for each: [{ id, taken }]
+  //   restore the dates photos had before (the Undo): [{ id, taken, src, exif }]
+  setDates(user, body) {
+    const clamp = (ms) => Math.min(TAKEN_MAX - 1, Math.max(TAKEN_MIN, Math.round(ms)));
+    const okDate = (v) => num(v, TAKEN_MIN, TAKEN_MAX - 1);
+    const done = [];
+    this.db.exec('BEGIN');
+    try {
+      if (Array.isArray(body.restore)) {
+        for (const r of body.restore.slice(0, MAX_IDS)) {
+          const taken = okDate(r && r.taken);
+          if (taken !== null && this.find(user, r.id)) { this.q.restoreDate.run(Math.round(taken), r.src ? 1 : 0, r.exif ? 1 : 0, r.id, user.id); done.push(r.id); }
+        }
+      } else if (Array.isArray(body.items)) {
+        for (const r of body.items.slice(0, MAX_IDS)) {
+          const taken = okDate(r && r.taken);
+          if (taken !== null && this.find(user, r.id)) { this.q.setDate.run(Math.round(taken), r.id, user.id); done.push(r.id); }
+        }
+      } else {
+        const ids = idList(body.ids);
+        const photos = ids.map((id) => this.find(user, id)).filter(Boolean);
+        if (body.taken !== undefined) {
+          const taken = okDate(body.taken);
+          if (taken === null) throw new HttpError(400, 'That isn’t a date Glint can use');
+          photos.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+          photos.forEach((p, i) => { this.q.setDate.run(clamp(taken + i * 1000), p.id, user.id); done.push(p.id); });
+        } else {
+          const shift = Number(body.shift);
+          if (!Number.isFinite(shift) || Math.abs(shift) > 200 * 365 * 864e5) throw new HttpError(400, 'That isn’t a shift Glint can use');
+          for (const p of photos) { this.q.setDate.run(clamp(p.taken + shift), p.id, user.id); done.push(p.id); }
+        }
+      }
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+    return done.map((id) => photoItem(this.photo(user, id)));
   }
 
   find(user, id) {
@@ -323,7 +384,8 @@ class Glint {
     }
     // A clip longer than a Live Photo's is a video of its own; a short one may be a clip.
     if (mediaType(p).startsWith('video/') && (duration > LIVE_MAX_SECONDS) !== (p.duration > LIVE_MAX_SECONDS)) this.dirty.add(user.id);
-    this.q.describe.run(taken === null || p.date_src ? p.taken : Math.round(taken), Math.round(width), Math.round(height), duration, thumb, id);
+    const exif = params.get('exif') === '1' && !p.date_src;
+    this.q.describe.run(taken === null || p.date_src ? p.taken : Math.round(taken), exif || p.exif ? 1 : 0, Math.round(width), Math.round(height), duration, thumb, id);
     return photoItem(this.photo(user, id));
   }
 
@@ -430,7 +492,7 @@ class Glint {
 
     if (method === 'GET' && pathname === '/api/glint/photos') {
       return send(res, 200, {
-        ...this.timeline(user, { before: str(params.get('before'), 80), album: str(params.get('album'), 40), favourites: params.get('fav') === '1', own: params.get('own') === '1' }),
+        ...this.timeline(user, { before: str(params.get('before'), 80), album: str(params.get('album'), 40), favourites: params.get('fav') === '1', own: params.get('own') === '1', undated: params.get('undated') === '1' }),
         storage: nest.storage(user),
       });
     }
@@ -459,6 +521,9 @@ class Glint {
     if (method === 'POST' && pathname === '/api/glint/favourite') {
       const body = await readJson(req);
       return send(res, 200, { ids: this.favourite(user, idList(body.ids), body.on !== false) });
+    }
+    if (method === 'POST' && pathname === '/api/glint/date') {
+      return send(res, 200, { items: this.setDates(user, await readJson(req, 256 * 1024)) });
     }
     if (method === 'POST' && pathname === '/api/glint/check') {
       const body = await readJson(req, 1024 * 1024);
@@ -577,6 +642,9 @@ function photoItem(p) {
     dur: p.duration,
     thumb: p.thumb,
     fav: Boolean(p.fav),
+    set: Boolean(p.date_src),
+    exif: Boolean(p.exif),
+    undated: !p.date_src && !p.exif && p.thumb !== 0 && String(p.mime).startsWith('image/'),
     live: p.live || undefined,
   };
 }

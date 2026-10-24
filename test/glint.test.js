@@ -270,6 +270,45 @@ test('"Hide Nest photos" shows only photos added through Glint', async () => {
   assert.equal(empty.items.length, 0);
 });
 
+test('photos with no date inside them can be dated by hand, and the browser leaves that date alone', async () => {
+  const a = await upload(sam, 'scan_a.jpg', 'aaaa', { year: 2024 });
+  const b = await upload(sam, 'scan_b.jpg', 'bbbb', { year: 2024 });
+  const c = await upload(sam, 'dated.jpg', 'cccc', { year: 2024 });
+  const fileDate = Date.UTC(2024, 0, 1);
+  await preview(sam, a.id, `taken=${fileDate}`);
+  await preview(sam, b.id, `taken=${fileDate}`);
+  await preview(sam, c.id, `taken=${Date.UTC(2010, 4, 5)}&exif=1`);
+
+  const undated = await photos(sam, '?undated=1');
+  const scans = (p) => p.items.map((i) => i.name).filter((n) => n.startsWith('scan_')).sort();
+  assert.deepEqual(scans(undated), ['scan_a.jpg', 'scan_b.jpg']);
+  assert.equal(undated.items.some((i) => i.name === 'dated.jpg'), false);
+  assert.equal(undated.items[0].undated, true);
+
+  // One date for both: they keep their name order, a second apart.
+  const day = Date.UTC(2006, 7, 1, 12);
+  const set = await call('POST', '/api/glint/date', { ids: [b.id, a.id], taken: day }, sam);
+  assert.equal(set.status, 200);
+  assert.deepEqual(Object.fromEntries(set.body.items.map((i) => [i.name, i.taken])), { 'scan_a.jpg': day, 'scan_b.jpg': day + 1000 });
+  assert.deepEqual(scans(await photos(sam, '?undated=1')), []);
+
+  // The browser reading the file's own date later doesn't undo it.
+  const again = await preview(sam, a.id, `taken=${fileDate}&exif=1`);
+  assert.equal(again.body.item.taken, day);
+
+  // Move a camera's dates a day later, then Undo.
+  const moved = await call('POST', '/api/glint/date', { ids: [a.id, c.id], shift: 864e5 }, sam);
+  assert.deepEqual(moved.body.items.map((i) => i.taken).sort(), [Date.UTC(2010, 4, 6), day + 864e5].sort());
+  const back = await call('POST', '/api/glint/date', { restore: [{ id: c.id, taken: Date.UTC(2010, 4, 5), src: 0, exif: 1 }] }, sam);
+  assert.equal(back.body.items[0].taken, Date.UTC(2010, 4, 5));
+  assert.equal(back.body.items[0].set, false);
+
+  // Bad dates are refused, and other people's photos are left alone.
+  assert.equal((await call('POST', '/api/glint/date', { ids: [a.id], taken: 'soon' }, sam)).status, 400);
+  assert.equal((await call('POST', '/api/glint/date', { ids: [a.id], shift: 1e20 }, sam)).status, 400);
+  assert.deepEqual((await call('POST', '/api/glint/date', { ids: [a.id], taken: day }, mia)).body.items, []);
+});
+
 test('a photo and a short clip with the same name are one Live Photo', async () => {
   await call('POST', '/api/admin/users', { username: 'liv', password: 'password1', apps: ['glint'] }, admin);
   const liv = (await call('POST', '/api/login', { username: 'liv', password: 'password1' })).cookie;

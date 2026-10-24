@@ -1067,6 +1067,8 @@ a.watch-card:focus-visible { transform: translate(4px, 4px); box-shadow: 3px 3px
 .nlink-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; }
 .ndialog .field { display: block; margin-bottom: 12px; }
 .ndialog .field span { display: block; margin-bottom: 4px; font-size: 13px; color: var(--muted); }
+.gdate-shift { display: flex; align-items: center; gap: 8px; }
+.gdate-shift input { width: 90px; }
 .ndialog .field input, .ndialog .field select { width: 100%; box-sizing: border-box; }
 .ndialog > input[type=text], .ndialog div > input[readonly] { width: 100%; box-sizing: border-box; }
 .nmove-note { padding: 14px; text-align: center; }
