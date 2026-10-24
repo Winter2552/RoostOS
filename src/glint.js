@@ -130,6 +130,12 @@ class Glint {
         this.db.exec(`ALTER TABLE photos ADD COLUMN ${col} ${def}`);
       }
     }
+    // Photos a browser couldn't draw before (HEIC on an iPhone, now tried another way) get one more go.
+    if (this.db.prepare('PRAGMA user_version').get().user_version < 1) {
+      this.db.exec(`UPDATE photos SET thumb = 0 WHERE thumb = ${THUMB_NONE} AND duration = 0
+        AND EXISTS (SELECT 1 FROM nodes n WHERE n.id = photos.id AND n.mime NOT LIKE 'video/%')`);
+      this.db.exec('PRAGMA user_version = 1');
+    }
     this.dirty = new Set(); // owners whose Live Photo pairs need working out again
     this.paired = new Set(); // owners worked out since start-up
     const q = (sql) => this.db.prepare(sql);
