@@ -11,6 +11,7 @@ const convert = require('../src/convert');
 const { setUpTwoStep } = require('./helpers');
 
 const haveFfmpeg = spawnSync('ffmpeg', ['-version']).status === 0;
+const haveHeif = spawnSync('heif-enc', ['--version']).status === 0 && spawnSync('heif-convert', ['--version']).status === 0;
 
 let server;
 let base;
@@ -85,6 +86,20 @@ test('a converted copy of an MKV is an MP4, and the original stays', { skip: !ha
 test('a TIFF photo gets a JPEG copy', { skip: !haveFfmpeg }, async () => {
   const tif = make(path.join(dataDir, 'in.tiff'), ['-f', 'lavfi', '-i', 'testsrc=size=64x48', '-frames:v', '1']);
   const item = await upload('scan.tiff', tif);
+  const res = await fetch(`${base}/api/nest/files/${item.id}?view=1&preview=1`, { headers: { Cookie: admin } });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'image/jpeg');
+  const out = Buffer.from(await res.arrayBuffer());
+  assert.equal(out[0], 0xff);
+  assert.equal(out[1], 0xd8);
+});
+
+test('a HEIC photo gets a JPEG copy', { skip: !(haveFfmpeg && haveHeif) }, async () => {
+  const png = path.join(dataDir, 'in.png');
+  make(png, ['-f', 'lavfi', '-i', 'testsrc=size=64x48', '-frames:v', '1']);
+  const heic = path.join(dataDir, 'in.heic');
+  assert.equal(spawnSync('heif-enc', [png, '-o', heic]).status, 0);
+  const item = await upload('IMG_0001.HEIC', fs.readFileSync(heic));
   const res = await fetch(`${base}/api/nest/files/${item.id}?view=1&preview=1`, { headers: { Cookie: admin } });
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('content-type'), 'image/jpeg');
