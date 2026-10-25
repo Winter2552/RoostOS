@@ -28,6 +28,7 @@
     right: '<path d="M9 6l6 6-6 6"/>',
     edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/>',
     minus: '<path d="M5 12h14"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
     up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
     down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
   };
@@ -77,6 +78,7 @@
     loading: false,
     albums: [],
     storage: null,
+    zoom: 0, // 0 is the roomy grid (3 across on a phone); higher is denser
   };
 
   const body = $('#glint-body');
@@ -231,11 +233,13 @@
   function renderTools() {
     const tools = $('#glint-tools');
     const note = (text) => el('span', { class: 'mono muted glint-count', text });
-    if (G.mode === 'photos') tools.replaceChildren(note(G.total ? plural(G.total, 'item') : ''));
-    else if (G.mode === 'favourites' || G.mode === 'move') tools.replaceChildren();
+    if (G.mode === 'photos') tools.replaceChildren(note(G.total ? plural(G.total, 'item') : ''), zoomButtons());
+    else if (G.mode === 'favourites') tools.replaceChildren(zoomButtons());
+    else if (G.mode === 'move') tools.replaceChildren();
     else if (G.mode === 'albums') tools.replaceChildren(el('button', { type: 'button', class: 'btn ghost small', text: 'New album', onclick: () => newAlbum([]) }));
     else if (G.mode === 'album') {
       tools.replaceChildren(
+        zoomButtons(),
         el('button', { type: 'button', class: 'btn ghost small', text: 'Rename', onclick: renameAlbum }),
         el('button', { type: 'button', class: 'btn ghost small', text: 'Delete album', onclick: deleteAlbum }));
     } else if (G.mode === 'trash') {
@@ -296,7 +300,11 @@
 
   body.addEventListener('click', (e) => {
     const t = e.target.closest('.gtile');
-    if (!t) return;
+    if (!t) {
+      // A tap anywhere else in a zoomed-out grid (a month heading, a gap) zooms in there too.
+      if (G.zoom > 0 && coarse.matches && zoomable() && !e.target.closest('a, button')) setZoom(G.zoom - 1, e.clientX, e.clientY);
+      return;
+    }
     const p = byId(t.dataset.id);
     if (!p) return;
     if (e.target.closest('[data-tick]') || G.sel.size || e.ctrlKey || e.metaKey) {
@@ -304,6 +312,9 @@
       else toggle(p.id);
       return;
     }
+    // On a touch screen, a tap in a zoomed-out grid zooms back in around that
+    // photo; only the roomy grid opens it.
+    if (G.zoom > 0 && coarse.matches) { setZoom(G.zoom - 1, e.clientX, e.clientY); return; }
     openViewer(G.items.indexOf(p));
   });
 
@@ -317,6 +328,8 @@
   // Long-press selects on touch screens.
   let press = null;
   body.addEventListener('pointerdown', (e) => {
+    // A second finger means a pinch, not a long-press.
+    if (!e.isPrimary) { endPress(); return; }
     const t = e.target.closest('.gtile');
     if (!t || e.pointerType === 'mouse') return;
     press = { id: t.dataset.id, x: e.clientX, y: e.clientY, fired: false };
@@ -330,7 +343,98 @@
   });
   body.addEventListener('contextmenu', (e) => { if (e.target.closest('.gtile') && coarse.matches) e.preventDefault(); });
   // The tap that ends a long-press should not also open the photo.
-  body.addEventListener('click', (e) => { if (press && press.fired) { e.stopImmediatePropagation(); press = null; } }, true);
+  body.addEventListener('click', (e) => {
+    if (press && press.fired) { e.stopImmediatePropagation(); press = null; }
+    // Fingers lifting off after a pinch are not a tap.
+    else if (Date.now() - zoomedAt < 400) { e.stopImmediatePropagation(); e.preventDefault(); }
+  }, true);
+
+  // ---------- zoom ----------
+  // Pinch two fingers together for a denser grid, apart for a roomier one (like
+  // Apple Photos); on a computer, Ctrl + wheel or trackpad pinch, or the − / +
+  // buttons. Only a CSS class changes (see data-zoom in style.css), the page
+  // keeps its one-finger scroll, and the photo under the fingers stays put.
+
+  const ZOOM_MAX = 2;
+  let zoomedAt = 0;
+  const zoomable = () => ['photos', 'favourites', 'album'].includes(G.mode) && G.items.length > 0 && !V.open;
+
+  // The tile at a screen point, or failing that the first one below it.
+  function tileAt(x, y) {
+    for (const [dx, dy] of [[0, 0], [0, 10], [0, -10], [10, 0], [-10, 0]]) {
+      const t = document.elementFromPoint(x + dx, y + dy)?.closest('.gtile');
+      if (t && body.contains(t)) return t;
+    }
+    for (const t of body.querySelectorAll('.gtile')) if (t.getBoundingClientRect().bottom > y) return t;
+    return null;
+  }
+
+  // Changes the density and scrolls so the photo at (x, y) stays under that point.
+  function setZoom(next, x, y) {
+    next = Math.max(0, Math.min(ZOOM_MAX, next));
+    if (next === G.zoom) return false;
+    const t = tileAt(x, y);
+    let frac = 0.5;
+    if (t) { const r = t.getBoundingClientRect(); frac = Math.min(1, Math.max(0, (y - r.top) / r.height)); }
+    G.zoom = next;
+    body.dataset.zoom = String(next);
+    document.querySelectorAll('#glint-tools .glint-zoom button').forEach(paintZoomButton);
+    if (t) {
+      const r = t.getBoundingClientRect(); // reading it lays the new grid out
+      scrollBy(0, r.top + frac * r.height - y);
+    }
+    return true;
+  }
+
+  function paintZoomButton(b) {
+    b.disabled = b.dataset.dir === 'in' ? G.zoom === 0 : G.zoom === ZOOM_MAX;
+  }
+
+  function zoomButtons() {
+    const mid = (dir) => setZoom(G.zoom + dir, innerWidth / 2, innerHeight / 2);
+    const out = el('span', { class: 'glint-zoom' },
+      el('button', { type: 'button', class: 'glint-zoom-btn', 'data-dir': 'out', 'aria-label': 'Smaller photos', title: 'Smaller photos', onclick: () => mid(1) }, gi('minus')),
+      el('button', { type: 'button', class: 'glint-zoom-btn', 'data-dir': 'in', 'aria-label': 'Larger photos', title: 'Larger photos', onclick: () => mid(-1) }, gi('plus')));
+    out.querySelectorAll('button').forEach(paintZoomButton);
+    return out;
+  }
+
+  // Two fingers only; one finger is left alone so scrolling stays native
+  // (style.css sets touch-action: pan-y on the grid so Safari doesn't also zoom the page).
+  let pinch = null;
+  const spread = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  const centre = (t) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
+  body.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 2 || !zoomable()) { pinch = null; return; }
+    endPress();
+    pinch = { d: spread(e.touches) };
+    zoomedAt = Date.now();
+  }, { passive: true });
+  body.addEventListener('touchmove', (e) => {
+    if (!pinch || e.touches.length !== 2) return;
+    const d = spread(e.touches);
+    const c = centre(e.touches);
+    zoomedAt = Date.now();
+    // Each time the fingers have moved about a third of the way, go one level.
+    if (d < pinch.d * 0.72) { if (setZoom(G.zoom + 1, c.x, c.y)) pinch.d = d; }
+    else if (d > pinch.d * 1.35) { if (setZoom(G.zoom - 1, c.x, c.y)) pinch.d = d; }
+  }, { passive: true });
+  const endPinch = (e) => { if (e.touches.length < 2) { if (pinch) zoomedAt = Date.now(); pinch = null; } };
+  body.addEventListener('touchend', endPinch, { passive: true });
+  body.addEventListener('touchcancel', endPinch, { passive: true });
+  // Older Safari also reports the pinch as a page-zoom gesture.
+  body.addEventListener('gesturestart', (e) => e.preventDefault());
+
+  let wheelSum = 0;
+  let wheelAt = 0;
+  body.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey || !zoomable()) return;
+    e.preventDefault(); // otherwise the whole page zooms
+    wheelSum += e.deltaY;
+    if (Math.abs(wheelSum) < 40 || Date.now() - wheelAt < 150) return;
+    if (setZoom(G.zoom + (wheelSum > 0 ? 1 : -1), e.clientX, e.clientY)) wheelAt = Date.now();
+    wheelSum = 0;
+  }, { passive: false });
 
   function toggle(id) {
     if (G.sel.has(id)) G.sel.delete(id); else G.sel.add(id);
@@ -646,10 +750,12 @@
 
   // ---------- viewer ----------
 
-  const V = { open: false, i: 0, root: null, touch: null };
+  const V = { open: false, closing: false, i: 0, root: null, touch: null, drag: null, flight: 0 };
 
   function openViewer(i) {
     if (i < 0) return;
+    // Where the photo sits now, read before the page behind it locks.
+    const fromTile = tileRectFor(G.items[i]);
     V.open = true;
     V.i = i;
     if (!V.root) buildViewer();
@@ -657,18 +763,196 @@
     V.root.classList.remove('hidden');
     showPhoto();
     V.root.focus();
+    if (fromTile) flyOpen(fromTile);
   }
 
+  // Close at once, no animation (used when the page is leaving Glint or the photo is gone).
   function closeViewer() {
     if (!V.open) return;
+    stopFlight();
     fileInfo.close();
     V.open = false;
+    V.closing = false;
     V.root.classList.add('hidden');
     V.stage.replaceChildren();
     document.body.classList.remove('gview-open');
     const last = G.items[V.i];
     const t = last && body.querySelector(`.gtile[data-id="${last.id}"]`);
     if (t) t.scrollIntoView({ block: 'nearest' });
+  }
+
+  // ---------- viewer motion ----------
+  // The photo grows out of its tile and shrinks back into it (Apple Photos
+  // style). Only transform, clip-path of one picture and a black fade are
+  // animated; with reduced motion, or when the tile is off screen, the viewer
+  // just appears and disappears as before.
+
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  const EASE = 'cubic-bezier(0.25, 0.8, 0.25, 1)';
+  const FLY_MS = 280;
+
+  // The tile's box on screen, with the thumbnail's shape, or null to skip motion.
+  function tileRectFor(p) {
+    if (!p || reduceMotion.matches || typeof Element.prototype.animate !== 'function') return null;
+    const t = body.querySelector(`.gtile[data-id="${p.id}"]`);
+    if (!t) return null;
+    const r = t.getBoundingClientRect();
+    if (r.width < 8 || r.bottom <= 0 || r.top >= innerHeight || r.right <= 0 || r.left >= innerWidth) return null;
+    const img = t.querySelector('img');
+    return { x: r.left, y: r.top, w: r.width, h: r.height, src: img && img.complete && img.naturalWidth ? img.currentSrc || img.src : '', aw: img ? img.naturalWidth : 0, ah: img ? img.naturalHeight : 0 };
+  }
+
+  // The picture's own shape: width ÷ height.
+  function aspectOf(p, node, tile) {
+    const w = node && (node.naturalWidth || node.videoWidth) || p.w || (tile && tile.aw);
+    const h = node && (node.naturalHeight || node.videoHeight) || p.h || (tile && tile.ah);
+    return w && h ? w / h : 0;
+  }
+
+  // Where a picture of that shape lands inside the viewer's stage (it is shown "contain").
+  function fitted(box, a) {
+    const h = box.width / box.height > a ? box.height : box.width / a;
+    const w = h * a;
+    return { x: box.left + (box.width - w) / 2, y: box.top + (box.height - h) / 2, w, h };
+  }
+
+  // The move from a picture at F to the square tile T: where its centre goes, how
+  // much it shrinks, and the square it is cropped to (a tile crops with "cover").
+  function toTile(F, T) {
+    const m = Math.min(F.w, F.h);
+    const s = T.w / m;
+    return {
+      transform: `translate(${T.x + T.w / 2 - (F.x + F.w / 2)}px, ${T.y + T.h / 2 - (F.y + F.h / 2)}px) scale(${s})`,
+      clip: `inset(${(F.h - m) / 2}px ${(F.w - m) / 2}px)`,
+    };
+  }
+
+  function pin(node, F) {
+    Object.assign(node.style, { position: 'fixed', left: `${F.x}px`, top: `${F.y}px`, width: `${F.w}px`, height: `${F.h}px`, transformOrigin: '50% 50%', willChange: 'transform' });
+  }
+
+  V.anims = [];
+  function run(target, frames, opts = {}) {
+    const a = target.animate(frames, { duration: FLY_MS, easing: EASE, fill: 'both', ...opts });
+    V.anims.push(a);
+    return a.finished.catch(() => {});
+  }
+
+  function stopFlight() {
+    for (const a of V.anims) a.cancel();
+    V.anims = [];
+    V.drag = null;
+    if (!V.root) return;
+    V.root.style.backgroundColor = '';
+    V.root.querySelector('.gview-bar').style.opacity = '';
+    V.root.querySelectorAll('.gview-fly').forEach((n) => n.remove());
+    V.stage.style.visibility = '';
+  }
+
+  async function flyOpen(tile) {
+    const p = G.items[V.i];
+    const node = V.stage.querySelector('.gview-media');
+    const a = aspectOf(p, null, tile);
+    if (!node || !a || !tile.src) return;
+    const F = fitted(node.getBoundingClientRect(), a);
+    const fly = el('img', { class: 'gview-fly', src: tile.src, alt: '', draggable: 'false' });
+    pin(fly, F);
+    V.root.append(fly);
+    V.stage.style.visibility = 'hidden';
+    const to = toTile(F, tile);
+    const token = ++V.flight;
+    await Promise.all([
+      run(fly, [{ transform: to.transform, clipPath: to.clip }, { transform: 'none', clipPath: 'inset(0px 0px)' }]),
+      run(V.root, [{ backgroundColor: 'rgba(0, 0, 0, 0)' }, { backgroundColor: 'rgb(0, 0, 0)' }]),
+      run(V.root.querySelector('.gview-bar'), [{ opacity: 0 }, { opacity: 1 }]),
+    ]);
+    if (token !== V.flight) return; // closed or replaced meanwhile
+    stopFlight();
+  }
+
+  function startDrag() {
+    const p = G.items[V.i];
+    const node = V.stage.querySelector('.gview-media');
+    const a = node && aspectOf(p, node, null);
+    if (!a || reduceMotion.matches || typeof Element.prototype.animate !== 'function') return false;
+    stopFlight();
+    const F = fitted(node.getBoundingClientRect(), a);
+    pin(node, F);
+    V.drag = { node, F, transform: 'none', bg: 'rgb(0, 0, 0)', bar: 1 };
+    return true;
+  }
+
+  function moveDrag(dx, dy) {
+    const d = V.drag;
+    if (!d) return;
+    const pull = Math.abs(dy);
+    d.transform = `translate(${dx}px, ${dy}px) scale(${1 - Math.min(pull / 900, 0.4)})`;
+    d.bg = `rgba(0, 0, 0, ${1 - Math.min(pull / 360, 0.8)})`;
+    d.bar = 1 - Math.min(pull / 120, 1);
+    d.node.style.transform = d.transform;
+    V.root.style.backgroundColor = d.bg;
+    V.root.querySelector('.gview-bar').style.opacity = d.bar;
+  }
+
+  // Not pulled far enough: slide back to the middle.
+  async function snapBack() {
+    const d = V.drag;
+    if (!d) return;
+    const token = ++V.flight;
+    const { node } = d;
+    await Promise.all([
+      run(node, [{ transform: d.transform }, { transform: 'none' }], { duration: 180 }),
+      run(V.root, [{ backgroundColor: d.bg }, { backgroundColor: 'rgb(0, 0, 0)' }], { duration: 180 }),
+      run(V.root.querySelector('.gview-bar'), [{ opacity: d.bar }, { opacity: 1 }], { duration: 180 }),
+    ]);
+    if (token !== V.flight || !V.open) return;
+    stopFlight();
+    // Back in the stage's own layout.
+    for (const k of ['position', 'left', 'top', 'width', 'height', 'transform', 'transformOrigin', 'willChange']) node.style[k] = '';
+  }
+
+  // Close with motion: the photo (where it was dragged to, if it was) shrinks into its tile.
+  async function closeAnimated() {
+    if (!V.open || V.closing) return;
+    if (!V.drag) stopFlight(); // closed again while still opening
+    const p = G.items[V.i];
+    const tile = tileRectFor(p);
+    const node = V.stage.querySelector('.gview-media');
+    if (!tile || !node) return fadeClose();
+    const a = aspectOf(p, node, tile);
+    if (!a) return fadeClose();
+    V.closing = true;
+    const token = ++V.flight;
+    // Let the page behind scroll so the tile is on screen, then measure it.
+    document.body.classList.remove('gview-open');
+    const last = body.querySelector(`.gtile[data-id="${p.id}"]`);
+    if (last) last.scrollIntoView({ block: 'nearest' });
+    const T = tileRectFor(p);
+    if (!T) { document.body.classList.add('gview-open'); V.closing = false; return fadeClose(); }
+    const drag = V.drag;
+    const F = drag ? drag.F : fitted(node.getBoundingClientRect(), a);
+    if (!drag) pin(node, F);
+    const to = toTile(F, T);
+    const from = drag ? drag.transform : 'none';
+    fileInfo.close();
+    await Promise.all([
+      run(node, [{ transform: from, clipPath: 'inset(0px 0px)' }, { transform: to.transform, clipPath: to.clip }]),
+      run(V.root, [{ backgroundColor: drag ? drag.bg : 'rgb(0, 0, 0)' }, { backgroundColor: 'rgba(0, 0, 0, 0)' }]),
+      run(V.root.querySelector('.gview-bar'), [{ opacity: drag ? drag.bar : 1 }, { opacity: 0 }]),
+    ]);
+    if (token !== V.flight) return;
+    closeViewer();
+  }
+
+  async function fadeClose() {
+    if (!V.open || V.closing) return;
+    if (reduceMotion.matches || typeof Element.prototype.animate !== 'function') return closeViewer();
+    V.closing = true;
+    const token = ++V.flight;
+    await run(V.root, [{ opacity: 1 }, { opacity: 0 }], { duration: 160, easing: 'ease-out' });
+    if (token !== V.flight) return;
+    V.root.style.opacity = '';
+    closeViewer();
   }
 
   function buildViewer() {
@@ -679,7 +963,7 @@
     V.next = el('button', { type: 'button', class: 'gview-nav next', 'aria-label': 'Next', onclick: () => step(1) }, gi('right'));
     V.root = el('div', { class: 'gview hidden', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Photo viewer', tabindex: '-1' },
       el('div', { class: 'gview-bar' },
-        el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Close', onclick: closeViewer }, gi('close')),
+        el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Close', onclick: closeAnimated }, gi('close')),
         V.title,
         V.fav,
         el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Info', onclick: showInfo }, gi('info')),
@@ -690,25 +974,48 @@
     document.body.append(V.root);
 
     V.root.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeViewer();
+      if (e.key === 'Escape') closeAnimated();
       else if (e.key === 'ArrowLeft') step(-1);
       else if (e.key === 'ArrowRight') step(1);
       else if (e.key === 'i' || e.key === 'I') showInfo();
       else if (e.key === 'Tab') { e.preventDefault(); } // keep focus on the viewer itself
     });
-    // Swipe sideways to change photo, down to close.
+    // Swipe sideways to change photo. Swipe up or down and the photo follows the
+    // finger, shrinking, and lets go into its tile if you pull far enough.
     V.stage.addEventListener('touchstart', (e) => {
-      V.touch = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+      V.touch = null;
+      if (e.touches.length !== 1 || V.closing) return;
+      const t = e.touches[0];
+      const v = e.target.closest('video');
+      // The bottom of a video is its controls: leave those to the video.
+      const onControls = v && t.clientY > v.getBoundingClientRect().bottom - 64;
+      V.touch = { x: t.clientX, y: t.clientY, drag: false, off: !!onControls };
+    }, { passive: true });
+    V.stage.addEventListener('touchmove', (e) => {
+      const g = V.touch;
+      if (!g || g.off || V.closing || e.touches.length !== 1) { if (g && e.touches.length > 1) V.touch = null; return; }
+      const dx = e.touches[0].clientX - g.x;
+      const dy = e.touches[0].clientY - g.y;
+      if (!g.drag) {
+        if (Math.abs(dy) < 12 || Math.abs(dy) < Math.abs(dx) * 1.2) return;
+        if (!startDrag()) { V.touch = null; return; }
+        g.drag = true;
+      }
+      moveDrag(dx, dy);
     }, { passive: true });
     V.stage.addEventListener('touchend', (e) => {
-      if (!V.touch) return;
-      const dx = e.changedTouches[0].clientX - V.touch.x;
-      const dy = e.changedTouches[0].clientY - V.touch.y;
+      const g = V.touch;
       V.touch = null;
-      if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) step(dx < 0 ? 1 : -1);
-      else if (dy > 90 && dy > Math.abs(dx) * 1.5) closeViewer();
+      if (!g) return;
+      const dx = e.changedTouches[0].clientX - g.x;
+      const dy = e.changedTouches[0].clientY - g.y;
+      if (g.drag) {
+        if (Math.abs(dy) > 90) closeAnimated(); else snapBack();
+      } else if (!g.off && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) step(dx < 0 ? 1 : -1);
+      else if (!g.off && Math.abs(dy) > 90 && Math.abs(dy) > Math.abs(dx) * 1.5) closeAnimated();
     }, { passive: true });
-    V.stage.addEventListener('click', (e) => { if (e.target === V.stage) closeViewer(); });
+    V.stage.addEventListener('touchcancel', () => { if (V.touch && V.touch.drag) snapBack(); V.touch = null; }, { passive: true });
+    V.stage.addEventListener('click', (e) => { if (e.target === V.stage) closeAnimated(); });
   }
 
   function showPhoto() {
