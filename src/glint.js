@@ -136,6 +136,12 @@ class Glint {
         AND EXISTS (SELECT 1 FROM nodes n WHERE n.id = photos.id AND n.mime NOT LIKE 'video/%')`);
       this.db.exec('PRAGMA user_version = 1');
     }
+    // Videos a browser couldn't draw (HEVC .mov and the like) now get a still from the server: try again.
+    if (this.db.prepare('PRAGMA user_version').get().user_version < 2) {
+      this.db.exec(`UPDATE photos SET thumb = 0 WHERE thumb = ${THUMB_NONE}
+        AND EXISTS (SELECT 1 FROM nodes n WHERE n.id = photos.id AND n.mime LIKE 'video/%')`);
+      this.db.exec('PRAGMA user_version = 2');
+    }
     this.dirty = new Set(); // owners whose Live Photo pairs need working out again
     this.paired = new Set(); // owners worked out since start-up
     const q = (sql) => this.db.prepare(sql);
@@ -511,6 +517,7 @@ class Glint {
     if ((method === 'GET' || method === 'HEAD') && (r = m(/^\/api\/glint\/media\/([\w-]+)$/))) {
       const p = this.photo(user, r[1]);
       if (params.get('preview') === '1') return nest.sendConverted(user, p.id, req, res);
+      if (params.get('poster') === '1' && mediaType(p).startsWith('video/')) return nest.sendPoster(user, p.id, req, res);
       return nest.download(user, p.id, req, res, { inline: mediaType(p) });
     }
     if ((method === 'GET' || method === 'HEAD') && (r = m(/^\/api\/glint\/download\/([\w-]+)$/))) {

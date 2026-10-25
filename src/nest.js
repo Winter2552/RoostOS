@@ -528,7 +528,7 @@ class Nest {
 
   async forget(user, id) {
     await fsp.rm(path.join(this.home(user), 'trash', id), { recursive: true, force: true });
-    for (const kind of ['image', 'video']) await fsp.rm(path.join(this.home(user), '.preview', convert.previewName(id, kind)), { force: true });
+    for (const name of [convert.previewName(id, 'image'), convert.previewName(id, 'video'), convert.posterName(id)]) await fsp.rm(path.join(this.home(user), '.preview', name), { force: true });
     this.q.forget.run(id);
   }
 
@@ -722,6 +722,23 @@ class Nest {
       throw new HttpError(422, 'This file couldn’t be converted for viewing');
     }
     return this.download(user, n.id, req, res, { inline: convert.previewType(kind), file });
+  }
+
+  // A small JPEG still of a video, made once with ffmpeg, for Glint tiles the browser can't draw.
+  async sendPoster(user, id, req, res) {
+    const n = this.node(user, id, 'file');
+    let file;
+    let duration;
+    try {
+      const src = this.diskPath(user, n.id);
+      file = await convert.posterFile(src, path.join(this.home(user), '.preview'), n.id);
+      duration = await convert.durationOf(src);
+    } catch {
+      throw new HttpError(422, 'No still could be made from this video');
+    }
+    const data = await fsp.readFile(file);
+    res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Content-Length': data.length, 'X-Duration': String(duration), 'Cache-Control': 'private, max-age=31536000, immutable' });
+    res.end(req.method === 'HEAD' ? undefined : data);
   }
 
   async downloadZip(user, ids, res) {
