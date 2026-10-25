@@ -347,7 +347,8 @@
     const label = el('div', { class: 'gscrub-label mono' });
     const grip = el('div', { class: 'gscrub-grip' }, el('span', { class: 'gscrub-knob' }, gi('up'), gi('down')));
     const root = el('div', { class: 'gscrub hidden', 'aria-hidden': 'true' }, label, grip);
-    document.body.append(root);
+    const marks = el('div', { class: 'gscrub-marks hidden', 'aria-hidden': 'true' });
+    document.body.append(marks, root);
 
     const S = {
       on: false, drag: false, grab: 0,
@@ -403,6 +404,7 @@
       S.on = false;
       S.drag = false;
       root.classList.add('hidden');
+      marks.classList.add('hidden');
       root.classList.remove('live', 'drag');
     }
 
@@ -431,6 +433,24 @@
       let mi = S.cum.length - 1;
       while (mi > 0 && S.cum[mi] > pos) mi--;
       return { mi, ym: m[mi][0], within: Math.min(1, Math.max(0, (pos - S.cum[mi]) / Math.max(1, m[mi][1]))) };
+    }
+
+    // While dragging, each year of the library is a pill beside the track, so you can aim at one.
+    function showYears() {
+      const m = G.months;
+      let last = -99;
+      const pills = [];
+      m.forEach(([ym], i) => {
+        const y = ym.slice(0, 4);
+        if (i && m[i - 1][0].slice(0, 4) === y) return;
+        const at = Math.round((S.cum[i] / S.total) * S.span);
+        if (at - last < 34) return; // too close to the one above
+        last = at;
+        pills.push(el('span', { class: 'gscrub-year mono', text: y, 'data-at': String(at), style: `top:${at + GRIP / 2 - 15}px` }));
+      });
+      marks.style.top = `${S.top}px`;
+      marks.replaceChildren(...pills);
+      marks.classList.remove('hidden');
     }
 
     function place(f = S.f, text) {
@@ -500,6 +520,8 @@
       const f = S.span ? Math.min(1, Math.max(0, (clientY - S.grab - S.top) / S.span)) : 0;
       const at = atFraction(f);
       place(f, ymName(at.ym));
+      // The year pill under the handle gives way to the month label.
+      for (const y of marks.children) y.classList.toggle('under', Math.abs(Number(y.dataset.at) - S.y) < 34);
       S.ym = at.ym;
       S.pending = at;
       if (!S.frame) {
@@ -521,6 +543,7 @@
       root.classList.add('live', 'drag');
       document.body.classList.add('gscrub-drag');
       label.textContent = ymName(S.ym || G.months[0][0]);
+      showYears();
       clearTimeout(S.idle);
     });
     grip.addEventListener('pointermove', (e) => { if (S.drag) follow(e.clientY); });
@@ -530,6 +553,7 @@
       S.drag = false;
       document.body.classList.remove('gscrub-drag');
       root.classList.remove('drag');
+      marks.classList.add('hidden');
       const p = S.pending;
       S.pending = null;
       if (p && !loaded(p.ym)) {

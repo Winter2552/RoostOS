@@ -1335,16 +1335,20 @@ button.restore-name:hover { text-decoration: underline; text-underline-offset: 3
 
 /* Scrubber: a handle on the right edge that runs through the whole library, with the month beside it. */
 .gscrub { position: fixed; right: 0; top: 0; z-index: 15; width: 0; height: 0; pointer-events: none; will-change: transform; }
-.gscrub-grip { position: absolute; right: 0; top: 0; width: 44px; height: 56px; display: flex; align-items: center; justify-content: flex-end; padding-right: 4px; touch-action: none; cursor: grab; opacity: 0; pointer-events: none; transition: opacity 160ms ease; }
+.gscrub-grip { position: absolute; right: 0; top: 0; width: 60px; height: 56px; display: flex; align-items: center; justify-content: flex-end; padding-right: 6px; touch-action: none; cursor: grab; opacity: 0; pointer-events: none; transition: opacity 160ms ease; }
 .gscrub.live .gscrub-grip { opacity: 1; pointer-events: auto; }
-.gscrub-knob { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 5px; height: 36px; border-radius: 3px; background: var(--ink); color: var(--bg); overflow: hidden; transition: width 120ms ease, border-radius 120ms ease; }
+.gscrub-knob { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: var(--ink); color: var(--bg); overflow: hidden; box-shadow: 0 0 0 2px var(--bg); transition: width 120ms ease, height 120ms ease; }
 .gscrub-knob .ni { display: none; }
 .gscrub-knob .ni svg { width: 14px; height: 14px; stroke-width: 2.4; }
 .gscrub.drag .gscrub-grip { cursor: grabbing; }
-.gscrub.drag .gscrub-knob { width: 34px; height: 44px; border-radius: 12px; }
+.gscrub.drag .gscrub-knob { width: 44px; height: 44px; }
 .gscrub.drag .gscrub-knob .ni { display: block; }
 .gscrub-label { position: absolute; right: 52px; top: 50%; transform: translateY(-50%); padding: 7px 12px; border-radius: 999px; background: var(--ink); color: var(--bg); font-size: 12px; white-space: nowrap; opacity: 0; transition: opacity 160ms ease; }
 .gscrub.live .gscrub-label { opacity: 1; }
+.gscrub-marks { position: fixed; right: 0; top: 0; width: 0; height: 0; z-index: 15; pointer-events: none; }
+.gscrub-year { position: absolute; right: 56px; padding: 6px 12px; border-radius: 999px; background: rgba(30, 30, 30, 0.92); border: 1px solid var(--line); color: var(--ink); font-size: 12px; line-height: 1; white-space: nowrap; }
+.gscrub-year.under { visibility: hidden; }
+body.gview-open .gscrub-marks { display: none; }
 body.gscrub-drag { user-select: none; -webkit-user-select: none; }
 body.gview-open .gscrub { display: none; }
 @media (hover: hover) and (pointer: fine) {
