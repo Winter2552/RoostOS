@@ -1,0 +1,13 @@
+{
+  "version": "0.1.9",
+  "date": "2026-10-25",
+  "title": "Pinch your photo library",
+  "summary": "Pinch to zoom Glint, and photos grow out of and shrink back into their tile.",
+  "items": [
+    {
+      "title": "Pinch your photo library",
+      "text": "In Glint, pinch two fingers together to see more photos at once and tap anywhere to zoom back in, like Apple Photos. Photos now grow out of their tile when you open them, and shrink back into it when you swipe away.",
+      "image": "glint-zoom.png"
+    }
+  ]
+}
