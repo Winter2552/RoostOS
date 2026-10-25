@@ -192,13 +192,13 @@
 
   // Loads the next page when the end of the list nears the screen.
   const observer = new IntersectionObserver((entries) => {
-    if (entries.some((e) => e.isIntersecting) && G.next && !G.loading) load(false);
+    if (entries.some((e) => e.isIntersecting) && G.next && !G.loading && !scrub.dragging()) load(false);
   }, { rootMargin: '800px' });
   observer.observe($('#glint-sentinel'));
   function watchEnd() {
     // After a page lands, check again in case the sentinel is still on screen.
     const s = $('#glint-sentinel').getBoundingClientRect();
-    if (G.next && !G.loading && s.top < innerHeight + 800) load(false);
+    if (G.next && !G.loading && !scrub.dragging() && s.top < innerHeight + 800) load(false);
   }
 
   // ---------- rendering ----------
@@ -356,7 +356,7 @@
       top: 0, span: 0, // where the handle can travel on screen
       heads: [], ys: [], end: 0, // loaded month headings, their page positions, and where the grid ends
       cum: [], total: 0, // photos before each month, and in all
-      y: -1, f: 0, ym: '', frame: 0, idle: 0, lead: 0, pending: null,
+      y: -1, f: 0, ym: '', frame: 0, idle: 0, lead: 0, pending: null, jumped: 0,
     };
     const GRIP = 56;
 
@@ -402,8 +402,8 @@
     }
 
     function hide() {
+      if (S.drag) return; // a redraw in the middle of a drag must not drop the handle
       S.on = false;
-      S.drag = false;
       root.classList.add('hidden');
       marks.classList.add('hidden');
       root.classList.remove('live', 'drag');
@@ -464,7 +464,7 @@
     function live() {
       root.classList.add('live');
       clearTimeout(S.idle);
-      S.idle = setTimeout(() => { if (!S.drag) root.classList.remove('live'); }, 2200);
+      S.idle = setTimeout(() => { if (!S.drag) root.classList.remove('live'); }, 3000);
     }
 
     // The page scrolled: move the handle and say where we are.
@@ -525,29 +525,30 @@
       for (const y of marks.children) y.classList.toggle('under', Math.abs(Number(y.dataset.at) - S.y) < 34);
       S.ym = at.ym;
       S.pending = at;
-      if (!S.frame) {
-        S.frame = requestAnimationFrame(() => {
-          S.frame = 0;
-          const p = S.pending;
-          if (S.drag && p && loaded(p.ym)) scrollToMonth(p.ym, p.within);
-        });
-      }
+      if (!S.frame) S.frame = requestAnimationFrame(jump);
     }
 
-    grip.addEventListener('pointerdown', (e) => {
-      if (!S.on || (e.pointerType === 'mouse' && e.button !== 0)) return;
-      e.preventDefault();
-      grip.setPointerCapture(e.pointerId);
+    // The page follows the handle at most every 90 ms: scrolling it on every move makes the phone redraw
+    // hundreds of photos per frame, which is what makes the handle lag behind the finger.
+    function jump(now) {
+      S.frame = 0;
+      const p = S.pending;
+      if (!S.drag || !p) return;
+      if (now - S.jumped < 90) { S.frame = requestAnimationFrame(jump); return; }
+      if (loaded(p.ym)) { S.jumped = now; scrollToMonth(p.ym, p.within); }
+    }
+
+    function start(y) {
+      if (!S.on || S.drag) return;
       measure(); // the page may have changed since the last draw
       S.drag = true;
-      S.grab = e.clientY - (S.top + S.y);
+      S.grab = y - (S.top + S.y);
       root.classList.add('live', 'drag');
       document.body.classList.add('gscrub-drag');
       label.textContent = ymName(S.ym || G.months[0][0]);
       showYears();
       clearTimeout(S.idle);
-    });
-    grip.addEventListener('pointermove', (e) => { if (S.drag) follow(e.clientY); });
+    }
 
     async function release() {
       if (!S.drag) return;
@@ -557,7 +558,8 @@
       marks.classList.add('hidden');
       const p = S.pending;
       S.pending = null;
-      if (p && !loaded(p.ym)) {
+      if (p && loaded(p.ym)) scrollToMonth(p.ym, p.within);
+      else if (p) {
         label.textContent = `${ymName(p.ym)}…`;
         if (await loadThrough(p.ym)) {
           render(); // draws the pages just fetched, and measures again
@@ -567,12 +569,32 @@
       }
       live();
       onScroll();
+      watchEnd();
     }
-    grip.addEventListener('pointerup', release);
-    grip.addEventListener('pointercancel', release);
-    grip.addEventListener('lostpointercapture', release);
+    // A finger uses touch events, whose preventDefault is what actually stops iPhone Safari from also
+    // scrolling the page (and from carrying on a fling underneath the handle). A mouse uses pointer events.
+    grip.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      if (e.touches.length === 1) start(e.touches[0].clientY);
+    }, { passive: false });
+    grip.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      if (S.drag) follow(e.touches[0].clientY);
+    }, { passive: false });
+    grip.addEventListener('touchend', (e) => { e.preventDefault(); release(); }, { passive: false });
+    grip.addEventListener('touchcancel', release);
 
-    return { sync, hide };
+    grip.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch' || e.button !== 0) return;
+      e.preventDefault();
+      grip.setPointerCapture(e.pointerId);
+      start(e.clientY);
+    });
+    grip.addEventListener('pointermove', (e) => { if (S.drag && e.pointerType !== 'touch') follow(e.clientY); });
+    grip.addEventListener('pointerup', (e) => { if (e.pointerType !== 'touch') release(); });
+    grip.addEventListener('pointercancel', (e) => { if (e.pointerType !== 'touch') release(); });
+
+    return { sync, hide, dragging: () => S.drag };
   })();
 
   // ---------- selecting and opening ----------
