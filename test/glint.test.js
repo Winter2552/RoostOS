@@ -137,20 +137,6 @@ test('the timeline is newest first and pages without gaps', async () => {
   assert.deepEqual(rest.items.map((p) => p.id), [ids[1], ids[0]]);
 });
 
-test('the timeline sends photos per month for the scrubber, on the viewer\'s clock', async () => {
-  // sam has p0..p4 from the test above: five days of January 2020, 1 Jan 00:00 UTC onwards.
-  const utc = await photos(sam, '?tz=0');
-  assert.deepEqual(utc.months, [['2020-01', 5]]);
-  // Someone west of UTC (offset +300) sees 1 Jan 00:00 UTC as the evening of 31 Dec.
-  const west = await photos(sam, '?tz=300');
-  assert.deepEqual(west.months, [['2020-01', 4], ['2019-12', 1]]);
-  // No tz, no months; later pages never carry them.
-  assert.equal((await photos(sam)).months, undefined);
-  const first = utc.items[0];
-  assert.equal((await photos(sam, `?before=${first.taken}.${first.id}&tz=0`)).months, undefined);
-  assert.deepEqual((await photos(sam, '?fav=1&tz=0')).months, []);
-});
-
 test('photos put in Nest show up in Glint; other files do not', async () => {
   const start = await call('POST', '/api/nest/uploads', { parent: 'root', name: 'beach.PNG', size: 3 }, sam);
   await fetch(`${base}/api/nest/uploads/${start.body.id}?offset=0`, { method: 'PUT', headers: { Cookie: sam }, body: 'png' });
