@@ -1324,7 +1324,18 @@ button.restore-name:hover { text-decoration: underline; text-underline-offset: 3
 #glint-body[data-zoom="2"] .gtile { border-radius: 2px; }
 #glint-body[data-zoom="1"] .gtile-video { left: 3px; bottom: 3px; padding: 1px 5px 1px 3px; font-size: 10px; }
 #glint-body[data-zoom="1"] .gtile-fav { right: 3px; bottom: 3px; }
-#glint-body[data-zoom="2"] .gtile-video, #glint-body[data-zoom="2"] .gtile-fav, #glint-body[data-zoom="2"] .gtile-tick { display: none; }
+#glint-body[data-zoom="2"] .gtile-video, #glint-body[data-zoom="2"] .gtile-fav, #glint-body[data-zoom="2"] .gtile-tick,
+#glint-body[data-zoom="3"] .gtile-video, #glint-body[data-zoom="3"] .gtile-fav, #glint-body[data-zoom="3"] .gtile-tick { display: none; }
+/* Years: one continuous grid for the whole library, with a label at the start of each year. */
+#glint-body[data-zoom="3"] { --gmin: 36px; --gcols: 15; --ggap: 1px; }
+#glint-body[data-zoom="3"]:has(> .glint-grid) { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--gmin), 1fr)); gap: var(--ggap); }
+#glint-body[data-zoom="3"] .glint-grid { display: contents; }
+#glint-body[data-zoom="3"] .gtile { border-radius: 0; }
+#glint-body[data-zoom="3"] .gtile-blank .ni { display: none; }
+#glint-body[data-zoom="3"] .glint-month { display: none; }
+#glint-body[data-zoom="3"] .glint-month.yr { display: block; grid-column: 1 / -1; margin: 14px 0 4px; font-size: 0; }
+#glint-body[data-zoom="3"] .glint-month.yr:first-child { margin-top: 4px; }
+#glint-body[data-zoom="3"] .glint-month.yr::after { content: attr(data-year); font-size: 16px; color: var(--ink); }
 #glint-body[data-zoom="2"] .gtile.selecting.sel { box-shadow: inset 0 0 0 2px var(--ink); }
 #glint-body[data-zoom="1"] .gtile-blank .ni svg { width: 22px; height: 22px; }
 #glint-body[data-zoom="2"] .gtile-blank .ni svg { width: 14px; height: 14px; }
@@ -1335,6 +1346,7 @@ button.restore-name:hover { text-decoration: underline; text-underline-offset: 3
 .glint-zoom-btn:disabled { opacity: 0.35; cursor: default; }
 .glint-zoom-btn .ni svg { width: 16px; height: 16px; }
 @media (pointer: coarse) { .glint-zoom { display: none; } }
+@media (max-width: 600px) { #glint-body[data-zoom="3"]:has(> .glint-grid) { grid-template-columns: repeat(var(--gcols), minmax(0, 1fr)); } }
 .gtile { position: relative; aspect-ratio: 1; overflow: hidden; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; outline: none; }
 .gtile img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .gtile:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
