@@ -27,6 +27,7 @@
     left: '<path d="M15 6l-6 6 6 6"/>',
     right: '<path d="M9 6l6 6-6 6"/>',
     edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/>',
+    calendar: '<rect x="4" y="5.5" width="16" height="14.5" rx="2"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4"/>',
     minus: '<path d="M5 12h14"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
     up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
@@ -48,7 +49,8 @@
   const gapi = (method, url, body, space) => api(method, sp(url, space), body);
   const base = (space = G.space) => (space ? '#/glint/family' : '#/glint');
   const thumbUrl = (p) => sp(`/api/glint/thumbs/${p.id}`);
-  const mediaUrl = (p) => sp(`/api/glint/media/${p.id}`);
+  const mediaUrl = (p, preview) => sp(`/api/glint/media/${p.id}${preview ? '?preview=1' : ''}`);
+  const posterUrl = (p) => sp(`/api/glint/media/${p.id}?poster=1`);
 
   function monthName(ms) {
     return new Date(ms).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
@@ -67,7 +69,8 @@
 
   const G = {
     space: '',
-    mode: 'photos', // photos | favourites | albums | album | trash | move
+    hideNest: false, // show only photos added through Glint, not ones that live elsewhere in Nest
+    mode: 'photos', // photos | favourites | undated | albums | album | trash | move
     album: null, // { id, name } when mode is 'album'
     items: [],
     next: null,
@@ -81,6 +84,18 @@
     zoom: 0, // 0 is the roomy grid (3 across on a phone); higher is denser
   };
 
+  try { G.hideNest = localStorage.getItem('glint.hideNest') === '1'; } catch { /* private mode */ }
+  // Show only photos added through Glint, not ones that live elsewhere in Nest (e.g. moved in from Google Drive).
+  const hideNest = $('#glint-hide-nest');
+  hideNest.checked = G.hideNest;
+  hideNest.addEventListener('change', () => {
+    G.hideNest = hideNest.checked;
+    try { localStorage.setItem('glint.hideNest', G.hideNest ? '1' : '0'); } catch { /* private mode */ }
+    if (G.mode !== 'photos' && G.mode !== 'favourites') return;
+    G.items = []; G.next = null; G.total = 0; G.sel.clear();
+    render();
+    load(true);
+  });
   const body = $('#glint-body');
   const view = $('#view-glint');
   const byId = (id) => G.items.find((i) => i.id === id);
@@ -99,7 +114,7 @@
     const [a, b] = parts;
     if (space !== G.space) G.storage = null;
     G.space = space;
-    const mode = a === 'favourites' ? 'favourites' : a === 'albums' ? 'albums' : a === 'album' && b ? 'album' : a === 'trash' ? 'trash' : a === 'move' ? 'move' : 'photos';
+    const mode = a === 'favourites' ? 'favourites' : a === 'undated' ? 'undated' : a === 'albums' ? 'albums' : a === 'album' && b ? 'album' : a === 'trash' ? 'trash' : a === 'move' ? 'move' : 'photos';
     G.mode = mode;
     G.album = mode === 'album' ? { id: b, name: '' } : null;
     G.items = [];
@@ -132,6 +147,8 @@
         const q = new URLSearchParams();
         if (!first && G.next) q.set('before', G.next);
         if (G.mode === 'favourites') q.set('fav', '1');
+        if (G.mode === 'undated') q.set('undated', '1');
+        if (G.hideNest && (G.mode === 'photos' || G.mode === 'favourites')) q.set('own', '1');
         if (G.mode === 'album') q.set('album', G.album.id);
         const d = await gapi('GET', `/api/glint/photos?${q}`);
         if (token !== G.token) return;
@@ -215,7 +232,7 @@
   }
 
   function renderCrumbs() {
-    const names = { photos: 'Photos', favourites: 'Favourites', albums: 'Albums', trash: 'Trash', move: 'Move to Glint' };
+    const names = { photos: 'Photos', favourites: 'Favourites', undated: 'Undated', albums: 'Albums', trash: 'Trash', move: 'Move to Glint' };
     const crumbs = $('#glint-crumbs');
     if (G.mode === 'album') {
       crumbs.replaceChildren(
@@ -234,6 +251,10 @@
     const tools = $('#glint-tools');
     const note = (text) => el('span', { class: 'mono muted glint-count', text });
     if (G.mode === 'photos') tools.replaceChildren(note(G.total ? plural(G.total, 'item') : ''), zoomButtons());
+    else if (G.mode === 'undated') {
+      tools.replaceChildren(note(G.total ? plural(G.total, 'photo') : ''),
+        G.items.length ? el('button', { type: 'button', class: 'btn ghost small', text: 'Use file names', onclick: () => dateFromNames(G.items) }) : '');
+    }
     else if (G.mode === 'favourites') tools.replaceChildren(zoomButtons());
     else if (G.mode === 'move') tools.replaceChildren();
     else if (G.mode === 'albums') tools.replaceChildren(el('button', { type: 'button', class: 'btn ghost small', text: 'New album', onclick: () => newAlbum([]) }));
@@ -256,6 +277,7 @@
       const [head, text] = {
         photos: ['No photos yet', coarse.matches ? 'Tap Upload to add photos and videos.' : 'Drop photos here, or press Upload.'],
         favourites: ['No favourites yet', 'Tap the star on a photo to keep it here.'],
+        undated: ['Every photo has a date', 'Photos with no date taken inside them show up here, so you can date them.'],
         album: ['This album is empty', 'Select photos in Photos and choose Add to album.'],
       }[G.mode];
       body.replaceChildren(el('div', { class: 'nest-empty' }, gi('photo'), el('b', { text: head }), el('span', { class: 'muted', text: text })));
@@ -290,6 +312,7 @@
     if (p.thumb === 1) t.append(el('img', { src: thumbUrl(p), alt: '', loading: 'lazy', decoding: 'async', draggable: 'false' }));
     else if (p.thumb === 2) t.append(el('span', { class: 'gtile-blank' }, gi(p.video ? 'play' : 'photo')));
     else { t.dataset.need = '1'; t.append(el('span', { class: 'gtile-blank' }, gi(p.video ? 'play' : 'photo'))); }
+    if (p.live) t.append(el('span', { class: 'gtile-live mono', text: 'LIVE' }));
     if (p.video) t.append(el('span', { class: 'gtile-video mono' }, gi('play'), p.dur ? clock(p.dur) : ''));
     if (p.fav) t.append(el('span', { class: 'gtile-fav' }, gi('starFill')));
     t.append(el('button', { type: 'button', class: 'gtile-tick', 'aria-label': G.sel.has(p.id) ? 'Deselect' : 'Select', 'data-tick': '1' }, gi('check')));
@@ -476,6 +499,7 @@
       ? [btn('restore', 'Restore', () => restore(items)), btn('trash', 'Delete forever', () => deleteForever(items))]
       : [
         btn(allFav ? 'star' : 'starFill', allFav ? 'Unfavourite' : 'Favourite', () => favourite(items, !allFav)),
+        btn('calendar', 'Set date', () => setDate(items)),
         btn('album', 'Add to album', () => albumPicker(items)),
         btn('download', 'Download', () => download(items)),
         G.mode === 'album' ? btn('minus', 'Remove from album', () => removeFromAlbum(items)) : null,
@@ -543,8 +567,9 @@
 
   function removeLocal(ids) {
     const gone = new Set(ids);
+    const before = G.items.length;
     G.items = G.items.filter((i) => !gone.has(i.id));
-    G.total = Math.max(0, G.total - gone.size);
+    G.total = Math.max(0, G.total - (before - G.items.length)); // a Live Photo's clip isn't a tile of its own
     for (const id of gone) G.sel.delete(id);
     render();
     watchEnd();
@@ -557,6 +582,95 @@
       if (G.mode === 'favourites' && !on) removeLocal(items.map((i) => i.id));
       else { render(); }
     } catch (err) { toast(err.message); }
+  }
+
+  // ---------- dates ----------
+
+  const dayInput = (ms) => {
+    const d = new Date(ms);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+
+  // A date in a file name: IMG_20060801_101112, 2021-03-02 10.11.12, WhatsApp Image 2023-05-04 at 21.02.40,
+  // Screenshot_2021-03-02-10-11-12, PXL_20210302_101112345. Local time of this device; noon when there is no time.
+  function dateFromName(name) {
+    const m = /(?<!\d)((?:19|20)\d\d)[-_.]?(0[1-9]|1[0-2])[-_.]?(0[1-9]|[12]\d|3[01])(?!\d)(?:[\s_.T-]+(?:at\s+)?([01]\d|2[0-3])[-_.: ]?([0-5]\d)[-_.: ]?([0-5]\d)(?!\d))?/i.exec(name);
+    if (!m) return null;
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), m[4] ? Number(m[4]) : 12, m[5] ? Number(m[5]) : 0, m[6] ? Number(m[6]) : 0);
+    // 31 February and the like: not a date.
+    return d.getMonth() === Number(m[2]) - 1 && d.getFullYear() <= new Date().getFullYear() + 1 ? d.getTime() : null;
+  }
+
+  // Send new dates, then show them: photos that are no longer undated leave the Undated page, and the
+  // timeline is put back in order. Undo puts every photo's old date back.
+  async function applyDates(items, body, text) {
+    const before = items.map((i) => ({ id: i.id, taken: i.taken, src: i.set ? 1 : 0, exif: i.exif ? 1 : 0 }));
+    try {
+      const { items: fresh } = await gapi('POST', '/api/glint/date', body);
+      const byFresh = new Map(fresh.map((f) => [f.id, f]));
+      for (const i of G.items) if (byFresh.has(i.id)) Object.assign(i, byFresh.get(i.id));
+      if (G.mode === 'undated') {
+        removeLocal(fresh.filter((f) => !f.undated).map((f) => f.id));
+        if (V.open) { if (!G.items.length) closeViewer(); else { V.i = Math.min(V.i, G.items.length - 1); showPhoto(); } }
+      }
+      else { G.sel.clear(); refresh(); }
+      toast(text(fresh.length), async () => {
+        const { items: back } = await gapi('POST', '/api/glint/date', { restore: before.filter((b) => byFresh.has(b.id)) });
+        for (const b of back) { const i = byId(b.id); if (i) Object.assign(i, b); }
+        refresh();
+      });
+    } catch (err) { toast(err.message); }
+  }
+
+  function dateFromNames(items) {
+    const found = [];
+    for (const i of items) {
+      const taken = dateFromName(i.name);
+      if (taken !== null) found.push({ id: i.id, taken });
+    }
+    if (!found.length) { toast('None of these file names has a date in it'); return; }
+    const mine = items.filter((i) => found.some((f) => f.id === i.id));
+    applyDates(mine, { items: found }, (n) => `Dated ${plural(n, 'photo')} from their file names`);
+  }
+
+  // Choose a date for the selected photos, or move their dates earlier or later (a camera with the wrong clock).
+  function setDate(items) {
+    if (!items.length) return;
+    const first = items[0];
+    const date = el('input', { type: 'date', value: dayInput(first.taken), max: dayInput(Date.now() + 864e5), 'aria-label': 'Date' });
+    const days = el('input', { type: 'number', min: '0', max: '36500', value: '1', inputmode: 'numeric', 'aria-label': 'Days' });
+    const dir = el('select', { 'aria-label': 'Earlier or later' }, el('option', { value: '-1', text: 'earlier' }), el('option', { value: '1', text: 'later' }));
+    const mode = el('select', { 'aria-label': 'How' }, el('option', { value: 'set', text: 'Set to a date' }), el('option', { value: 'shift', text: 'Move by some days' }));
+    const setRow = el('label', { class: 'field' }, el('span', { text: 'Date' }), date);
+    const shiftRow = el('div', { class: 'field hidden' }, el('span', { text: 'Move every date' }), el('div', { class: 'gdate-shift' }, days, el('span', { text: 'days' }), dir));
+    mode.addEventListener('change', () => {
+      setRow.classList.toggle('hidden', mode.value !== 'set');
+      shiftRow.classList.toggle('hidden', mode.value !== 'shift');
+    });
+    const done = (v) => { dialog.onclose = null; dialog.close(); if (v) go(); };
+    const go = () => {
+      if (mode.value === 'set') {
+        if (!date.value) return;
+        const [y, m, d] = date.value.split('-').map(Number);
+        applyDates(items, { ids: items.map((i) => i.id), taken: new Date(y, m - 1, d, 12).getTime() }, (n) => `Dated ${plural(n, 'photo')} ${dayName(new Date(y, m - 1, d).getTime())}`);
+      } else {
+        const n = Math.round(Number(days.value));
+        if (!Number.isFinite(n) || n < 0) return;
+        const shift = Number(dir.value) * n * 864e5;
+        applyDates(items, { ids: items.map((i) => i.id), shift }, (c) => `Moved ${plural(c, 'date')} ${n} ${n === 1 ? 'day' : 'days'} ${shift < 0 ? 'earlier' : 'later'}`);
+      }
+    };
+    showDialog(items.length === 1 ? 'Set date' : `Set date for ${items.length} photos`, [
+      el('label', { class: 'field' }, el('span', { text: 'What to do' }), mode),
+      setRow,
+      shiftRow,
+      el('p', { class: 'muted', text: 'Only Glint’s date changes. The photo files are never touched.' }),
+    ], [
+      el('button', { type: 'button', class: 'btn ghost small', text: 'Cancel', onclick: () => done(false) }),
+      el('button', { type: 'button', class: 'btn small', text: 'Save', onclick: () => done(true) }),
+    ]);
+    dialog.onclose = () => {};
+    date.focus();
   }
 
   function download(items) {
@@ -693,7 +807,7 @@
     const left = (ms) => Math.max(0, Math.ceil((ms - Date.now()) / 86400000));
     body.replaceChildren(el('p', { class: 'mono muted glint-note', text: 'Photos here are deleted for good after 30 days.' }),
       el('div', { class: 'glint-trash' }, ...G.items.map((p) => el('div', { class: `gtrash${G.sel.has(p.id) ? ' sel' : ''}`, 'data-id': p.id },
-        el('button', { type: 'button', class: 'gtrash-pick', 'aria-label': `Select ${p.name}`, onclick: () => toggle(p.id) }, gi(G.sel.has(p.id) ? 'check' : p.name.match(/\.(mp4|mov|m4v|webm|3gp)$/i) ? 'play' : 'photo')),
+        el('button', { type: 'button', class: 'gtrash-pick', 'aria-label': `Select ${p.name}`, onclick: () => toggle(p.id) }, gi(G.sel.has(p.id) ? 'check' : p.name.match(/\.(mp4|mov|m4v|webm|3gp|mkv|avi|wmv|flv|mpe?g|mts|m2ts)$/i) ? 'play' : 'photo')),
         el('span', { class: 'gtrash-name', text: p.name }),
         el('span', { class: 'mono muted', text: `${plural(left(p.deletesAt), 'day')} left · ${bytes(p.size)}` }),
         el('button', { type: 'button', class: 'btn ghost small', text: 'Restore', onclick: () => restore([p]) })))));
@@ -967,6 +1081,7 @@
         V.title,
         V.fav,
         el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Info', onclick: showInfo }, gi('info')),
+        el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Set date', onclick: () => setDate([G.items[V.i]]) }, gi('calendar')),
         el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Add to album', onclick: () => albumPicker([G.items[V.i]]) }, gi('album')),
         el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Download', onclick: () => download([G.items[V.i]]) }, gi('download')),
         el('button', { type: 'button', class: 'gview-btn', 'aria-label': 'Delete', onclick: deleteCurrent }, gi('trash'))),
@@ -1026,11 +1141,18 @@
     V.fav.setAttribute('aria-label', p.fav ? 'Unfavourite' : 'Favourite');
     V.prev.classList.toggle('hidden', V.i === 0);
     V.next.classList.toggle('hidden', V.i >= G.items.length - 1 && !G.next);
-    const node = p.video
+    const node = p.live ? liveView(p) : p.video
       ? el('video', { src: mediaUrl(p), controls: true, autoplay: true, playsinline: true, preload: 'metadata', class: 'gview-media' })
       : el('img', { src: mediaUrl(p), alt: p.name, class: 'gview-media', draggable: 'false' });
     // A format this browser can't show (HEIC on Windows) offers the download instead.
+    // The server makes (once) and sends a JPEG or MP4 copy when it can; the original is never changed.
+    let converted = false;
     node.addEventListener('error', () => {
+      if (!converted) {
+        converted = true;
+        node.src = mediaUrl(p, true);
+        return;
+      }
       V.stage.replaceChildren(el('div', { class: 'gview-fail' }, el('b', { text: 'This browser can’t show this file' }),
         el('button', { type: 'button', class: 'btn small', text: 'Download it', onclick: () => download([p]) })));
     });
@@ -1039,7 +1161,32 @@
     if (G.next && !G.loading && V.i > G.items.length - 6) load(false);
     // Warm up the neighbour so swiping is instant.
     const n = G.items[V.i + 1];
-    if (n && !n.video) new Image().src = mediaUrl(n);
+    if (n && !n.video && !n.live) new Image().src = mediaUrl(n);
+  }
+
+  // A Live Photo: the picture, with its clip played while the picture or the LIVE button is held.
+  function liveView(p) {
+    const img = el('img', { src: mediaUrl(p), alt: p.name, class: 'gview-media', draggable: 'false' });
+    const clip = el('video', { src: sp(`/api/glint/media/${p.live}`), playsinline: true, loop: true, preload: 'none', class: 'gview-media gview-clip hidden' });
+    const badge = el('button', { type: 'button', class: 'gview-live mono', text: 'LIVE', 'aria-label': 'Hold to play' });
+    const wrap = el('div', { class: 'gview-livewrap' }, img, clip, badge);
+    let timer = 0;
+    // With sound, as a Live Photo has. A browser that won't start sound without a tap (a hold on the picture) gets it silent.
+    const play = () => {
+      clip.classList.remove('hidden');
+      clip.currentTime = 0;
+      clip.muted = false;
+      clip.play().catch(() => { clip.muted = true; clip.play().catch(() => {}); });
+    };
+    const stop = () => { clearTimeout(timer); clip.pause(); clip.classList.add('hidden'); };
+    badge.addEventListener('pointerdown', (e) => { e.preventDefault(); play(); });
+    // On the picture itself a short hold starts it, so a swipe still changes photo.
+    img.addEventListener('pointerdown', () => { timer = setTimeout(play, 350); });
+    for (const t of [badge, img]) for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) t.addEventListener(ev, stop);
+    wrap.addEventListener('contextmenu', (e) => e.preventDefault());
+    // The wrapper takes the media's place, so the failure message still shows if the picture can't be drawn.
+    img.addEventListener('error', () => wrap.dispatchEvent(new Event('error')));
+    return wrap;
   }
 
   async function step(d) {
@@ -1088,9 +1235,24 @@
     pumpThumbs();
   }, { rootMargin: '300px' });
 
+  // Newest first, so what is on screen now is drawn before what was scrolled past, and a tile that has
+  // scrolled far away by the time its turn comes is put back to be picked up if it returns.
+  function offscreen(p) {
+    const t = body.querySelector(`.gtile[data-id="${p.id}"]`);
+    if (!t) return true;
+    const r = t.getBoundingClientRect();
+    return r.bottom < -600 || r.top > innerHeight + 600;
+  }
+
   function pumpThumbs() {
-    while (thumbBusy < 2 && thumbQueue.length) {
-      const job = thumbQueue.shift();
+    while (thumbBusy < 3 && thumbQueue.length) {
+      const job = thumbQueue.pop();
+      if (!job.file && offscreen(job.p)) {
+        job.p.making = false;
+        const t = body.querySelector(`.gtile[data-id="${job.p.id}"]`);
+        if (t) tileObserver.observe(t);
+        continue;
+      }
       thumbBusy++;
       makePreview(job.p, job.file).catch(() => {}).finally(() => { thumbBusy--; pumpThumbs(); });
     }
@@ -1162,9 +1324,21 @@
 
   // Reads one photo or video (from the File just uploaded, or from the server
   // for older ones) and sends back its date, size and preview.
+  async function imageFromBlob(blob) {
+    const url = URL.createObjectURL(blob);
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      if (!img.naturalWidth) throw new Error('empty');
+      return img;
+    } finally { URL.revokeObjectURL(url); }
+  }
+
   async function makePreview(p, file) {
     let blob = file;
     let taken = null;
+    let exif = false;
     let w = 0;
     let h = 0;
     let dur = 0;
@@ -1178,14 +1352,28 @@
       }
       if (blob && !p.video) {
         taken = exifDate(await blob.slice(0, 131072).arrayBuffer());
+        exif = taken !== null;
         if (taken === null) taken = fileDate(file);
-        const bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' });
-        w = bmp.width;
-        h = bmp.height;
+        let bmp;
+        try {
+          bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+        } catch {
+          // An iPhone can show HEIC in an image even when createImageBitmap won't take it: try that before asking the server.
+          bmp = await imageFromBlob(blob).catch(() => null);
+          if (!bmp) {
+            // HEIC on Windows and the like: draw from the server's JPEG copy instead.
+            const conv = await fetch(mediaUrl(p, true));
+            if (!conv.ok) throw new Error('unavailable');
+            bmp = await createImageBitmap(await conv.blob(), { imageOrientation: 'from-image' });
+          }
+        }
+        w = bmp.width || bmp.naturalWidth;
+        h = bmp.height || bmp.naturalHeight;
         jpeg = await toJpeg(drawSmall(bmp, w, h));
-        bmp.close();
+        if (bmp.close) bmp.close();
       } else if (p.video) {
-        const out = await videoPreview(file ? file : null, p);
+        // The browser draws it when it can; otherwise the server cuts a still out (HEVC .mov on Windows, say).
+        const out = await videoPreview(file ? file : null, p).catch(() => serverPoster(p));
         ({ w, h, dur } = out);
         jpeg = out.jpeg;
         taken = fileDate(file);
@@ -1195,6 +1383,7 @@
     }
     const q = new URLSearchParams();
     if (taken !== null) q.set('taken', String(taken));
+    if (exif) q.set('exif', '1');
     if (w) { q.set('w', String(w)); q.set('h', String(h)); }
     if (dur) q.set('dur', String(dur));
     const res = await fetch(sp(`/api/glint/photos/${p.id}/preview?${q}`), {
@@ -1208,9 +1397,20 @@
     Object.assign(p, item);
     p.making = false;
     const t = body.querySelector(`.gtile[data-id="${p.id}"]`);
+    if (G.mode === 'undated' && !p.undated) { removeLocal([p.id]); return; }
     if (t) t.replaceWith(tile(p));
     // A new date can change where the photo belongs; the next load puts it in order.
     if (taken !== null) reloadSoon();
+  }
+
+  async function serverPoster(p) {
+    const res = await fetch(posterUrl(p), { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('unavailable');
+    const jpeg = await res.blob();
+    const bmp = await createImageBitmap(jpeg);
+    const out = { jpeg, w: bmp.width, h: bmp.height, dur: Number.parseFloat(res.headers.get('X-Duration')) || 0 };
+    if (bmp.close) bmp.close();
+    return out;
   }
 
   function videoPreview(file, p) {
@@ -1221,8 +1421,13 @@
       v.preload = 'auto';
       const url = file ? URL.createObjectURL(file) : mediaUrl(p);
       const done = (fn, val) => { clearTimeout(timer); v.removeAttribute('src'); v.load(); if (file) URL.revokeObjectURL(url); fn(val); };
-      const timer = setTimeout(() => done(reject, new Error('timeout')), 15000);
-      v.addEventListener('error', () => done(reject, new Error('unsupported')));
+      const timer = setTimeout(() => done(reject, new Error('timeout')), file ? 90000 : 12000);
+      let converted = false;
+      v.addEventListener('error', () => {
+        // MKV, 3GP and the like: draw from the server's MP4 copy (made once) instead.
+        if (!converted) { converted = true; v.src = mediaUrl(p, true); return; }
+        done(reject, new Error('unsupported'));
+      });
       v.addEventListener('loadeddata', () => { v.currentTime = Math.min(0.5, (v.duration || 1) / 2); });
       v.addEventListener('seeked', async () => {
         try {
@@ -1241,7 +1446,7 @@
   document.body.append(panel);
 
   async function queueUploads(files) {
-    const media = files.filter((f) => /^(image|video)\//.test(f.type) || /\.(jpe?g|png|gif|webp|heic|heif|avif|bmp|mp4|mov|m4v|webm|3gp)$/i.test(f.name));
+    const media = files.filter((f) => /^(image|video)\//.test(f.type) || /\.(jpe?g|png|gif|webp|heic|heif|avif|bmp|tiff?|mp4|mov|m4v|webm|3gp|mkv|avi|wmv|flv|mpe?g|mts|m2ts)$/i.test(f.name));
     const skippedType = files.length - media.length;
     const space = G.space;
     if (!media.length) { if (skippedType) toast('Glint takes photos and videos. Use Files for everything else.'); return; }
@@ -1336,6 +1541,19 @@
   }
 
   let reloadTimer = null;
+  // Back in order after dates changed (the viewer keeps its place; the list catches up when it closes).
+  function refresh() {
+    if (V.open) { showPhoto(); return; }
+    reloadNow();
+  }
+
+  function reloadNow() {
+    if (!['photos', 'favourites', 'undated'].includes(G.mode)) return;
+    G.items = []; G.next = null; G.total = 0; G.sel.clear();
+    render();
+    load(true);
+  }
+
   function reloadSoon() {
     clearTimeout(reloadTimer);
     reloadTimer = setTimeout(() => {

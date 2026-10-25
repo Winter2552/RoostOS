@@ -1,0 +1,14 @@
+{
+  "version": "0.1.8",
+  "date": "2026-10-25",
+  "title": "See an update as it happens",
+  "summary": "A progress bar and steps while Roost updates.",
+  "items": [
+    {
+      "title": "See an update as it happens",
+      "text": "Updating Roost from the Status page now shows a progress bar and the steps as they go: checking, bringing in the code, building, restarting. It carries on through the short restart, and tells you to reload when it's done.",
+      "image": "update-progress.png",
+      "admin": true
+    }
+  ]
+}
