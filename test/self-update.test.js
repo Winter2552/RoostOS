@@ -54,7 +54,10 @@ function fakeDocker({ project = 'roost', buildFails = false, health = ['healthy'
     if (line.startsWith('image inspect')) return { code: 1, out: '' };
     if (line.includes('State.Health')) return { code: 0, out: healths.length > 1 ? healths.shift() : healths[0] };
     if (line.startsWith('logs')) return { code: 0, out: 'Error: Cannot find module\nat boot' };
-    if (line.includes(' build ')) return buildFails ? { code: 1, out: 'step 4 failed' } : { code: 0, out: '' };
+    if (line.includes(' build ')) {
+      if (opts && opts.onData) { opts.onData('#5 [roost 2/7] COPY . .\n'); opts.onData('#6 [roost 5/7] RUN npm ci\n#7 [roost 3/7] RUN x\n'); }
+      return buildFails ? { code: 1, out: 'step 4 failed' } : { code: 0, out: '' };
+    }
     return { code: 0, out: '' };
   };
   return { exec, calls };
@@ -113,6 +116,23 @@ test('an update builds, restarts, waits for health, and keeps the old image to g
     // The request was taken, so it can't run twice.
     assert.equal(selfUpdate.hasRequest(w.data), false);
   } finally { w.done(); }
+});
+
+test('the build reports how far along it is, and when the update began', async () => {
+  const w = world();
+  try {
+    const u = make(w, fakeDocker());
+    w.publish('app.js', 'two\n', 'New version');
+    await u.apply();
+    // The furthest step seen wins; it never goes backwards.
+    assert.deepEqual(u.status().build, { n: 5, total: 7 });
+    assert.ok(u.status().startedAt);
+    const summary = selfUpdate.summarize({ ...u.status(), state: 'applying', updatedAt: new Date().toISOString() });
+    assert.deepEqual(summary.build, { n: 5, total: 7 });
+    assert.equal(summary.startedAt, u.status().startedAt);
+  } finally {
+    w.done();
+  }
 });
 
 test('a version that will not build changes nothing', async () => {

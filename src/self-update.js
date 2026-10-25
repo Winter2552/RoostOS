@@ -65,6 +65,8 @@ function summarize(status, now = Date.now()) {
     checkedAt: status.checkedAt || null,
     checkError: status.checkError || null,
     phase: status.phase || null,
+    startedAt: status.startedAt || null,
+    build: status.build || null,
     last,
   };
   if (now - Date.parse(status.updatedAt) > STOPPED_AFTER) return { ...out, state: 'stopped' };
