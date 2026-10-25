@@ -3129,6 +3129,7 @@ $('#tls-off').addEventListener('click', async () => {
 let updateTimer = null;
 let updateAsking = false;
 let updateLast = null;
+let updateReload = false;
 
 const UPDATE_PHASE = {
   checking: 'Checking what’s new',
@@ -3139,23 +3140,74 @@ const UPDATE_PHASE = {
   rollback: 'Something failed, so the old version is being put back',
 };
 
+// The steps an update goes through, with how full the bar is when each one is
+// reached. The build is the long one, and moves the bar with Docker's own count.
+const UPDATE_STEPS = [
+  ['checking', 'Check what’s new', 0],
+  ['merge', 'Bring in the new code', 8],
+  ['build', 'Build the new version', 12],
+  ['restart', 'Restart Roost', 85],
+  ['health', 'Wait for it to start', 93],
+];
+const UPDATE_BUILD_SPAN = 85 - 12;
+
+function updatePercent(u) {
+  const i = UPDATE_STEPS.findIndex(([id]) => id === u.phase);
+  if (i < 0) return u.phase === 'rollback' ? 100 : 2;
+  let pct = UPDATE_STEPS[i][2];
+  if (u.phase === 'build' && u.build) pct += Math.round(UPDATE_BUILD_SPAN * (u.build.n - 1) / u.build.total);
+  return Math.max(2, Math.min(99, pct));
+}
+
+function elapsed(since) {
+  const s = Math.max(0, Math.round((Date.now() - Date.parse(since)) / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+// The bar and the checklist of steps. `restarting` is Roost not answering for a
+// moment while it comes back on the new version.
+function renderUpdateProgress(u, restarting = false) {
+  const box = $('#update-progress');
+  const on = u.state === 'applying';
+  box.classList.toggle('hidden', !on);
+  if (!on) return;
+  const phase = restarting ? 'health' : u.phase;
+  const view = { ...u, phase };
+  const pct = restarting ? Math.max(updatePercent(view), 93) : updatePercent(view);
+  $('#update-bar').style.width = `${pct}%`;
+  box.setAttribute('aria-valuenow', String(pct));
+  const rolling = phase === 'rollback';
+  const at = UPDATE_STEPS.findIndex(([id]) => id === phase);
+  $('#update-steps').replaceChildren(...UPDATE_STEPS.map(([id, label], i) => {
+    const cls = rolling ? 'todo' : i < at ? 'done' : i === at ? 'now' : 'todo';
+    let text = label;
+    if (id === 'build' && cls === 'now' && u.build) text += ` (step ${u.build.n} of ${u.build.total})`;
+    if (id === 'health' && restarting) text = 'Roost is restarting on the new version';
+    return el('li', { class: cls }, el('span', { class: 'mark', text: cls === 'done' ? '✓' : cls === 'now' ? '•' : '' }), el('span', { text }));
+  }));
+  if (rolling) $('#update-steps').append(el('li', { class: 'now' }, el('span', { class: 'mark', text: '•' }), el('span', { text: UPDATE_PHASE.rollback })));
+  if (u.startedAt) $('#update-steps').append(el('li', { class: 'time' }, el('span', { class: 'mark' }), el('span', { text: `${elapsed(u.startedAt)} so far` })));
+}
+
 function plural(n, one, many) {
   return `${n} ${n === 1 ? one : many}`;
 }
 
 function renderUpdate(u) {
+  const wasApplying = Boolean(updateLast && updateLast.state === 'applying');
   updateLast = u;
   const applying = u.state === 'applying';
   const [dot, headline] = {
     off: ['', 'The updater isn’t set up yet'],
     stopped: ['offline', 'The updater isn’t running'],
     checking: ['starting', 'Looking at GitHub…'],
-    applying: ['starting', `Updating Roost… ${UPDATE_PHASE[u.phase] || ''}`.trim()],
+    applying: ['starting', 'Updating Roost…'],
     available: ['starting', `${plural(u.behind, 'change', 'changes')} waiting on GitHub`],
     current: ['online', 'Roost is up to date'],
     error: ['offline', u.checkError || 'Couldn’t look at GitHub'],
   }[u.state] || ['', ''];
   $('#update-state').replaceChildren(el('span', { class: `dot ${dot}` }), el('span', { text: headline }));
+  renderUpdateProgress(u);
 
   const lines = [];
   if (u.state === 'off') lines.push('Finish “Update Roost from inside Roost” in Admin → Setup.');
@@ -3171,6 +3223,8 @@ function renderUpdate(u) {
   // One note at a time: what blocks the update, or how the last one went.
   const notes = [];
   const l = u.last;
+  if (wasApplying && !applying && l && l.ok && !l.nothing) updateReload = true;
+  if (updateReload && !applying) notes.push('Reload this page to use the new version.');
   if (u.state === 'available' && u.conflicts.length) {
     notes.push(`You changed ${u.conflicts.join(', ')} on the server, and this update changes it too. Move your own settings into docker-compose.override.yml, then check again.`);
   }
@@ -3213,7 +3267,8 @@ async function loadUpdate() {
   } catch (err) {
     // While Roost restarts for an update, it simply doesn't answer for a bit.
     if (updateLast && updateLast.state === 'applying' && !err.status) {
-      $('#update-state').replaceChildren(el('span', { class: 'dot starting' }), el('span', { text: 'Roost is restarting on the new version…' }));
+      $('#update-state').replaceChildren(el('span', { class: 'dot starting' }), el('span', { text: 'Updating Roost…' }));
+      renderUpdateProgress(updateLast, true);
       updateTimer = setTimeout(loadUpdate, 3000);
     }
   }

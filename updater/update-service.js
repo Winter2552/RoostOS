@@ -51,7 +51,7 @@ const BUILD_TIMEOUT_MS = 20 * 60 * 1000;
 
 // Runs a program and gathers what it prints (the last ~16 KB). Never throws:
 // → { code, out }; code is null if it could not start or ran out of time.
-function run(cmd, args, { cwd, timeoutMs = 60000 } = {}) {
+function run(cmd, args, { cwd, timeoutMs = 60000, onData } = {}) {
   return new Promise((resolve) => {
     let out = '';
     let done = false;
@@ -73,7 +73,10 @@ function run(cmd, args, { cwd, timeoutMs = 60000 } = {}) {
       child.kill('SIGKILL');
       finish(null);
     }, timeoutMs);
-    const take = (c) => { out = (out + c).slice(-16000); };
+    const take = (c) => {
+      out = (out + c).slice(-16000);
+      if (onData) onData(String(c));
+    };
     child.stdout.on('data', take);
     child.stderr.on('data', take);
     child.on('error', (err) => { out += err.message; finish(null); });
@@ -244,8 +247,30 @@ function create({ dataDir, srcDir, exec = run, now = () => Date.now(), wait = sl
 
   const phase = (name) => { status.phase = name; save(); };
 
+  // While the build runs, Docker prints which step of its recipe it is on
+  // ("[roost 3/7]" or "Step 3/7"). The furthest one seen gives the progress bar something real.
+  function watchBuild() {
+    let best = 0;
+    let lastSave = 0;
+    return (chunk) => {
+      for (const m of chunk.matchAll(/(?:\[(?:[\w.-]+ )?|Step )(\d+)\/(\d+)\]?/g)) {
+        const n = Number(m[1]);
+        const total = Number(m[2]);
+        if (!total || n > total || n / total <= best) continue;
+        best = n / total;
+        status.build = { n, total };
+        if (now() - lastSave >= 1000) {
+          lastSave = now();
+          save();
+        }
+      }
+    };
+  }
+
   async function apply() {
     status.state = 'applying';
+    status.startedAt = new Date(now()).toISOString();
+    status.build = null;
     phase('checking');
     const result = { at: new Date(now()).toISOString() };
     const tagged = []; // [{ repo, previousId }] for rolling back
@@ -296,7 +321,7 @@ function create({ dataDir, srcDir, exec = run, now = () => Date.now(), wait = sl
       }
 
       phase('build');
-      const built = await compose(['build', ...SERVICES], { timeoutMs: BUILD_TIMEOUT_MS });
+      const built = await compose(['build', ...SERVICES], { timeoutMs: BUILD_TIMEOUT_MS, onData: watchBuild() });
       if (built.code !== 0) throw new Stop("The new version didn't build, so nothing was changed. Roost is still running the old one.", tail(built.out));
 
       phase('restart');

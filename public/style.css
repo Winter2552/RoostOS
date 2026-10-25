@@ -445,7 +445,7 @@ a.app-card:focus-visible {
   outline: none;
 }
 
-.app-card.disabled { cursor: default; border-style: dashed; box-shadow: none; opacity: 0.6; }
+.app-card.disabled { cursor: default; border-style: dashed; box-shadow: none; }
 
 /* Arrange mode: cards stop being links and show a star and move buttons. */
 .arrange-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
@@ -855,7 +855,7 @@ a.watch-card:focus-visible { transform: translate(4px, 4px); box-shadow: 3px 3px
 .meter.high i { background: var(--bad); }
 
 .app-status-head { display: flex; justify-content: space-between; align-items: flex-start; }
-.app-status.unset { border-style: dashed; box-shadow: none; opacity: 0.6; }
+.app-status.unset { border-style: dashed; box-shadow: none; }
 .app-status.offline { border-color: var(--bad); }
 .app-status.warn { border-color: #f5d77a; }
 
@@ -899,7 +899,7 @@ a.watch-card:focus-visible { transform: translate(4px, 4px); box-shadow: 3px 3px
 
 /* Outside services: one calm line each. */
 .outside-row { align-items: baseline; }
-.outside-row.unset { opacity: 0.6; }
+.outside-row.unset { }
 .outside-role { font-size: 12px; }
 .outside-state { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; text-align: right; white-space: normal !important; }
 .outside-state b { font-weight: 500; }
@@ -1268,7 +1268,7 @@ a.backup-line[href]:hover { color: var(--ink); }
 .uptime-bars i.none { background: var(--line); opacity: 1; }
 .uptime-bars i.picked { outline: 1px solid var(--ink); outline-offset: 1px; opacity: 1; }
 .uptime-detail { font-size: 11px; min-height: 1.4em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.uptime-detail:empty::before { content: 'Pick a day for details'; opacity: 0.6; }
+.uptime-detail:empty::before { content: 'Pick a day for details'; }
 @media (max-width: 600px) {
   .uptime-bars { gap: 1px; height: 20px; }
   .uptime-detail { white-space: normal; }
@@ -1660,3 +1660,11 @@ a.app-card:active { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--shad
 .finfo-text { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .finfo-reply { margin: 8px 0 0 14px; padding-left: 10px; border-left: 2px solid var(--line); }
 .finfo .mono { font-size: 11px; }
+
+.update-progress { margin: 4px 0 14px; }
+.update-progress .meter-fill { background: var(--ink); gap: 0; }
+.update-steps { list-style: none; margin: 12px 0 0; padding: 0; font-size: 12px; text-transform: none; }
+.update-steps li { display: flex; gap: 10px; padding: 3px 0; }
+.update-steps .mark { flex: none; width: 14px; text-align: center; }
+.update-steps .todo, .update-steps .time { color: var(--muted); }
+.update-steps .now { font-weight: 600; }
