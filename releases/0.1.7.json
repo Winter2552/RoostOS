@@ -1,0 +1,13 @@
+{
+  "version": "0.1.7",
+  "date": "2026-10-25",
+  "title": "Scrub through your photos",
+  "summary": "A handle on the right edge to jump to any month in Glint.",
+  "items": [
+    {
+      "title": "Scrub through your photos",
+      "text": "Scroll Photos and a handle appears on the right edge. Drag it to fly to any month, with the month and year shown beside it, even in a library of thousands.",
+      "image": "glint-scrubber.png"
+    }
+  ]
+}

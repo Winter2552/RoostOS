@@ -54,6 +54,17 @@
     return new Date(ms).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
   }
 
+  const pad2 = (n) => String(n).padStart(2, '0');
+  // "2025-03": the month a photo falls in on this device's clock; heading and scrubber agree on it.
+  function ymOf(ms) {
+    const d = new Date(ms);
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+  }
+  function ymName(ym) {
+    const [y, m] = ym.split('-').map(Number);
+    return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  }
+
   function dayName(ms) {
     return new Date(ms).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
   }
@@ -72,6 +83,7 @@
     album: null, // { id, name } when mode is 'album'
     items: [],
     next: null,
+    months: null, // [["2025-03", 41], ...] newest first: photos per month, for the scrubber
     total: 0,
     sel: new Set(),
     anchor: null,
@@ -116,6 +128,7 @@
     G.album = mode === 'album' ? { id: b, name: '' } : null;
     G.items = [];
     G.next = null;
+    G.months = null;
     G.total = 0;
     G.sel.clear();
     G.anchor = null;
@@ -123,6 +136,18 @@
     render();
     load(true);
   };
+
+  // The address of a page of the current list; the first page also asks for the months the scrubber needs.
+  function photoQuery(before, first) {
+    const q = new URLSearchParams();
+    if (before) q.set('before', before);
+    if (first) q.set('tz', String(new Date().getTimezoneOffset()));
+    if (G.mode === 'favourites') q.set('fav', '1');
+    if (G.mode === 'undated') q.set('undated', '1');
+    if (G.hideNest && (G.mode === 'photos' || G.mode === 'favourites')) q.set('own', '1');
+    if (G.mode === 'album') q.set('album', G.album.id);
+    return q;
+  }
 
   async function load(first) {
     if (G.loading && !first) return;
@@ -141,17 +166,11 @@
         G.items = d.items;
         G.storage = d.storage;
       } else {
-        const q = new URLSearchParams();
-        if (!first && G.next) q.set('before', G.next);
-        if (G.mode === 'favourites') q.set('fav', '1');
-        if (G.mode === 'undated') q.set('undated', '1');
-        if (G.hideNest && (G.mode === 'photos' || G.mode === 'favourites')) q.set('own', '1');
-        if (G.mode === 'album') q.set('album', G.album.id);
-        const d = await gapi('GET', `/api/glint/photos?${q}`);
+        const d = await gapi('GET', `/api/glint/photos?${photoQuery(first ? '' : G.next, first)}`);
         if (token !== G.token) return;
         G.items = first ? d.items : G.items.concat(d.items);
         G.next = d.next;
-        if (first) { G.total = d.total; G.storage = d.storage; }
+        if (first) { G.total = d.total; G.storage = d.storage; G.months = d.months || null; }
         if (G.mode === 'album' && !G.album.name) {
           const { albums } = await gapi('GET', '/api/glint/albums');
           G.albums = albums;
@@ -190,6 +209,7 @@
   };
 
   function render() {
+    scrub.hide();
     document.querySelectorAll('#view-glint [data-place]').forEach((a) => {
       const place = G.mode === 'album' ? 'albums' : G.mode;
       a.classList.toggle('active', a.dataset.place === place);
@@ -286,7 +306,7 @@
       const m = monthName(p.taken);
       if (m !== month) {
         month = m;
-        parts.push(el('h3', { class: 'glint-month mono muted', text: m }));
+        parts.push(el('h3', { class: 'glint-month mono muted', text: m, 'data-ym': ymOf(p.taken) }));
         grid = el('div', { class: 'glint-grid' });
         parts.push(grid);
       }
@@ -294,6 +314,7 @@
     }
     body.replaceChildren(...parts);
     for (const t of body.querySelectorAll('.gtile[data-need]')) tileObserver.observe(t);
+    scrub.sync();
   }
 
   function tile(p) {
@@ -313,6 +334,221 @@
     t.append(el('button', { type: 'button', class: 'gtile-tick', 'aria-label': G.sel.has(p.id) ? 'Deselect' : 'Select', 'data-tick': '1' }, gi('check')));
     return t;
   }
+
+  // ---------- scrubber: a handle on the right edge that runs through the whole library ----------
+  //
+  // Dragging it jumps to a month, with the month and year shown beside it; scrolling moves it and shows the
+  // month too. The server sends the photo count per month with the first page (G.months), so the handle
+  // covers the whole library even though only some of it has been loaded. Letting go on a month that isn't
+  // loaded yet fetches pages up to it, then draws once. It runs on scroll events and animation frames only,
+  // and its positions are measured once per draw, never while scrolling.
+
+  const scrub = (() => {
+    const label = el('div', { class: 'gscrub-label mono' });
+    const grip = el('div', { class: 'gscrub-grip' }, el('span', { class: 'gscrub-knob' }, gi('up'), gi('down')));
+    const root = el('div', { class: 'gscrub hidden', 'aria-hidden': 'true' }, label, grip);
+    document.body.append(root);
+
+    const S = {
+      on: false, drag: false, grab: 0,
+      top: 0, span: 0, // where the handle can travel on screen
+      heads: [], ys: [], end: 0, // loaded month headings, their page positions, and where the grid ends
+      cum: [], total: 0, // photos before each month, and in all
+      y: -1, f: 0, ym: '', frame: 0, idle: 0, lead: 0, pending: null,
+    };
+    const GRIP = 56;
+
+    function measure() {
+      const bar = document.querySelector('#view-glint .nest-bar');
+      const lead = (bar ? bar.getBoundingClientRect().bottom : 0) + 8;
+      S.lead = lead;
+      S.top = lead + 4;
+      S.span = Math.max(0, innerHeight - S.top - (coarse.matches ? 104 : 20) - GRIP);
+      root.style.top = `${S.top}px`;
+      S.heads = [...body.querySelectorAll('.glint-month[data-ym]')];
+      const at = scrollY;
+      S.ys = S.heads.map((h) => h.getBoundingClientRect().top + at);
+      S.end = body.getBoundingClientRect().bottom + at;
+    }
+
+    function months() {
+      const m = G.months || [];
+      let sum = 0;
+      S.cum = m.map(([, n]) => { const c = sum; sum += n; return c; });
+      S.total = sum;
+      return m;
+    }
+
+    // Worth showing once there is more than a couple of screens to run through.
+    function worth() {
+      return S.on && (G.next || document.documentElement.scrollHeight > innerHeight * 2.2);
+    }
+
+    function show() {
+      root.classList.toggle('hidden', !worth());
+    }
+
+    function sync() {
+      S.on = ['photos', 'favourites', 'undated', 'album'].includes(G.mode) && G.items.length > 0 && Boolean(G.months && G.months.length);
+      if (!S.on) return hide();
+      months();
+      measure();
+      show();
+      const at = fromScroll();
+      S.ym = at.ym;
+      place(at.f, ymName(at.ym));
+    }
+
+    function hide() {
+      S.on = false;
+      S.drag = false;
+      root.classList.add('hidden');
+      root.classList.remove('live', 'drag');
+    }
+
+    // Where the top of the screen is in the library, as 0 (newest) to 1 (oldest).
+    function fromScroll() {
+      const m = G.months;
+      const line = scrollY + S.lead;
+      let i = S.ys.length - 1;
+      while (i > 0 && S.ys[i] > line) i--;
+      const head = S.heads[i];
+      if (!head || !S.total) return { f: 0, ym: m[0][0] };
+      const mi = m.findIndex(([ym]) => ym === head.dataset.ym);
+      if (mi < 0) return { f: 0, ym: head.dataset.ym };
+      const to = i + 1 < S.ys.length ? S.ys[i + 1] : S.end;
+      const within = Math.min(1, Math.max(0, (line - S.ys[i]) / Math.max(1, to - S.ys[i])));
+      let f = (S.cum[mi] + within * m[mi][1]) / S.total;
+      // At the very bottom of everything there is, the handle rests at the end.
+      if (!G.next && scrollY + innerHeight >= document.documentElement.scrollHeight - 2) f = 1;
+      return { f: Math.min(1, f), ym: m[mi][0] };
+    }
+
+    // Which month, and how far through it, a spot on the track means.
+    function atFraction(f) {
+      const m = G.months;
+      const pos = f * S.total;
+      let mi = S.cum.length - 1;
+      while (mi > 0 && S.cum[mi] > pos) mi--;
+      return { mi, ym: m[mi][0], within: Math.min(1, Math.max(0, (pos - S.cum[mi]) / Math.max(1, m[mi][1]))) };
+    }
+
+    function place(f = S.f, text) {
+      S.f = f;
+      const y = Math.round(f * S.span);
+      if (y !== S.y) { S.y = y; root.style.transform = `translateY(${y}px)`; }
+      if (text !== undefined && text !== label.textContent) label.textContent = text;
+    }
+
+    function live() {
+      root.classList.add('live');
+      clearTimeout(S.idle);
+      S.idle = setTimeout(() => { if (!S.drag) root.classList.remove('live'); }, 2200);
+    }
+
+    // The page scrolled: move the handle and say where we are.
+    function onScroll() {
+      if (!S.on || S.drag || S.frame) return;
+      S.frame = requestAnimationFrame(() => {
+        S.frame = 0;
+        if (!S.on || S.drag) return;
+        const { f, ym } = fromScroll();
+        if (ym !== S.ym) { S.ym = ym; label.textContent = ymName(ym); }
+        place(f);
+        show();
+        live();
+      });
+    }
+    addEventListener('scroll', onScroll, { passive: true });
+    addEventListener('resize', () => { if (S.on) { measure(); show(); place(); } });
+
+    // ----- dragging -----
+
+    function scrollToMonth(ym, within) {
+      let i = S.heads.findIndex((h) => h.dataset.ym <= ym); // newest first: the first heading at or before it
+      if (i < 0) i = S.heads.length - 1;
+      if (i < 0) return;
+      const to = i + 1 < S.ys.length ? S.ys[i + 1] : S.end;
+      const exact = S.heads[i].dataset.ym === ym;
+      scrollTo(0, S.ys[i] - S.lead + (exact ? within * (to - S.ys[i]) : 0));
+    }
+
+    const loaded = (ym) => !G.next || ymOf(G.items[G.items.length - 1].taken) <= ym;
+
+    // Fetch pages down to the month, without drawing in between.
+    async function loadThrough(ym) {
+      const token = G.token;
+      while (G.next && !loaded(ym)) {
+        if (G.loading) { await sleep(60); if (token !== G.token) return false; continue; }
+        G.loading = true;
+        try {
+          const d = await gapi('GET', `/api/glint/photos?${photoQuery(G.next, false)}`);
+          if (token !== G.token) return false;
+          G.items = G.items.concat(d.items);
+          G.next = d.next;
+        } catch (err) {
+          toast(err.message);
+          return false;
+        } finally {
+          if (token === G.token) G.loading = false;
+        }
+      }
+      return true;
+    }
+
+    function follow(clientY) {
+      const f = S.span ? Math.min(1, Math.max(0, (clientY - S.grab - S.top) / S.span)) : 0;
+      const at = atFraction(f);
+      place(f, ymName(at.ym));
+      S.ym = at.ym;
+      S.pending = at;
+      if (!S.frame) {
+        S.frame = requestAnimationFrame(() => {
+          S.frame = 0;
+          const p = S.pending;
+          if (S.drag && p && loaded(p.ym)) scrollToMonth(p.ym, p.within);
+        });
+      }
+    }
+
+    grip.addEventListener('pointerdown', (e) => {
+      if (!S.on || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      e.preventDefault();
+      grip.setPointerCapture(e.pointerId);
+      measure(); // the page may have changed since the last draw
+      S.drag = true;
+      S.grab = e.clientY - (S.top + S.y);
+      root.classList.add('live', 'drag');
+      document.body.classList.add('gscrub-drag');
+      label.textContent = ymName(S.ym || G.months[0][0]);
+      clearTimeout(S.idle);
+    });
+    grip.addEventListener('pointermove', (e) => { if (S.drag) follow(e.clientY); });
+
+    async function release() {
+      if (!S.drag) return;
+      S.drag = false;
+      document.body.classList.remove('gscrub-drag');
+      root.classList.remove('drag');
+      const p = S.pending;
+      S.pending = null;
+      if (p && !loaded(p.ym)) {
+        label.textContent = `${ymName(p.ym)}…`;
+        if (await loadThrough(p.ym)) {
+          render(); // draws the pages just fetched, and measures again
+          measure();
+          scrollToMonth(p.ym, p.within);
+        }
+      }
+      live();
+      onScroll();
+    }
+    grip.addEventListener('pointerup', release);
+    grip.addEventListener('pointercancel', release);
+    grip.addEventListener('lostpointercapture', release);
+
+    return { sync, hide };
+  })();
 
   // ---------- selecting and opening ----------
 

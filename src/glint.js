@@ -89,6 +89,12 @@ function mediaType(n) {
   return BY_EXT[ext] || '';
 }
 
+// The viewer's time zone offset in minutes, or null when they didn't send one.
+function tzMinutes(v) {
+  const n = num(v, -14 * 60, 14 * 60);
+  return n === null ? null : Math.round(n);
+}
+
 function idList(v) {
   if (!Array.isArray(v) || !v.length || v.length > MAX_IDS || !v.every((x) => typeof x === 'string')) {
     throw new HttpError(400, 'Pick at least one photo');
@@ -208,7 +214,7 @@ class Glint {
 
   // A page of photos, newest first. `before` is the last photo of the
   // previous page ("<taken>.<id>"); album and favourites narrow the list.
-  timeline(user, { before = '', album = '', favourites = false, own = false, undated = false } = {}) {
+  timeline(user, { before = '', album = '', favourites = false, own = false, undated = false, tz = null } = {}) {
     if (!before) {
       if (this.q.index.run(user.id).changes) this.dirty.add(user.id);
       this.pair(user);
@@ -218,14 +224,14 @@ class Glint {
     // "Own" shows only what Glint put in Photos/ (and Photos/<year>), not photos that live elsewhere in Nest.
     const ownSql = own ? `AND n.parent IN (SELECT f.id FROM nodes f WHERE f.owner = :owner AND f.kind = 'folder'
           AND f.trash_root IS NULL AND (f.id = :photos OR f.parent = :photos))` : '';
-    if (!this.pages.has(key)) {
-      this.pages.set(key, this.db.prepare(`SELECT p.*, n.name, n.mime, n.size FROM photos p
-        JOIN nodes n ON n.id = p.id
+    const from = `FROM photos p JOIN nodes n ON n.id = p.id
         ${album ? 'JOIN album_photos ap ON ap.photo = p.id AND ap.album = :album' : ''}
         WHERE p.owner = :owner AND n.trash_root IS NULL AND p.hide = 0
         ${favourites ? 'AND p.fav = 1' : ''}
         ${undated ? UNDATED : ''}
-        ${ownSql}
+        ${ownSql}`;
+    if (!this.pages.has(key)) {
+      this.pages.set(key, this.db.prepare(`SELECT p.*, n.name, n.mime, n.size ${from}
         ${before ? 'AND (p.taken < :taken OR (p.taken = :taken AND p.id < :id))' : ''}
         ORDER BY p.taken DESC, p.id DESC LIMIT :limit`));
     }
@@ -242,8 +248,23 @@ class Glint {
     const rows = this.pages.get(key).all(params);
     const items = rows.slice(0, PAGE).map(photoItem);
     const last = items[items.length - 1];
+    // Photos per month over the whole list, newest first, for the scrubber on the right edge. Months follow
+    // the viewer's own clock, so `tz` is their offset in minutes (what Date#getTimezoneOffset gives).
+    let months;
+    if (!before && tz !== null) {
+      const mkey = `months|${key}`;
+      if (!this.pages.has(mkey)) {
+        this.pages.set(mkey, this.db.prepare(`SELECT strftime('%Y-%m', (p.taken / 1000) - :tz * 60, 'unixepoch') AS ym, COUNT(*) AS n ${from}
+          GROUP BY ym ORDER BY ym DESC`));
+      }
+      const mp = { owner: params.owner, tz };
+      if (params.photos) mp.photos = params.photos;
+      if (params.album) mp.album = params.album;
+      months = this.pages.get(mkey).all(mp).map((r) => [r.ym, r.n]);
+    }
     return {
       items,
+      months,
       next: rows.length > PAGE ? `${last.taken}.${last.id}` : null,
       total: before ? undefined : own || undated ? this.countWhere(user, params.photos, own ? ownSql : '', undated) : this.q.count.get(user.id).n,
     };
@@ -498,7 +519,7 @@ class Glint {
 
     if (method === 'GET' && pathname === '/api/glint/photos') {
       return send(res, 200, {
-        ...this.timeline(user, { before: str(params.get('before'), 80), album: str(params.get('album'), 40), favourites: params.get('fav') === '1', own: params.get('own') === '1', undated: params.get('undated') === '1' }),
+        ...this.timeline(user, { before: str(params.get('before'), 80), album: str(params.get('album'), 40), favourites: params.get('fav') === '1', own: params.get('own') === '1', undated: params.get('undated') === '1', tz: tzMinutes(params.get('tz')) }),
         storage: nest.storage(user),
       });
     }
