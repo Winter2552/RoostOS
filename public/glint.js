@@ -49,6 +49,7 @@
   const base = (space = G.space) => (space ? '#/glint/family' : '#/glint');
   const thumbUrl = (p) => sp(`/api/glint/thumbs/${p.id}`);
   const mediaUrl = (p, preview) => sp(`/api/glint/media/${p.id}${preview ? '?preview=1' : ''}`);
+  const posterUrl = (p) => sp(`/api/glint/media/${p.id}?poster=1`);
 
   function monthName(ms) {
     return new Date(ms).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
@@ -1064,7 +1065,8 @@
         jpeg = await toJpeg(drawSmall(bmp, w, h));
         if (bmp.close) bmp.close();
       } else if (p.video) {
-        const out = await videoPreview(file ? file : null, p);
+        // The browser draws it when it can; otherwise the server cuts a still out (HEVC .mov on Windows, say).
+        const out = await videoPreview(file ? file : null, p).catch(() => serverPoster(p));
         ({ w, h, dur } = out);
         jpeg = out.jpeg;
         taken = fileDate(file);
@@ -1094,6 +1096,16 @@
     if (taken !== null) reloadSoon();
   }
 
+  async function serverPoster(p) {
+    const res = await fetch(posterUrl(p), { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('unavailable');
+    const jpeg = await res.blob();
+    const bmp = await createImageBitmap(jpeg);
+    const out = { jpeg, w: bmp.width, h: bmp.height, dur: Number.parseFloat(res.headers.get('X-Duration')) || 0 };
+    if (bmp.close) bmp.close();
+    return out;
+  }
+
   function videoPreview(file, p) {
     return new Promise((resolve, reject) => {
       const v = document.createElement('video');
@@ -1102,7 +1114,7 @@
       v.preload = 'auto';
       const url = file ? URL.createObjectURL(file) : mediaUrl(p);
       const done = (fn, val) => { clearTimeout(timer); v.removeAttribute('src'); v.load(); if (file) URL.revokeObjectURL(url); fn(val); };
-      const timer = setTimeout(() => done(reject, new Error('timeout')), 90000);
+      const timer = setTimeout(() => done(reject, new Error('timeout')), file ? 90000 : 12000);
       let converted = false;
       v.addEventListener('error', () => {
         // MKV, 3GP and the like: draw from the server's MP4 copy (made once) instead.

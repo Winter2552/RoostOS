@@ -116,3 +116,15 @@ test('a file that cannot be converted says so, and other files are not converted
   const no = await fetch(`${base}/api/nest/files/${txt.id}?view=1&preview=1`, { headers: { Cookie: admin } });
   assert.equal(no.status, 404);
 });
+
+test('a video gets a small JPEG still for its Glint tile, with its length', { skip: !haveFfmpeg }, async () => {
+  const mov = make(path.join(dataDir, 'in.mov'), ['-f', 'lavfi', '-i', 'testsrc=size=160x120:rate=10:duration=2', '-c:v', 'mpeg4']);
+  const item = await upload('IMG_0002.mov', mov);
+  const res = await fetch(`${base}/api/glint/media/${item.id}?poster=1`, { headers: { Cookie: admin } });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'image/jpeg');
+  assert.ok(Number(res.headers.get('x-duration')) > 1);
+  const out = Buffer.from(await res.arrayBuffer());
+  assert.equal(out[0], 0xff);
+  assert.equal(out[1], 0xd8);
+});

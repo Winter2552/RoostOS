@@ -30,6 +30,7 @@ function convertKind(name) {
 
 const typeOf = (name) => TYPES[extOf(name)] || '';
 const previewName = (id, kind) => `${id}.${kind === 'image' ? 'jpg' : 'mp4'}`;
+const posterName = (id) => `${id}.poster.jpg`;
 const previewType = (kind) => (kind === 'image' ? 'image/jpeg' : 'video/mp4');
 
 function run(cmd, args, { timeout = 15 * 60 * 1000, capture = false } = {}) {
@@ -88,20 +89,57 @@ async function toMp4(src, out) {
   }
 }
 
+// A small still from a video, for tiles the browser can't draw itself (HEVC .mov on Windows, or
+// an iPhone that won't decode off-screen). ffmpeg turns it the right way up.
+async function toPoster(src, out) {
+  const tmp = `${out}.part.jpg`;
+  const vf = 'scale=320:320:force_original_aspect_ratio=decrease:force_divisible_by=2';
+  try {
+    try {
+      await run('ffmpeg', ['-v', 'error', '-y', '-ss', '0.5', '-i', src, '-frames:v', '1', '-vf', vf, '-q:v', '5', tmp], { timeout: 120000 });
+      if ((await fsp.stat(tmp)).size === 0) throw new Error('empty');
+    } catch {
+      // A clip shorter than half a second has nothing at 0.5s: take the first frame.
+      await run('ffmpeg', ['-v', 'error', '-y', '-i', src, '-frames:v', '1', '-vf', vf, '-q:v', '5', tmp], { timeout: 120000 });
+    }
+    return tmp;
+  } catch (err) {
+    await fsp.rm(tmp, { force: true });
+    throw err;
+  }
+}
+
+// Seconds, 0 when unknown.
+async function durationOf(src) {
+  try {
+    const out = await run('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', src], { capture: true, timeout: 30000 });
+    return Math.max(0, Number.parseFloat(out) || 0);
+  } catch { return 0; }
+}
+
 // One conversion at a time (a small box), and one per file however many ask.
 const pending = new Map();
 let chain = Promise.resolve();
 
 // Path of the browser-friendly copy of `src`, making it if needed.
 async function previewFile(src, dir, id, kind) {
-  const out = path.join(dir, previewName(id, kind));
+  return made(src, dir, previewName(id, kind), kind === 'image' ? toJpeg : toMp4);
+}
+
+// Path of a small JPEG still of the video `src`, making it if needed.
+function posterFile(src, dir, id) {
+  return made(src, dir, posterName(id), toPoster);
+}
+
+async function made(src, dir, name, make) {
+  const out = path.join(dir, name);
   try {
     if ((await fsp.stat(out)).size > 0) return out;
   } catch { /* not made yet */ }
   if (!pending.has(out)) {
     const job = chain.then(async () => {
       await fsp.mkdir(dir, { recursive: true });
-      const tmp = await (kind === 'image' ? toJpeg : toMp4)(src, out + '.' + crypto.randomBytes(3).toString('hex'));
+      const tmp = await make(src, out + '.' + crypto.randomBytes(3).toString('hex'));
       await fsp.rename(tmp, out);
       return out;
     });
@@ -113,4 +151,4 @@ async function previewFile(src, dir, id, kind) {
   return pending.get(out);
 }
 
-module.exports = { convertKind, typeOf, previewFile, previewName, previewType, extOf };
+module.exports = { convertKind, typeOf, previewFile, posterFile, durationOf, posterName, previewName, previewType, extOf };
