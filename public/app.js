@@ -2778,12 +2778,66 @@ async function loadSecurity() {
     const data = await api('GET', '/api/admin/security');
     $('#security-headline').textContent = data.headline;
     renderLockdown(data.lockdown);
+    loadSentinel();
     $('#security-list').replaceChildren(...data.checks.map((c) => el('li', { class: 'security-row' },
       el('span', { class: `dot ${c.status === 'ok' ? 'online' : c.status === 'warn' ? 'warn' : c.status === 'bad' ? 'offline' : ''}` }),
       el('div', {}, el('div', { class: 'security-what', text: c.title }), c.detail ? el('div', { class: 'mono muted', text: c.detail }) : ''))));
     $('#security-panel > .msg').textContent = '';
   } catch (err) { flash($('#security-panel'), err.message, false); }
 }
+
+// ---------- sentinel ----------
+const SENTINEL_TEXT = {
+  off: 'Not watching. Nothing is banned.',
+  manual: 'Watches and alerts you, then waits for you to press Ban.',
+  auto: 'Watches and acts on its own: bans offenders for 24 hours, and locks Roost down if the admin accounts are changed behind its back. Home access is never banned.',
+};
+const SENTINEL_WHAT = { scanner: 'Scanner probing', spray: 'Guessing usernames', tamper: 'Admin accounts changed' };
+
+function sentinelRow(inc) {
+  const act = inc.handled ? el('span', { class: 'pill', text: inc.handled })
+    : inc.ip ? el('button', { class: 'btn ghost small', type: 'button', text: 'Ban', onclick: () => sentinelPost('ban', { incident: inc.id }) })
+      : '';
+  return el('li', { class: 'security-row sentinel-row' },
+    el('span', { class: `dot ${inc.handled ? 'online' : 'offline'}` }),
+    el('div', { class: 'sentinel-main' },
+      el('div', { class: 'security-what', text: `${SENTINEL_WHAT[inc.kind] || inc.kind}${inc.ip ? ` · ${inc.ip}` : ''}` }),
+      el('div', { class: 'mono muted', text: `${inc.detail} ${ago(inc.at)}` })),
+    act);
+}
+
+async function sentinelPost(action, body) {
+  try {
+    renderSentinel(await api('POST', `/api/admin/sentinel/${action}`, body));
+  } catch (err) { flash($('#sentinel-panel'), err.message, false); }
+}
+
+function renderSentinel(data) {
+  for (const c of $('#sentinel-modes').children) c.setAttribute('aria-pressed', String(c.dataset.mode === data.mode));
+  $('#sentinel-mode-text').textContent = SENTINEL_TEXT[data.mode];
+  $('#sentinel-incidents').replaceChildren(...(data.incidents.length ? data.incidents.slice(0, 10).map(sentinelRow)
+    : [el('li', { class: 'security-row' }, el('span', { class: 'dot online' }), el('div', { class: 'mono muted', text: 'Nothing suspicious seen.' }))]));
+  $('#sentinel-bans-title').classList.toggle('hidden', !data.bans.length);
+  $('#sentinel-bans').replaceChildren(...data.bans.map((b) => el('li', { class: 'security-row sentinel-row' },
+    el('div', { class: 'sentinel-main' },
+      el('div', { class: 'security-what mono', text: b.ip }),
+      el('div', { class: 'mono muted', text: `${b.auto ? 'Sentinel' : 'You'} · ${b.reason} · until ${clock(b.until)}` })),
+    el('button', { class: 'btn ghost small', type: 'button', text: 'Unban', onclick: () => sentinelPost('unban', { ip: b.ip }) }))));
+  $('#sentinel-panel > .msg').textContent = '';
+}
+
+async function loadSentinel() {
+  try { renderSentinel(await api('GET', '/api/admin/sentinel')); } catch (err) { flash($('#sentinel-panel'), err.message, false); }
+}
+
+$('#sentinel-modes').addEventListener('click', async (e) => {
+  const chip = e.target.closest('.chip');
+  if (!chip) return;
+  try {
+    renderSentinel(await api('PUT', '/api/admin/sentinel', { mode: chip.dataset.mode }));
+    loadSecurity();
+  } catch (err) { flash($('#sentinel-panel'), err.message, false); }
+});
 
 function renderLockdown(lock) {
   const row = $('#lockdown-row');

@@ -588,6 +588,20 @@
         <div class="msg" role="status"></div>
       </div>
 
+      <div class="card panel" id="sentinel-panel">
+        <h3>Sentinel</h3><span class="mono muted" id="sentinel-lead">Watches for forced entry.</span>
+        <div class="chips" id="sentinel-modes" role="group" aria-label="Sentinel mode">
+          <button type="button" class="chip" data-mode="off" aria-pressed="false">Off</button>
+          <button type="button" class="chip" data-mode="manual" aria-pressed="false">Manual</button>
+          <button type="button" class="chip" data-mode="auto" aria-pressed="false">Auto</button>
+        </div>
+        <p class="mono muted" id="sentinel-mode-text"></p>
+        <ul class="security-list" id="sentinel-incidents"></ul>
+        <div class="mono muted sentinel-sub hidden" id="sentinel-bans-title">Banned addresses</div>
+        <ul class="security-list" id="sentinel-bans"></ul>
+        <div class="msg" role="status"></div>
+      </div>
+
       <form class="card panel" id="alerts-form">
         <h3>Alerts</h3><span class="mono muted">Roost checks every minute. A problem has to last 2 minutes before it shows on the bell, so restarts and updates stay quiet.</span>
         <div class="checks alert-checks">
