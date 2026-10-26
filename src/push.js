@@ -233,6 +233,16 @@ class Push {
     this.pending.add(job);
   }
 
+  // A one-off note to every admin device, or to one person's devices.
+  notify(message, userId = null, opts = { ttl: 86400 }) {
+    const devices = this.data.devices.filter((d) => (userId ? d.userId === userId : this.isAdmin(d.userId)));
+    if (!devices.length) return;
+    const job = this.sendAll(devices, message, opts)
+      .catch((err) => console.error('Phone alert failed:', err.message))
+      .finally(() => this.pending.delete(job));
+    this.pending.add(job);
+  }
+
   // For tests and a clean shutdown: wait for sends in flight.
   idle() {
     return Promise.all([...this.pending]);

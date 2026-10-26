@@ -460,3 +460,28 @@ test('only admins can create Jellyfin accounts, and only once Jellyfin is connec
   assert.equal((await call('POST', '/api/admin/jellyfin/accounts', null, admin)).status, 400);
   assert.ok(kim);
 });
+
+test('Roostflix movie requests: people ask, the admin sees them and marks them', async () => {
+  await call('PUT', '/api/admin/jellyfin', { url: jfUrl, apiKey: KEY }, admin);
+  await call('POST', '/api/admin/users', { username: 'rita', password: 'rita pass 123', apps: ['jellyfin'] }, admin);
+  await call('POST', '/api/admin/users', { username: 'noreq', password: 'no req pass 12', apps: [] }, admin);
+  const sam = (await call('POST', '/api/login', { username: 'rita', password: 'rita pass 123' })).cookie;
+  const nofilms = (await call('POST', '/api/login', { username: 'noreq', password: 'no req pass 12' })).cookie;
+  assert.equal((await call('POST', '/api/roostflix/requests', { title: 'Heat' }, nofilms)).status, 403);
+  assert.equal((await call('POST', '/api/roostflix/requests', { title: '  ' }, sam)).status, 400);
+  const made = await call('POST', '/api/roostflix/requests', { title: 'Heat', note: '1995' }, sam);
+  assert.equal(made.status, 201);
+  assert.equal((await call('POST', '/api/roostflix/requests', { title: 'heat' }, sam)).status, 409);
+  for (const t of ['A', 'B', 'C', 'D']) await call('POST', '/api/roostflix/requests', { title: t }, sam);
+  assert.equal((await call('POST', '/api/roostflix/requests', { title: 'E' }, sam)).status, 409);
+  const mine = await call('GET', '/api/roostflix/requests', null, sam);
+  assert.equal(mine.body.requests.length, 5);
+  assert.equal((await call('GET', '/api/admin/movie-requests', null, sam)).status, 403);
+  const open = await call('GET', '/api/admin/movie-requests', null, admin);
+  const heat = open.body.requests.find((r) => r.title === 'Heat');
+  assert.equal(heat.user.username, 'rita');
+  assert.equal((await call('POST', `/api/admin/movie-requests/${heat.id}`, { action: 'nope' }, admin)).status, 400);
+  assert.equal((await call('POST', `/api/admin/movie-requests/${heat.id}`, { action: 'added' }, admin)).status, 200);
+  assert.equal((await call('POST', `/api/admin/movie-requests/${heat.id}`, { action: 'dismiss' }, admin)).status, 409);
+  assert.equal((await call('GET', '/api/roostflix/requests', null, sam)).body.requests.find((r) => r.id === heat.id).status, 'added');
+});

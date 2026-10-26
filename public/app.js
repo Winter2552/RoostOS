@@ -2291,7 +2291,33 @@ $('#setup-toggle').addEventListener('click', () => {
   $('#setup-toggle').textContent = setupState.open ? 'Hide steps' : 'Show steps';
 });
 
+async function loadMovieRequests() {
+  try {
+    const { requests } = await api('GET', '/api/admin/movie-requests');
+    $('#movie-requests-panel').classList.toggle('hidden', !requests.length);
+    $('#movie-requests-admin').replaceChildren(...requests.map((r) => {
+      const name = r.user ? r.user.displayName : 'Removed user';
+      const msg = el('div', { class: 'msg' });
+      const decide = async (action) => {
+        try { await api('POST', `/api/admin/movie-requests/${r.id}`, { action }); loadMovieRequests(); } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
+      };
+      return el('div', { class: 'request-row' },
+        el('div', { class: 'who' },
+          el('span', { class: 'avatar', text: name.charAt(0).toUpperCase() }),
+          el('div', {},
+            el('div', { text: r.title }),
+            el('div', { class: 'mono muted', text: `${name} · ${shortDate(r.createdAt)}` }),
+            r.note ? el('div', { class: 'request-note', text: `“${r.note}”` }) : null)),
+        el('div', { class: 'row', style: 'margin:0' },
+          el('button', { class: 'btn small', type: 'button', text: 'Added', onclick: () => decide('added') }),
+          el('button', { class: 'btn ghost small', type: 'button', text: 'Dismiss', onclick: () => decide('dismiss') })),
+        msg);
+    }));
+  } catch { /* the panel just stays hidden */ }
+}
+
 async function loadAdmin() {
+  loadMovieRequests();
   loadSetup(true);
   loadPush();
   const [{ users }, { apps }, { requests, defaultLimitGb }, { invites, publicUrl }, { settings }, { family }] = await Promise.all([
