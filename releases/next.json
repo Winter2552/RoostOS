@@ -1,14 +1,3 @@
 {
-  "items": [
-    {
-      "title": "Request a movie",
-      "text": "A Request button in Roostflix lets anyone ask for a title. The admin gets a phone alert, and you get a note when it's added.",
-      "image": "movie-requests.png"
-    },
-    {
-      "title": "Save to Files",
-      "text": "Open a film in Roostflix and tap Save to Files to download the original to your phone or PC for offline watching.",
-      "image": "movie-requests.png"
-    }
-  ]
+  "items": []
 }
