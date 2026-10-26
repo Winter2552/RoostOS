@@ -25,6 +25,10 @@ const SCHEMA = `
     id TEXT NOT NULL,
     PRIMARY KEY (owner, id)
   );
+  CREATE TABLE IF NOT EXISTS glint_prefs (
+    owner TEXT PRIMARY KEY,
+    memories INTEGER NOT NULL DEFAULT 1 -- the Profile switch: 0 hides memories everywhere
+  );
 `;
 
 // Favourites first, then an even spread through the time range, bursts collapsed to one frame.
@@ -62,12 +66,15 @@ class Memories {
         WHERE p.owner = ? AND n.trash_root IS NULL AND p.hide = 0 AND p.thumb = 1 ORDER BY p.taken`),
       hidden: db.prepare('SELECT id FROM memory_hidden WHERE owner = ?'),
       hide: db.prepare('INSERT OR IGNORE INTO memory_hidden (owner, id) VALUES (?, ?)'),
+      pref: db.prepare('SELECT memories FROM glint_prefs WHERE owner = ?'),
+      setPref: db.prepare('INSERT INTO glint_prefs (owner, memories) VALUES (?, ?) ON CONFLICT (owner) DO UPDATE SET memories = excluded.memories'),
     };
   }
 
   // Every memory for a person today, newest-feeling first. `tz` is the viewer's offset from UTC in minutes
   // (what Date#getTimezoneOffset gives, so UTC+1 is -60); photo dates are stored in UTC milliseconds.
   cards(owner, tz = 0, now = Date.now(), cap = MAX_CARDS) {
+    if (!this.enabled(owner)) return [];
     const local = now - tz * 6e4;
     const today = dayKey(local);
     const total = this.count(owner);
@@ -82,6 +89,16 @@ class Memories {
     }
     const hidden = new Set(this.q.hidden.all(owner).map((r) => r.id));
     return cards.filter((c) => !hidden.has(c.id)).slice(0, cap);
+  }
+
+  // The Profile switch; on until someone turns it off.
+  enabled(owner) {
+    const r = this.q.pref.get(owner);
+    return !r || r.memories === 1;
+  }
+
+  setEnabled(owner, on) {
+    this.q.setPref.run(owner, on ? 1 : 0);
   }
 
   hide(owner, id) {

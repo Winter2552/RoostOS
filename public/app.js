@@ -751,7 +751,7 @@ function route() {
   $('#account-btn').classList.toggle('active', ['status', 'whatsnew', 'profile', 'admin'].includes(view));
   closeMenu(false);
   if (view === 'admin') showAdmin(rest[0]);
-  if (view === 'profile') { if (!isGuest(state.user)) loadStorage(); loadTwoStep(); loadDevices(); $('#backup-key-panel').classList.toggle('hidden', isGuest(state.user) || !hasGlint()); }
+  if (view === 'profile') { if (!isGuest(state.user)) loadStorage(); loadTwoStep(); loadDevices(); $('#backup-key-panel').classList.toggle('hidden', isGuest(state.user) || !hasGlint()); loadGlintPrefs(); }
   if (view === 'status') { loadStatus(); loadUpdate(); }
   if (view === 'whatsnew') { $('#wn-current').textContent = state.version ? `Roost v${state.version}` : ''; window.whatsNewPage(); }
   if (view === 'galaxies') renderGalaxyPage();
@@ -1959,6 +1959,23 @@ function lastActive(iso) {
   const days = Math.floor(sec / 86400);
   return `Active ${days} day${days === 1 ? '' : 's'} ago`;
 }
+
+// Profile > Glint: the Memories switch.
+async function loadGlintPrefs() {
+  const panel = $('#glint-prefs-panel');
+  panel.classList.toggle('hidden', isGuest(state.user) || !hasGlint());
+  if (panel.classList.contains('hidden')) return;
+  const box = $('#pref-memories');
+  try { box.checked = (await api('GET', '/api/glint/prefs')).memories; } catch { panel.classList.add('hidden'); }
+}
+$('#pref-memories').addEventListener('change', async (e) => {
+  const box = e.target;
+  const msg = $('#glint-prefs-panel .msg');
+  try {
+    await api('POST', '/api/glint/prefs', { memories: box.checked });
+    msg.textContent = box.checked ? 'Memories are on.' : 'Memories are off.';
+  } catch (err) { box.checked = !box.checked; msg.textContent = err.message; }
+});
 
 async function loadDevices() {
   const panel = $('#devices-panel');

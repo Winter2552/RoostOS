@@ -67,3 +67,13 @@ test('the viewer’s time zone decides which day a photo belongs to', () => {
   assert.deepEqual(m.cards('u', 0, NOW), []);
   assert.equal(m.cards('u', -60, NOW)[0].kind, 'otd');
 });
+
+test('the Profile switch turns memories off and back on', () => {
+  const m = library(burst(Date.UTC(2024, 9, 26, 10), 6));
+  assert.equal(m.enabled('u'), true);
+  m.setEnabled('u', false);
+  assert.equal(m.enabled('u'), false);
+  assert.deepEqual(m.cards('u', 0, NOW), []);
+  m.setEnabled('u', true);
+  assert.equal(m.cards('u', 0, NOW).length, 1);
+});

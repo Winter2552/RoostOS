@@ -611,6 +611,15 @@ class Glint {
       return send(res, 200, { deleted, storage: nest.storage(user) });
     }
 
+    if (method === 'GET' && pathname === '/api/glint/prefs') {
+      return send(res, 200, { memories: this.memories.enabled(user.id) });
+    }
+    if (method === 'POST' && pathname === '/api/glint/prefs') {
+      const body = await readJson(req);
+      if (typeof body.memories !== 'boolean') throw new HttpError(400, 'Say whether memories are on or off');
+      this.memories.setEnabled(user.id, body.memories);
+      return send(res, 200, { memories: body.memories });
+    }
     if (method === 'GET' && pathname === '/api/glint/memories') {
       // New photos are indexed first, as for the timeline, so a fresh upload can appear in a memory.
       if (this.q.index.run(user.id).changes) this.dirty.add(user.id);
