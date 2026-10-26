@@ -29,6 +29,7 @@ const KINDS = {
   'two-step-on': 'users',
   'two-step-off': 'users',
   'family-changed': 'users',
+  'movie-requested': 'apps',
   'storage-requested': 'storage',
   'storage-approved': 'storage',
   'storage-declined': 'storage',

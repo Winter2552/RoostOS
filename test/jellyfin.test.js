@@ -204,6 +204,19 @@ test('Jellyfin is passed through only to people allowed to use it', async () => 
   assert.equal((await call('GET', '/api/jellyfin/session', null, nofilms)).status, 403);
 });
 
+test('AirPlay: a stream with a live Jellyfin token plays without the Roost cookie, nothing else does', async () => {
+  const sam = (await call('POST', '/api/login', { username: 'sam', password: 'sam pass 123' })).cookie;
+  await settle();
+  const { token } = (await call('GET', '/api/jellyfin/session', null, sam)).body;
+  assert.ok(token);
+  const ok = await call('GET', `/jellyfin/Videos/abc/master.m3u8?api_key=${token}`, null, null);
+  assert.equal(ok.location, null);
+  assert.equal((await call('GET', '/jellyfin/Videos/abc/master.m3u8?api_key=wrong', null, null)).location, '/');
+  assert.equal((await call('GET', '/jellyfin/Videos/abc/master.m3u8', null, null)).location, '/');
+  assert.equal((await call('GET', `/jellyfin/web/index.html?api_key=${token}`, null, null)).location, '/');
+  assert.equal((await call('GET', `/jellyfin/Users?api_key=${token}`, null, null)).location, '/');
+});
+
 test("Roostflix adds its skin to Jellyfin's page, and can be switched off", async () => {
   const sam = (await call('POST', '/api/login', { username: 'sam', password: 'sam pass 123' })).cookie;
   jf.page = true;
@@ -446,4 +459,29 @@ test('only admins can create Jellyfin accounts, and only once Jellyfin is connec
   await call('PUT', '/api/admin/jellyfin', { url: '' }, admin);
   assert.equal((await call('POST', '/api/admin/jellyfin/accounts', null, admin)).status, 400);
   assert.ok(kim);
+});
+
+test('Roostflix movie requests: people ask, the admin sees them and marks them', async () => {
+  await call('PUT', '/api/admin/jellyfin', { url: jfUrl, apiKey: KEY }, admin);
+  await call('POST', '/api/admin/users', { username: 'rita', password: 'rita pass 123', apps: ['jellyfin'] }, admin);
+  await call('POST', '/api/admin/users', { username: 'noreq', password: 'no req pass 12', apps: [] }, admin);
+  const sam = (await call('POST', '/api/login', { username: 'rita', password: 'rita pass 123' })).cookie;
+  const nofilms = (await call('POST', '/api/login', { username: 'noreq', password: 'no req pass 12' })).cookie;
+  assert.equal((await call('POST', '/api/roostflix/requests', { title: 'Heat' }, nofilms)).status, 403);
+  assert.equal((await call('POST', '/api/roostflix/requests', { title: '  ' }, sam)).status, 400);
+  const made = await call('POST', '/api/roostflix/requests', { title: 'Heat', note: '1995' }, sam);
+  assert.equal(made.status, 201);
+  assert.equal((await call('POST', '/api/roostflix/requests', { title: 'heat' }, sam)).status, 409);
+  for (const t of ['A', 'B', 'C', 'D']) await call('POST', '/api/roostflix/requests', { title: t }, sam);
+  assert.equal((await call('POST', '/api/roostflix/requests', { title: 'E' }, sam)).status, 409);
+  const mine = await call('GET', '/api/roostflix/requests', null, sam);
+  assert.equal(mine.body.requests.length, 5);
+  assert.equal((await call('GET', '/api/admin/movie-requests', null, sam)).status, 403);
+  const open = await call('GET', '/api/admin/movie-requests', null, admin);
+  const heat = open.body.requests.find((r) => r.title === 'Heat');
+  assert.equal(heat.user.username, 'rita');
+  assert.equal((await call('POST', `/api/admin/movie-requests/${heat.id}`, { action: 'nope' }, admin)).status, 400);
+  assert.equal((await call('POST', `/api/admin/movie-requests/${heat.id}`, { action: 'added' }, admin)).status, 200);
+  assert.equal((await call('POST', `/api/admin/movie-requests/${heat.id}`, { action: 'dismiss' }, admin)).status, 409);
+  assert.equal((await call('GET', '/api/roostflix/requests', null, sam)).body.requests.find((r) => r.id === heat.id).status, 'added');
 });

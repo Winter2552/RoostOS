@@ -271,4 +271,100 @@
   });
   document.addEventListener('viewbeforehide', stop);
   mount();
+
+  // ---------- Request a movie ----------
+  const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text) n.textContent = text; return n; };
+  const roost = async (method, path, body) => {
+    const res = await fetch(path, { method, credentials: 'same-origin', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Something went wrong');
+    return data;
+  };
+  const STATUS = { open: 'Waiting', added: 'Added', dismissed: 'Not now' };
+
+  function openRequest() {
+    if (document.querySelector('.rf-sheet')) return;
+    const sheet = el('div', 'rf-sheet');
+    sheet.setAttribute('role', 'dialog');
+    sheet.setAttribute('aria-label', 'Request a movie');
+    const box = el('form', 'rf-box');
+    const input = el('input');
+    input.placeholder = 'Movie or show title';
+    input.maxLength = 120;
+    input.setAttribute('aria-label', 'Title');
+    const note = el('input');
+    note.placeholder = 'Year or note (optional)';
+    note.maxLength = 300;
+    note.setAttribute('aria-label', 'Note');
+    const msg = el('p', 'rf-msg');
+    const row = el('div', 'rf-row');
+    const send = el('button', 'rf-btn', 'Send');
+    send.type = 'submit';
+    const close = el('button', 'rf-btn rf-ghost', 'Close');
+    close.type = 'button';
+    row.append(send, close);
+    const list = el('ul', 'rf-list');
+    box.append(el('h2', '', 'Request a movie'), input, note, row, msg, list);
+    sheet.append(box);
+    document.body.append(sheet);
+    const done = () => { sheet.remove(); document.removeEventListener('keydown', onKey); };
+    const onKey = (e) => { if (e.key === 'Escape') done(); };
+    document.addEventListener('keydown', onKey);
+    close.onclick = done;
+    sheet.addEventListener('click', (e) => { if (e.target === sheet) done(); });
+    const refresh = async () => {
+      try {
+        const { requests } = await roost('GET', '/api/roostflix/requests');
+        list.replaceChildren(...requests.map((r) => { const li = el('li'); li.append(el('span', '', r.title), el('b', `rf-${r.status}`, STATUS[r.status] || r.status)); return li; }));
+      } catch { /* the list is a bonus */ }
+    };
+    box.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      send.disabled = true;
+      try {
+        await roost('POST', '/api/roostflix/requests', { title: input.value, note: note.value });
+        input.value = note.value = '';
+        msg.textContent = 'Sent. You’ll get a note when it’s added.';
+        refresh();
+      } catch (err) { msg.textContent = err.message; }
+      send.disabled = false;
+    });
+    refresh();
+    input.focus();
+  }
+
+  function mountRequestButton() {
+    if (document.querySelector('.rf-request')) return;
+    const host = document.querySelector('.headerRight') || document.querySelector('.skinHeader');
+    if (!host) return;
+    const b = el('button', 'rf-request', 'Request');
+    b.type = 'button';
+    b.title = 'Request a movie';
+    b.onclick = openRequest;
+    host.prepend(b);
+  }
+
+  // ---------- Save to Files ----------
+  async function mountSave() {
+    const page = document.querySelector('#itemDetailPage:not(.hide)');
+    const m = /[?&]id=([\w-]+)/.exec(location.hash);
+    const s = session();
+    if (!page || !m || !s || !safe(m[1])) return;
+    const bar = page.querySelector('.mainDetailButtons');
+    if (!bar || bar.querySelector('.rf-save')) return;
+    try {
+      const it = await get(s, `/Users/${s.userId}/Items/${m[1]}?Fields=MediaSources`);
+      if (!['Movie', 'Episode', 'Video'].includes(it.Type) || !(it.MediaSources || []).length || bar.querySelector('.rf-save')) return;
+      const a = el('a', 'rf-save', 'Save to Files');
+      a.href = `${s.base}/Items/${m[1]}/Download?api_key=${encodeURIComponent(s.token)}`;
+      a.setAttribute('download', '');
+      a.title = 'Download the original file to this device';
+      bar.append(a);
+    } catch { /* no button, nothing else changes */ }
+  }
+
+  const later = (fn) => { let n = 0; const t = () => { if (!fn() && n++ < 20) setTimeout(t, 250); }; t(); };
+  const refreshExtras = () => { later(() => { mountRequestButton(); return document.querySelector('.rf-request'); }); mountSave(); };
+  document.addEventListener('viewshow', refreshExtras);
+  refreshExtras();
 })();
