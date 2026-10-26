@@ -1018,7 +1018,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (!limiter.allow(clientIp(req, trustProxy))) throw new HttpError(429, 'Too many attempts, wait a few minutes');
       const body = await readJson(req);
       const username = str(body.username, 32).toLowerCase();
-      if (!guard.allow(username, clientIp(req, trustProxy))) throw new HttpError(429, 'Too many wrong passwords for this account. Wait a few minutes, or sign in from home.');
+      if (!guard.allow(username, clientIp(req, trustProxy), Boolean(req.socket.encrypted))) throw new HttpError(429, 'Too many wrong passwords for this account. Wait a few minutes, or sign in from home.');
       const user = db().users.find((u) => u.username === username);
       if (!user || typeof body.password !== 'string' || !verifyPassword(body.password, user.password)) {
         limiter.fail(clientIp(req, trustProxy));
@@ -1053,7 +1053,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         pendingCodes.delete(body.ticket);
         throw new HttpError(401, 'Sign in again');
       }
-      if (!guard.allow(user.username, clientIp(req, trustProxy))) throw new HttpError(429, 'Too many wrong codes for this account. Wait a few minutes, or sign in from home.');
+      if (!guard.allow(user.username, clientIp(req, trustProxy), Boolean(req.socket.encrypted))) throw new HttpError(429, 'Too many wrong codes for this account. Wait a few minutes, or sign in from home.');
       const code = str(body.code, 40);
       let ok = false;
       if (/^\d{6}$/.test(code.replace(/\s/g, ''))) {
@@ -2269,9 +2269,34 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
           backup: backup.summarize(backup.readStatus(dataDir)),
           pushDevices: db().users.filter((u) => u.role === 'admin').reduce((n, u) => n + push.devicesOf(u.id).length, 0),
           outside: Boolean(cert),
+          lockdown: db().settings.lockdown || null,
         }),
+        lockdown: db().settings.lockdown || null,
         checkedAt: new Date().toISOString(),
       });
+    },
+
+    // One tap to shut the door: outside access pauses, every sign-in ends (except
+    // this one) and two-step "trusted device" cookies stop counting. Lifting it
+    // brings outside access back; people sign in again.
+    'POST /api/admin/lockdown': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const on = body.on === true;
+      if (on === Boolean(db().settings.lockdown)) return send(res, 200, { lockdown: db().settings.lockdown || null });
+      if (on) {
+        db().settings.lockdown = { at: new Date().toISOString(), by: admin.username };
+        for (const u of db().users) {
+          u.trusted = [];
+          sessions.destroyUser(u.id, u.id === admin.id ? tokenOf(req) : null);
+        }
+        secWatch.raise('sec:lockdown', 'Lockdown is on', `${admin.username} paused outside access and signed everyone out.`);
+      } else {
+        delete db().settings.lockdown;
+      }
+      store.save();
+      record(req, on ? 'lockdown-on' : 'lockdown-off', { actor: admin.username });
+      send(res, 200, { lockdown: db().settings.lockdown || null });
     },
 
     'POST /api/alerts/:id/dismiss': (req, res, id) => {
@@ -2855,6 +2880,13 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     return remote.blocks(req);
   }
 
+  // Lockdown pauses everything that comes in from outside. The router forwards
+  // 443 only, so outside traffic is exactly what arrives over HTTPS; the plain
+  // home address keeps working so the admin can always get back in and lift it.
+  function lockedOut(req) {
+    return Boolean(db().settings.lockdown && req.socket.encrypted);
+  }
+
   // Which app a request counts against on the upload meter.
   function trafficApp(pathname) {
     if (pathname === JELLYFIN_PREFIX || pathname.startsWith(`${JELLYFIN_PREFIX}/`)) return 'jellyfin';
@@ -2866,6 +2898,10 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     if (screen(req)) {
       res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
       return res.end('Use the Roost address, not the IP');
+    }
+    if (lockedOut(req)) {
+      res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8', 'Retry-After': '3600' });
+      return res.end('Roost is locked down for now.');
     }
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
@@ -2921,7 +2957,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // Live updates from Jellyfin (a WebSocket) pass through on both the HTTP and
   // HTTPS side.
   function onUpgrade(req, socket, head) {
-    if (screen(req)) return socket.destroy();
+    if (screen(req) || lockedOut(req)) return socket.destroy();
     const { pathname } = new URL(req.url, 'http://roost');
     if (pathname.startsWith(`${JELLYFIN_PREFIX}/`) && jellyfinAllowed(req)) return jellyfin.proxyUpgrade(req, socket, head);
     socket.destroy();

@@ -38,6 +38,8 @@ const KINDS = {
   'settings-changed': 'settings',
   'share-created': 'storage',
   'share-removed': 'storage',
+  'lockdown-on': 'settings',
+  'lockdown-off': 'settings',
   'notice-posted': 'settings',
   'notice-cleared': 'settings',
 };

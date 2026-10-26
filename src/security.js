@@ -19,7 +19,8 @@ function isPrivateIp(ip) {
 
 // Slows password guessing that is spread over many addresses, which the per-address
 // limiter can't see. Too many failures on one account pause sign-in to it from
-// outside the home network; at home it never locks, so the owner can't be shut out.
+// outside the home network; on the home network's plain address it never locks,
+// so the owner can't be shut out.
 class AccountGuard {
   constructor({ max = 8, windowMs = 10 * 60 * 1000, now = Date.now } = {}) {
     this.max = max;
@@ -36,8 +37,11 @@ class AccountGuard {
     return list;
   }
 
-  allow(name, ip) {
-    return isPrivateIp(ip) || this.recent(name).length < this.max;
+  // `encrypted`: the request came in over HTTPS, which is the only way in from
+  // outside (the router forwards 443 only). A home address on plain HTTP is the
+  // one safe exemption; over HTTPS a home-looking address may just be a router.
+  allow(name, ip, encrypted = false) {
+    return (!encrypted && isPrivateIp(ip)) || this.recent(name).length < this.max;
   }
 
   fail(name) {
@@ -157,11 +161,14 @@ const order = { ok: 0, info: 0, warn: 1, bad: 2 };
 // title, detail }; `info` is a fact with nothing to do about it.
 //   db, now, entries (activity log), cert (certSummary() or null), updates
 //   ({ update, restart, checked } or null), backup (backup.summarize()),
-//   pushDevices (phones with alerts on, for admins), outside (reachable from outside)
-function securityChecks({ db, now = Date.now(), entries = [], cert = null, updates = null, backup = { state: 'off' }, pushDevices = 0, outside = false }) {
+//   pushDevices (phones with alerts on, for admins), outside (reachable from outside),
+//   lockdown ({ at, by } while outside access is paused)
+function securityChecks({ db, now = Date.now(), entries = [], cert = null, updates = null, backup = { state: 'off' }, pushDevices = 0, outside = false, lockdown = null }) {
   const checks = [];
   const add = (id, status, title, detail = '') => checks.push({ id, status, title, detail });
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+  if (lockdown) add('lockdown', 'warn', 'Outside access is paused (lockdown)', 'Everyone is signed out and Roost only answers at home. Lift it below when you are ready.');
 
   const admins = db.users.filter((u) => u.role === 'admin');
   const bare = admins.filter((u) => !u.twoStep);

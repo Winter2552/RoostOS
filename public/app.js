@@ -2777,12 +2777,34 @@ async function loadSecurity() {
   try {
     const data = await api('GET', '/api/admin/security');
     $('#security-headline').textContent = data.headline;
+    renderLockdown(data.lockdown);
     $('#security-list').replaceChildren(...data.checks.map((c) => el('li', { class: 'security-row' },
       el('span', { class: `dot ${c.status === 'ok' ? 'online' : c.status === 'warn' ? 'warn' : c.status === 'bad' ? 'offline' : ''}` }),
       el('div', {}, el('div', { class: 'security-what', text: c.title }), c.detail ? el('div', { class: 'mono muted', text: c.detail }) : ''))));
     $('#security-panel > .msg').textContent = '';
   } catch (err) { flash($('#security-panel'), err.message, false); }
 }
+
+function renderLockdown(lock) {
+  const row = $('#lockdown-row');
+  $('#lockdown-text').textContent = lock
+    ? `Locked down since ${clock(lock.at)} by ${lock.by}. Outside access is paused and everyone else is signed out.`
+    : 'If you think someone is in, pause outside access and sign everyone else out with one tap. Home access keeps working.';
+  const btn = $('#lockdown-btn');
+  btn.textContent = lock ? 'Lift lockdown' : 'Lock down now';
+  btn.className = `btn small${lock ? '' : ' danger'}`;
+  btn.dataset.on = lock ? '' : '1';
+  row.classList.toggle('on', Boolean(lock));
+}
+
+$('#lockdown-btn').addEventListener('click', async (e) => {
+  const turnOn = e.currentTarget.dataset.on === '1';
+  if (turnOn && !confirm('Lock Roost down? Outside access pauses and everyone else is signed out. You can lift it here at any time, from the home address.')) return;
+  try {
+    await api('POST', '/api/admin/lockdown', { on: turnOn });
+    loadSecurity();
+  } catch (err) { flash($('#security-panel'), err.message, false); }
+});
 
 // ---------- activity log ----------
 
@@ -2791,6 +2813,8 @@ const ACTIVITY_LABELS = {
   'sign-out': 'Signed out',
   setup: 'Set up Roost',
   'sign-in-failed': 'Failed sign-in',
+  'lockdown-on': 'Locked down outside access',
+  'lockdown-off': 'Lifted lockdown',
   'password-changed': 'Changed password',
   'user-added': 'Added user',
   'user-changed': 'Changed user',

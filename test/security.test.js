@@ -21,6 +21,8 @@ test('the account guard pauses an account from outside, never from home', () => 
   assert.equal(guard.allow('raven', '87.114.78.169'), false);
   assert.equal(guard.allow('raven', '192.168.4.20'), true);
   assert.equal(guard.allow('dana', '87.114.78.169'), true);
+  // Over HTTPS (the only way in from outside) a home-looking address may just be the router.
+  assert.equal(guard.allow('raven', '192.168.4.20', true), false);
   t += 1500;
   assert.equal(guard.allow('raven', '87.114.78.169'), true);
   guard.fail('raven');
@@ -168,4 +170,35 @@ test('guessing one account from outside gets it paused, and raises an alert', as
   const alerts = (await call('GET', '/api/alerts', null, cookie)).body;
   assert.ok(alerts.active.some((a) => a.security && /failed sign-ins for raven/.test(a.title)));
   assert.equal(alerts.settings.alertSecurity, true);
+});
+
+test('lockdown signs others out, blocks outside (HTTPS) traffic, and lifts at home', async () => {
+  const { execFileSync } = require('child_process');
+  const https = require('https');
+  const tls = require('tls');
+  const dana = (await call('POST', '/api/admin/users', { username: 'dana', password: 'another horse', role: 'member' }, cookie));
+  assert.equal(dana.status, 201);
+  const danaCookie = (await call('POST', '/api/login', { username: 'dana', password: 'another horse' })).cookie;
+  assert.equal((await call('GET', '/api/state', null, danaCookie)).body.user.username, 'dana');
+
+  assert.equal((await call('POST', '/api/admin/lockdown', { on: true }, cookie)).status, 200);
+  assert.equal((await call('GET', '/api/state', null, danaCookie)).body.user, null);
+  assert.equal((await call('GET', '/api/state', null, cookie)).body.user.username, 'raven');
+  const view = (await call('GET', '/api/admin/security', null, cookie)).body;
+  assert.ok(view.lockdown && view.checks.some((c) => c.id === 'lockdown'));
+  assert.ok((await call('GET', '/api/alerts', null, cookie)).body.active.some((a) => a.key === 'sec:lockdown'));
+
+  // The HTTPS side (where outside traffic arrives) answers 503 until it is lifted.
+  const key = path.join(dataDir, 'k.pem');
+  const crt = path.join(dataDir, 'c.pem');
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', crt, '-subj', '/CN=localhost', '-days', '1'], { stdio: 'ignore' });
+  server.certs.context = tls.createSecureContext({ key: fs.readFileSync(key), cert: fs.readFileSync(crt) });
+  const secure = server.createHttpsServer();
+  await new Promise((r) => secure.listen(0, '127.0.0.1', r));
+  const get = () => new Promise((resolve, reject) => https.get({ host: '127.0.0.1', port: secure.address().port, path: '/api/alerts', rejectUnauthorized: false, agent: false, servername: 'localhost' }, (res) => { res.resume(); resolve(res.statusCode); }).on('error', reject));
+  assert.equal(await get(), 503);
+  assert.equal((await call('POST', '/api/admin/lockdown', { on: false }, cookie)).status, 200);
+  assert.equal(await get(), 401);
+  secure.closeAllConnections();
+  secure.close();
 });
