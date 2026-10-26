@@ -162,8 +162,9 @@ const order = { ok: 0, info: 0, warn: 1, bad: 2 };
 //   db, now, entries (activity log), cert (certSummary() or null), updates
 //   ({ update, restart, checked } or null), backup (backup.summarize()),
 //   pushDevices (phones with alerts on, for admins), outside (reachable from outside),
-//   lockdown ({ at, by } while outside access is paused)
-function securityChecks({ db, now = Date.now(), entries = [], cert = null, updates = null, backup = { state: 'off' }, pushDevices = 0, outside = false, lockdown = null }) {
+//   lockdown ({ at, by } while outside access is paused),
+//   ports (the last open-port check, src/portcheck.js, or null)
+function securityChecks({ db, now = Date.now(), entries = [], cert = null, updates = null, backup = { state: 'off' }, pushDevices = 0, outside = false, lockdown = null, ports = null }) {
   const checks = [];
   const add = (id, status, title, detail = '') => checks.push({ id, status, title, detail });
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -211,6 +212,15 @@ function securityChecks({ db, now = Date.now(), entries = [], cert = null, updat
 
   if (!pushDevices) add('phone', 'warn', 'No phone gets Roost alerts', 'Turn on Admin → Alerts on your phone to hear about problems straight away.');
   else add('phone', 'ok', 'Alerts reach your phone');
+
+  if (ports) {
+    const extra = ports.open.filter((p) => p.port !== 443);
+    const when = new Date(ports.at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+    if (extra.length) add('ports', 'bad', `${extra.length === 1 ? 'A door is' : `${extra.length} doors are`} open to the internet besides 443`, `${extra.map((p) => `${p.port} (${p.name})`).join(', ')}. Close ${extra.length === 1 ? 'it' : 'them'} in your router's port forwarding unless you meant it. Checked ${when}.`);
+    else add('ports', 'ok', 'No unexpected doors open to the internet', `Tried ${ports.tried} common ports on ${ports.ip} from inside your network, ${when}.`);
+  } else {
+    add('ports', 'info', 'Open doors not checked yet', 'Press Check open ports to try the common ones.');
+  }
 
   const worst = checks.reduce((n, c) => Math.max(n, order[c.status]), 0);
   const needs = checks.filter((c) => c.status === 'warn' || c.status === 'bad').length;

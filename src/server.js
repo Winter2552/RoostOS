@@ -50,6 +50,7 @@ const roostflix = require('./roostflix');
 const { UptimeLog, watchDockerEvents } = require('./uptime');
 const { Watcher, alertSettings, alertsOf } = require('./alerts');
 const { AccountGuard, SecurityWatch, securityChecks } = require('./security');
+const { checkPorts } = require('./portcheck');
 const { Push } = require('./push');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -239,7 +240,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, coffeeOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, registryFetch, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000, alertIntervalMs = 60 * 1000, readContainers, push: pushOptions = {} } = {}) {
+function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, coffeeOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, registryFetch, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000, alertIntervalMs = 60 * 1000, readContainers, push: pushOptions = {}, portOptions = {} } = {}) {
   const store = new Store(dataDir);
   const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
   // The few outside services Roost leans on, for the admin's status page.
@@ -2270,10 +2271,28 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
           pushDevices: db().users.filter((u) => u.role === 'admin').reduce((n, u) => n + push.devicesOf(u.id).length, 0),
           outside: Boolean(cert),
           lockdown: db().settings.lockdown || null,
+          ports: db().settings.portCheck || null,
         }),
         lockdown: db().settings.lockdown || null,
         checkedAt: new Date().toISOString(),
       });
+    },
+
+    // Tries common ports on Roost's public address. Only when asked, at most once a minute.
+    'POST /api/admin/security/ports': async (req, res) => {
+      const admin = requireAdmin(req);
+      const last = db().settings.portCheck;
+      if (last && Date.now() - last.at < 60 * 1000) throw new HttpError(429, 'Checked a moment ago. Try again in a minute.');
+      let ip;
+      try {
+        ip = await remote.homeIp();
+      } catch (err) {
+        throw new HttpError(502, err.message);
+      }
+      db().settings.portCheck = await checkPorts(ip, portOptions);
+      store.save();
+      record(req, 'settings-changed', { actor: admin.username, detail: 'checked which ports are open' });
+      send(res, 200, { ports: db().settings.portCheck });
     },
 
     // One tap to shut the door: outside access pauses, every sign-in ends (except

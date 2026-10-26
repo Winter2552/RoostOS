@@ -2797,6 +2797,18 @@ function renderLockdown(lock) {
   row.classList.toggle('on', Boolean(lock));
 }
 
+$('#ports-btn').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  btn.textContent = 'Checking…';
+  try {
+    await api('POST', '/api/admin/security/ports');
+    await loadSecurity();
+  } catch (err) { flash($('#security-panel'), err.message, false); }
+  btn.disabled = false;
+  btn.textContent = 'Check open ports';
+});
+
 $('#lockdown-btn').addEventListener('click', async (e) => {
   const turnOn = e.currentTarget.dataset.on === '1';
   if (turnOn && !confirm('Lock Roost down? Outside access pauses and everyone else is signed out. You can lift it here at any time, from the home address.')) return;
