@@ -309,3 +309,31 @@ test('the service backs up on request, remembers the run and honours its setting
     fs.rmSync(dest, { recursive: true, force: true });
   }
 });
+
+test('a test restore reads files back and catches damage', async () => {
+  const { src, dest } = world();
+  write(path.join(src, 'a', 'photo.jpg'), Buffer.alloc(50000, 7));
+  write(path.join(src, 'a', 'notes.txt'), 'shopping list\n'.repeat(1000));
+  write(path.join(src, 'a', 'big.bin'), Buffer.alloc(5000, 1));
+  const r = await backup.runBackup({ dest, sources: [{ label: 'Nest', dir: src }], now: at('2026-10-08T03:00') });
+
+  const good = await backup.verifySnapshot(dest, r.snapshot, { sample: 10 });
+  assert.equal(good.ok, true);
+  assert.equal(good.checked, 3);
+
+  // Skips what is over the size limit.
+  assert.equal((await backup.verifySnapshot(dest, r.snapshot, { maxBytes: 10000 })).checked, 1);
+
+  // Flip a byte in a stored file: the checksum no longer matches.
+  const stored = snap(dest, r.snapshot, 'Nest', 'a', 'photo.jpg');
+  const bytes = fs.readFileSync(stored);
+  bytes[10] ^= 0xff;
+  fs.writeFileSync(stored, bytes);
+  const bad = await backup.verifySnapshot(dest, r.snapshot, { sample: 10 });
+  assert.equal(bad.ok, false);
+  assert.deepEqual(bad.bad, ['Nest/a/photo.jpg']);
+
+  // A missing file counts as damage too.
+  fs.rmSync(snap(dest, r.snapshot, 'Nest', 'a', 'notes.txt.gz'));
+  assert.equal((await backup.verifySnapshot(dest, r.snapshot, { sample: 10 })).bad.length, 2);
+});

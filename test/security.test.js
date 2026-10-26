@@ -103,6 +103,15 @@ test('the checklist says all is well when it is', () => {
   assert.equal(out.headline, 'Everything looks safe');
 });
 
+test('the checklist reports the backup test', () => {
+  const at = '2026-10-20T03:00:00Z';
+  const find = (backupTest, state = 'ok') => securityChecks({ ...base, backup: { state }, backupTest }).checks.find((c) => c.id === 'backup-test');
+  assert.equal(find({ ok: true, checked: 20, bad: [], at }).status, 'ok');
+  assert.equal(find({ ok: false, checked: 20, bad: ['Nest/a.jpg'], at }).status, 'bad');
+  assert.equal(find(null).status, 'info');
+  assert.equal(find(null, 'off'), undefined);
+});
+
 test('the checklist names what needs doing', () => {
   const out = securityChecks({
     ...base,
@@ -201,4 +210,16 @@ test('lockdown signs others out, blocks outside (HTTPS) traffic, and lifts at ho
   assert.equal(await get(), 401);
   secure.closeAllConnections();
   secure.close();
+});
+
+test('Roost pages only run scripts from Roost, and ask for no camera or location', async () => {
+  const res = await fetch(`${url}/`);
+  const csp = res.headers.get('content-security-policy');
+  assert.match(csp, /script-src 'self'(;|$)/);
+  assert.match(csp, /frame-ancestors 'none'/);
+  assert.match(res.headers.get('permissions-policy'), /camera=\(\)/);
+  assert.equal(res.headers.get('strict-transport-security'), null); // plain HTTP at home
+  const index = await res.text();
+  assert.doesNotMatch(index, /<script(?![^>]*\bsrc=)[^>]*>/, 'no inline scripts, which the policy would block');
+  assert.doesNotMatch(index, /\son\w+="/, 'no inline event handlers');
 });

@@ -163,8 +163,9 @@ const order = { ok: 0, info: 0, warn: 1, bad: 2 };
 //   ({ update, restart, checked } or null), backup (backup.summarize()),
 //   pushDevices (phones with alerts on, for admins), outside (reachable from outside),
 //   lockdown ({ at, by } while outside access is paused),
-//   ports (the last open-port check, src/portcheck.js, or null)
-function securityChecks({ db, now = Date.now(), entries = [], cert = null, updates = null, backup = { state: 'off' }, pushDevices = 0, outside = false, lockdown = null, ports = null }) {
+//   ports (the last open-port check, src/portcheck.js, or null),
+//   backupTest (the backup service's last restore test, or null)
+function securityChecks({ db, now = Date.now(), entries = [], cert = null, updates = null, backup = { state: 'off' }, pushDevices = 0, outside = false, lockdown = null, ports = null, backupTest = null }) {
   const checks = [];
   const add = (id, status, title, detail = '') => checks.push({ id, status, title, detail });
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -204,6 +205,13 @@ function securityChecks({ db, now = Date.now(), entries = [], cert = null, updat
   if (backup.state === 'ok' || backup.state === 'running') add('backup', 'ok', 'Nightly backup is working');
   else if (backup.state === 'off') add('backup', 'warn', 'Backups are not running', 'A backup on a separate drive is the best protection against ransomware. See Admin → Setup.');
   else add('backup', 'warn', 'Backups need attention', backup.message || { late: 'The last good backup is more than a day old.', none: 'No backup has finished yet.', stopped: 'The backup service has stopped.' }[backup.state] || '');
+
+  if (backupTest) {
+    if (backupTest.ok) add('backup-test', 'ok', 'A test restore of your backup worked', `${backupTest.checked} random files read back and checked, ${new Date(backupTest.at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}.`);
+    else add('backup-test', 'bad', 'Your backup failed its test restore', backupTest.bad.length ? `Damaged or missing: ${backupTest.bad.join(', ')}` : backupTest.error || 'Files could not be read back.');
+  } else if (backup.state === 'ok') {
+    add('backup-test', 'info', 'Backup test restore not run yet', 'The backup service tests a few random files about once a month.');
+  }
 
   const failed = entries.filter((e) => e.type === 'sign-in-failed' && now - Date.parse(e.at) < DAY_MS);
   if (failed.length >= 50) add('failed', 'bad', `${failed.length} failed sign-ins in the last day`, 'Somebody is hammering the sign-in page.');

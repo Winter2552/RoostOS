@@ -7,6 +7,9 @@ services:
     build: .
     container_name: roost
     restart: unless-stopped
+    # Nothing inside the container can gain extra privileges.
+    security_opt:
+      - no-new-privileges:true
     # Only for the WireGuard link to the Coffee Galaxy server: lets Roost make its own
     # network link. Remove it if you don't use Coffee Galaxy through Roost.
     cap_add:

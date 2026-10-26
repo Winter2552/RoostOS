@@ -60,6 +60,23 @@ const APP_VERSION = RELEASES.length ? RELEASES[0].version : '0.1';
 const COOKIE = 'roost_session';
 // Remembers a device that passed two-step sign-in, so it isn't asked again for 30 days.
 const TRUST_COOKIE = 'roost_trust';
+// Roost's own pages: scripts only from Roost itself, so a script injected into
+// a page (a file name, a comment) can't run. Styles allow inline because the
+// app sets styles from script; Google Fonts is the one outside host.
+const APP_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data: blob:",
+  "media-src 'self' blob:",
+  "connect-src 'self'",
+  "worker-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join('; ');
 const TRUST_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_TRUSTED = 20;
 // A password that was right waits this long for its code.
@@ -2272,6 +2289,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
           outside: Boolean(cert),
           lockdown: db().settings.lockdown || null,
           ports: db().settings.portCheck || null,
+          backupTest: (backup.readStatus(dataDir) || {}).verify || null,
         }),
         lockdown: db().settings.lockdown || null,
         checkedAt: new Date().toISOString(),
@@ -2925,6 +2943,10 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
     res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+    // Over HTTPS, browsers keep to HTTPS for six months. No includeSubDomains, so
+    // other names (Coffee Galaxy, home-only addresses) are untouched.
+    if (req.socket.encrypted) res.setHeader('Strict-Transport-Security', 'max-age=15552000');
     try {
       const { pathname, searchParams } = new URL(req.url, 'http://roost');
       traffic.track(req, res, trafficApp(pathname), clientIp(req, trustProxy));
@@ -2962,6 +2984,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         // The showcase pictures; the name changes whenever the picture does, so they cache well.
         if (!releaseImages.serve(req, res, pathname.slice('/releases/img'.length), searchParams.get('v'))) send(res, 404, { error: 'Not found' });
       } else if (req.method === 'GET' || req.method === 'HEAD') {
+        res.setHeader('Content-Security-Policy', APP_CSP);
         if (!assets.serve(req, res, pathname, searchParams.get('v'))) send(res, 404, { error: 'Not found' });
       } else {
         throw new HttpError(405, 'Method not allowed');

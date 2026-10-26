@@ -114,6 +114,7 @@ function start({ dataDir, dest, nestDir, appDataDir }) {
     last: saved.last || null,
     lastOk: saved.lastOk || null,
     history: saved.history || [],
+    verify: saved.verify || null,
     next: null,
     snapshots: [],
   };
@@ -149,6 +150,19 @@ function start({ dataDir, dest, nestDir, appDataDir }) {
 
   let abort = null;
 
+  // A few random files read back from the new snapshot and checked against their
+  // checksums, at most every 28 days (and again straight away after a bad one).
+  async function testRestore(snapshot) {
+    const last = status.verify;
+    if (last && last.ok && Date.now() - Date.parse(last.at) < 28 * DAY) return;
+    try {
+      status.verify = await backup.verifySnapshot(dest, snapshot, { signal: abort && abort.signal });
+    } catch (err) {
+      status.verify = { ok: false, snapshot, checked: 0, bad: [], error: err.message, at: new Date().toISOString() };
+    }
+    if (!status.verify.ok) console.error(`Backup test found a problem in ${snapshot}:`, status.verify.bad.join(', ') || status.verify.error);
+  }
+
   async function runNow({ manual = false } = {}) {
     const startedAt = new Date().toISOString();
     refreshDrive();
@@ -180,6 +194,7 @@ function start({ dataDir, dest, nestDir, appDataDir }) {
       status.last = { ok: true, startedAt, finishedAt: new Date().toISOString(), ...result };
       status.lastOk = status.last.finishedAt;
       remember({ ...status.last, manual });
+      await testRestore(result.snapshot);
       console.log(`Backup ${result.snapshot}: ${result.files} files, ${result.written} bytes written, ${result.linked} unchanged, ${result.skipped} skipped`);
     } catch (err) {
       if (err.code === 'CANCELLED') {
