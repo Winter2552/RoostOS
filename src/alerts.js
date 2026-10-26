@@ -7,7 +7,7 @@
 
 const { containersFor } = require('./docker');
 
-const DEFAULTS = { alertApps: true, alertDisks: true, alertDiskPct: 90 };
+const DEFAULTS = { alertApps: true, alertDisks: true, alertDiskPct: 90, alertSecurity: true };
 const GRACE_MS = 2 * 60 * 1000;
 // A full drive clears a little below the threshold, so it can't flap on and off.
 const CLEAR_MARGIN = 3;
@@ -20,6 +20,7 @@ function alertSettings(db) {
     alertApps: s.alertApps ?? DEFAULTS.alertApps,
     alertDisks: s.alertDisks ?? DEFAULTS.alertDisks,
     alertDiskPct: s.alertDiskPct ?? DEFAULTS.alertDiskPct,
+    alertSecurity: s.alertSecurity ?? DEFAULTS.alertSecurity,
   };
 }
 
@@ -95,13 +96,14 @@ class Watcher {
   // readContainers: async () => { containers } | { error }
   // readDisks: () => [{ label, path, total, free } | { label, path, missing }]
   // onChange(event, alert): 'raised' | 'resolved' | 'event', for phone push later.
-  constructor({ store, readContainers, readDisks, onChange = () => {}, now = Date.now, newId }) {
+  constructor({ store, readContainers, readDisks, onChange = () => {}, now = Date.now, newId, tidy = null }) {
     this.store = store;
     this.readContainers = readContainers;
     this.readDisks = readDisks;
     this.onChange = onChange;
     this.now = now;
     this.newId = newId;
+    this.tidy = tidy; // (time) => true when it changed an alert
     this.pending = new Map(); // key → when it was first seen
     this.restarts = new Map(); // container name → restart count last time
     this.checkedAt = null;
@@ -124,7 +126,8 @@ class Watcher {
     ]);
     const t = this.now();
     const iso = new Date(t).toISOString();
-    const openList = alerts.filter((a) => !a.resolvedAt);
+    // Sign-in alerts (src/security.js) are not this watcher's to open or clear.
+    const openList = alerts.filter((a) => !a.resolvedAt && !a.security);
     const open = new Map(openList.map((a) => [a.key, a]));
     const found = findProblems({ apps: db.apps, docker, disks, settings, open: new Set(open.keys()) });
     let changed = false;
@@ -174,6 +177,8 @@ class Watcher {
         }
       }
     }
+
+    if (this.tidy && this.tidy(t)) changed = true;
 
     // Keep open alerts, plus the last week of cleared ones.
     const keep = alerts.filter((a) => !a.resolvedAt || t - Date.parse(a.resolvedAt) < KEEP_MS);

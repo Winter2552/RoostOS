@@ -49,6 +49,7 @@ const { Jellyfin, PREFIX: JELLYFIN_PREFIX, OPENER_HTML } = require('./jellyfin')
 const roostflix = require('./roostflix');
 const { UptimeLog, watchDockerEvents } = require('./uptime');
 const { Watcher, alertSettings, alertsOf } = require('./alerts');
+const { AccountGuard, SecurityWatch, securityChecks } = require('./security');
 const { Push } = require('./push');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -289,6 +290,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     if (s.jf) jellyfin.logout(s.jf.token).catch(() => {});
   });
   const limiter = new RateLimiter(maxFailedSignIns);
+  const guard = new AccountGuard();
   // Sign-ins waiting for a code, and authenticator secrets waiting to be
   // confirmed. Both are short-lived, so they stay in memory.
   const pendingCodes = new Map();
@@ -455,8 +457,10 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     subject: () => (/^https:\/\//.test(db().settings.publicUrl || '') ? db().settings.publicUrl : undefined),
     ...pushOptions,
   });
+  const secWatch = new SecurityWatch({ store, push, newId: () => store.newId() });
   const watcher = new Watcher({
     store,
+    tidy: (t) => secWatch.tidy(t),
     onChange: (kind, alert) => push.alert(kind, alert),
     readContainers: readContainers || (async () => (events.live() && !lastDocker.error ? lastDocker : listContainers(dockerHost, probeTimeoutMs))),
     readDisks: () => readDisks(diskList),
@@ -552,6 +556,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
 
   function record(req, type, fields = {}) {
     activity.add(type, { ...fields, ip: clientIp(req, trustProxy) });
+    secWatch.onActivity(type, fields);
   }
 
   const gbText = (limit) => (limit === null ? 'no limit' : `${limit} GB`);
@@ -571,6 +576,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // key in the reply instead of a cookie.
   function login(req, res, user, { status = 200, cookies = [], device = '', password = null } = {}) {
     if (guestEnded(user)) throw new HttpError(403, 'Your guest pass has ended. Ask whoever invited you for more time.');
+    if (secWatch.adminDevice(user, device || deviceName(req.headers['user-agent']), clientIp(req, trustProxy))) store.save();
     if (device) {
       const key = sessions.create(user.id, { kind: 'app', name: device });
       return send(res, status, { user: publicUser(db(), user), key });
@@ -1012,9 +1018,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (!limiter.allow(clientIp(req, trustProxy))) throw new HttpError(429, 'Too many attempts, wait a few minutes');
       const body = await readJson(req);
       const username = str(body.username, 32).toLowerCase();
+      if (!guard.allow(username, clientIp(req, trustProxy))) throw new HttpError(429, 'Too many wrong passwords for this account. Wait a few minutes, or sign in from home.');
       const user = db().users.find((u) => u.username === username);
       if (!user || typeof body.password !== 'string' || !verifyPassword(body.password, user.password)) {
         limiter.fail(clientIp(req, trustProxy));
+        guard.fail(username);
         // Only the username typed is kept, never the password.
         record(req, 'sign-in-failed', { target: username || null, detail: user ? 'wrong password' : 'no such user' });
         throw new HttpError(401, 'Wrong username or password');
@@ -1022,6 +1030,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const device = str(body.device, 60);
       if (guestEnded(user)) record(req, 'sign-in-failed', { target: user.username, detail: 'guest pass ended' });
       if (!user.twoStep || isTrusted(req, user)) {
+        guard.clear(username);
         record(req, 'sign-in', { actor: user.username, detail: user.twoStep ? 'trusted device' : '' });
         return login(req, res, user, { device, password: body.password });
       }
@@ -1044,6 +1053,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         pendingCodes.delete(body.ticket);
         throw new HttpError(401, 'Sign in again');
       }
+      if (!guard.allow(user.username, clientIp(req, trustProxy))) throw new HttpError(429, 'Too many wrong codes for this account. Wait a few minutes, or sign in from home.');
       const code = str(body.code, 40);
       let ok = false;
       if (/^\d{6}$/.test(code.replace(/\s/g, ''))) {
@@ -1057,6 +1067,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       }
       if (!ok) {
         limiter.fail(clientIp(req, trustProxy));
+        guard.fail(user.username);
         record(req, 'sign-in-failed', { target: user.username, detail: 'wrong two-step code' });
         pending.tries++;
         if (pending.tries >= CODE_TRIES) {
@@ -1066,6 +1077,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         throw new HttpError(400, "That code didn't work. Check your app's newest code.");
       }
       pendingCodes.delete(body.ticket);
+      guard.clear(user.username);
       record(req, 'sign-in', { actor: user.username, detail: /^\d/.test(code) ? 'with code' : 'with recovery code' });
       const cookies = body.trust === true && !pending.device ? [trustDevice(req, user)] : [];
       store.save();
@@ -2154,6 +2166,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (body.alertApps !== undefined) db().settings.alertApps = body.alertApps === true;
       if (body.alertDisks !== undefined) db().settings.alertDisks = body.alertDisks === true;
       if (body.alertDiskPct !== undefined) db().settings.alertDiskPct = cleanDiskPct(body.alertDiskPct);
+      if (body.alertSecurity !== undefined) db().settings.alertSecurity = body.alertSecurity === true;
       const alertsChanged = JSON.stringify(alertsBefore) !== JSON.stringify(alertSettings(db()));
       if (alertsChanged) changes.push('alert settings');
       let tellBackups = false;
@@ -2243,6 +2256,24 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     },
 
     // "Ignore until fixed": the alert stays listed but stops counting on the bell.
+    // The Admin → Security checklist, worked out from what Roost already knows.
+    'GET /api/admin/security': (req, res) => {
+      requireAdmin(req);
+      const cert = certSummary();
+      send(res, 200, {
+        ...securityChecks({
+          db: db(),
+          entries: activity.entries,
+          cert,
+          updates: updates.summary(),
+          backup: backup.summarize(backup.readStatus(dataDir)),
+          pushDevices: db().users.filter((u) => u.role === 'admin').reduce((n, u) => n + push.devicesOf(u.id).length, 0),
+          outside: Boolean(cert),
+        }),
+        checkedAt: new Date().toISOString(),
+      });
+    },
+
     'POST /api/alerts/:id/dismiss': (req, res, id) => {
       requireAdmin(req);
       const alert = alertsOf(db()).find((a) => a.id === id && !a.resolvedAt);

@@ -963,6 +963,7 @@ function renderAlertSettings(s) {
   if (alertForm.contains(document.activeElement)) return;
   alertForm.alertApps.checked = s.alertApps;
   alertForm.alertDisks.checked = s.alertDisks;
+  alertForm.alertSecurity.checked = s.alertSecurity;
   alertForm.alertDiskPct.value = s.alertDiskPct;
   paintAlertPct();
 }
@@ -973,6 +974,7 @@ alertForm.addEventListener('submit', async (e) => {
     await api('PATCH', '/api/admin/settings', {
       alertApps: alertForm.alertApps.checked,
       alertDisks: alertForm.alertDisks.checked,
+      alertSecurity: alertForm.alertSecurity.checked,
       alertDiskPct: Number(alertForm.alertDiskPct.value),
     });
     flash(alertForm, 'Saved');
@@ -2309,6 +2311,7 @@ async function loadAdmin() {
   pickers.newUser.setValue(defaultLimitGb);
   renderStorageRequests(requests);
   loadActivity();
+  loadSecurity();
   renderAppsEditor();
   renderUsers();
   renderFamily(family);
@@ -2768,6 +2771,18 @@ $('#settings-form').addEventListener('submit', async (e) => {
     flash(e.target, 'Saved');
   } catch (err) { flash(e.target, err.message, false); }
 });
+
+// ---------- security ----------
+async function loadSecurity() {
+  try {
+    const data = await api('GET', '/api/admin/security');
+    $('#security-headline').textContent = data.headline;
+    $('#security-list').replaceChildren(...data.checks.map((c) => el('li', { class: 'security-row' },
+      el('span', { class: `dot ${c.status === 'ok' ? 'online' : c.status === 'warn' ? 'warn' : c.status === 'bad' ? 'offline' : ''}` }),
+      el('div', {}, el('div', { class: 'security-what', text: c.title }), c.detail ? el('div', { class: 'mono muted', text: c.detail }) : ''))));
+    $('#security-panel > .msg').textContent = '';
+  } catch (err) { flash($('#security-panel'), err.message, false); }
+}
 
 // ---------- activity log ----------
 

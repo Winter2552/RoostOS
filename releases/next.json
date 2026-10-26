@@ -1,3 +1,10 @@
 {
-  "items": []
+  "items": [
+    {
+      "title": "Security check-up",
+      "text": "A new Security card in Admin lists what is safe and what needs you, and Roost now alerts your phone about repeated failed sign-ins, admins on a new device, and password changes.",
+      "image": "security-page.png",
+      "admin": true
+    }
+  ]
 }

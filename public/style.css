@@ -1675,3 +1675,9 @@ a.app-card:active { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--shad
 .update-steps .mark { flex: none; width: 14px; text-align: center; }
 .update-steps .todo, .update-steps .time { color: var(--muted); }
 .update-steps .now { font-weight: 600; }
+
+.security-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.security-row { display: flex; gap: 4px; align-items: baseline; border-top: 1px solid var(--line); padding: 12px 0; }
+.security-row:first-child { border-top: 0; }
+.security-row .dot { flex: none; }
+.security-what { font-weight: 600; }

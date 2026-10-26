@@ -528,6 +528,7 @@ const NO_STEP = {
   alertApps: 'on by default, switched under Admin → Alerts',
   alertDisks: 'on by default, switched under Admin → Alerts',
   alertDiskPct: 'starts at 90%, changed under Admin → Alerts',
+  alertSecurity: 'on by default, switched under Admin → Alerts',
   PORT: 'fixed by the compose file',
   DATA_DIR: 'fixed by the compose file',
   ROOST_CONTAINER: 'only if the Roost container is renamed',

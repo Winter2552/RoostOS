@@ -225,7 +225,7 @@ class Push {
       title: raised ? alert.title : alert.okTitle || `${alert.title} (cleared)`,
       body: raised ? alert.detail : 'The problem has cleared.',
       tag: alert.key,
-      url: '/#/status',
+      url: alert.url || '/#/status',
     };
     const job = this.sendAll(devices, message, { ttl: raised ? 3600 : 1800, urgency: raised ? 'high' : 'normal' })
       .catch((err) => console.error('Phone alert failed:', err.message))
