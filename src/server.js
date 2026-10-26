@@ -51,7 +51,7 @@ const roostflix = require('./roostflix');
 const { UptimeLog, watchDockerEvents } = require('./uptime');
 const { Watcher, alertSettings, alertsOf } = require('./alerts');
 const { AccountGuard, SecurityWatch, securityChecks, isPrivateIp } = require('./security');
-const { Sentinel, MODES: SENTINEL_MODES } = require('./sentinel');
+const { Sentinel, MODES: SENTINEL_MODES, buildReport } = require('./sentinel');
 const { checkPorts } = require('./portcheck');
 const { Push } = require('./push');
 
@@ -2348,6 +2348,17 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 200, sentinel.view());
     },
 
+    // A text file to hand to Claude: how the incident looked, with no secrets.
+    'GET /api/admin/sentinel/report': (req, res) => {
+      requireAdmin(req);
+      const id = new URL(req.url, 'http://roost').searchParams.get('incident');
+      const incident = sentinel.incidents.find((i) => i.id === id);
+      if (!incident || !incident.evidence) throw new HttpError(404, 'That incident has no report any more');
+      const text = buildReport({ incident, entries: activity.entries, users: db().users, settings: db().settings, version: APP_VERSION, mode: sentinel.mode, bans: sentinel.view().bans });
+      res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Content-Disposition': `attachment; filename="roost-incident-${incident.at.slice(0, 10)}-${incident.kind}.md"`, 'Cache-Control': 'no-store' });
+      res.end(text);
+    },
+
     'POST /api/admin/sentinel/ban': async (req, res) => {
       const admin = requireAdmin(req);
       const body = await readJson(req);
@@ -3001,6 +3012,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
         return res.end('Blocked');
       }
+      const seen = sentinel.trace(ip, req.method, req.url, req.headers['user-agent']);
+      if (seen) res.on('finish', () => { seen.status = res.statusCode; });
       sentinel.request(ip, req.url);
     }
     if (lockedOut(req)) {

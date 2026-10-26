@@ -280,6 +280,8 @@ You can pass a path inside the backup after the output folder (for example `Nest
 
 ### If you think someone got in
 
+To find out *how*, open Admin → Sentinel and press **Report** on the incident: it downloads a short file (what that address asked for, what changed in the Activity log, the accounts and settings now) with no passwords, cookies, query strings, link tokens or secrets. Hand it to Claude in the Roost thread to work out the cause and write the fix. Sentinel keeps the last 400 outside requests in memory (never on disk) and attaches an address's recent ones to each incident, for the latest ten incidents.
+
 1. **Lock down** (Admin → Security → Lock down now). Outside access pauses and everyone else is signed out. If you can't reach Admin, stop Roost: `cd /DATA/AppData/roost-src && sudo docker compose stop roost`.
 2. **Update Roost** to the latest version (`update-roost.sh`), so any hole that was fixed is closed.
 3. **Pick a clean night.** Admin → Activity shows when odd things started. Restore the Roost folder from a backup *before* that (see "If the server itself is gone"; use `restore-cli` with the night's name and move `Roost/` to `/DATA/AppData/roost` with Roost stopped). With no backup, skip this step and recover the data as it is.

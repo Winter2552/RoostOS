@@ -9,7 +9,7 @@ const path = require('path');
 const tls = require('tls');
 const { execFileSync } = require('child_process');
 const { createServer } = require('../src/server');
-const { Sentinel, isScannerRequest, fingerprint } = require('../src/sentinel');
+const { Sentinel, isScannerRequest, fingerprint, buildReport, redactPath } = require('../src/sentinel');
 const { isPrivateIp } = require('../src/security');
 const { setUpTwoStep } = require('./helpers');
 
@@ -118,6 +118,33 @@ test('state survives a restart, expired bans do not', () => {
   assert.equal(later.bans.length, 0);
 });
 
+test('reports keep the path but not the query or link tokens', () => {
+  assert.equal(redactPath('/s/AbCdEfGhIjKlMnOpQrStUv?download=1&token=secret'), '/s/…');
+  assert.equal(redactPath('/api/nest/files?path=private%20name'), '/api/nest/files');
+  assert.equal(redactPath('/wp-login.php'), '/wp-login.php');
+});
+
+test('an incident keeps its evidence and makes a report without secrets', () => {
+  const db = { users: [{ id: 'u1', username: 'raven', role: 'admin', password: 'scrypt:salt:hash', twoStep: { secret: 'TOPSECRET' } }], settings: { lockdown: { at: 'x', by: 'Sentinel' } } };
+  const m = make('manual', db);
+  for (const p of ['/', '/.env?x=1', '/.git/config', '/wp-login.php']) { const e = m.s.trace('87.1.1.1', 'GET', p, 'curl/8'); e.status = 404; m.s.request('87.1.1.1', p); }
+  m.s.trace('87.2.2.2', 'GET', '/other', 'x');
+  const inc = m.s.view().incidents[0];
+  assert.equal(inc.report, true);
+  assert.equal(inc.evidence, undefined, 'the list stays small; evidence is only in the report');
+  const text = buildReport({ incident: m.s.incidents[0], entries: [{ at: new Date(1e12).toISOString(), type: 'sign-in-failed', actor: null, target: 'raven', detail: 'wrong password', ip: '87.1.1.1' }], users: db.users, settings: db.settings, version: '0.1.13', mode: 'manual', bans: [] });
+  assert.match(text, /# Roost incident report/);
+  assert.match(text, /\/\.git\/config \| 404 \| curl\/8/);
+  assert.doesNotMatch(text, /\/other/); // another address's request
+  assert.doesNotMatch(text, /x=1/); // the query is gone
+  assert.match(text, /sign-in-failed/);
+  assert.doesNotMatch(text, /scrypt|TOPSECRET/);
+  assert.match(text, /raven \| admin \| on/);
+
+  for (let i = 0; i < 12; i++) m.s.incident('spray', `87.9.9.${i}`, 'x');
+  assert.equal(m.s.view().incidents.filter((i) => i.report).length, 10, 'only the latest ten keep evidence');
+});
+
 // ---------- through the server ----------
 
 test('outside (HTTPS) scanners are banned in auto mode, and the admin can see and lift it', async () => {
@@ -172,6 +199,19 @@ test('outside (HTTPS) scanners are banned in auto mode, and the admin can see an
     const checks = (await call('GET', '/api/admin/security', null, cookie)).body.checks;
     assert.equal(checks.find((c) => c.id === 'sentinel').title, 'Sentinel is on and acts on its own');
     assert.ok((await call('GET', '/api/alerts', null, cookie)).body.active.some((a) => /scanner is probing Roost: 87.7.7.7/i.test(a.title)));
+
+    // The report for that incident: admins only, a download, evidence from the outside requests.
+    const inc = (await call('GET', '/api/admin/sentinel', null, cookie)).body.incidents.find((i) => i.ip === '87.7.7.7');
+    assert.equal(inc.report, true);
+    assert.equal((await fetch(`${base}/api/admin/sentinel/report?incident=${inc.id}`)).status, 401);
+    const rep = await fetch(`${base}/api/admin/sentinel/report?incident=${inc.id}`, { headers: { Cookie: cookie } });
+    assert.equal(rep.status, 200);
+    assert.match(rep.headers.get('content-disposition'), /attachment; filename="roost-incident-.*scanner\.md"/);
+    const text = await rep.text();
+    assert.match(text, /\/wp-login\.php/);
+    assert.match(text, /87\.7\.7\.7/);
+    assert.doesNotMatch(text, /scrypt:/);
+    assert.equal((await fetch(`${base}/api/admin/sentinel/report?incident=nope`, { headers: { Cookie: cookie } })).status, 404);
   } finally {
     secure.closeAllConnections();
     secure.close();
