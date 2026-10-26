@@ -204,6 +204,19 @@ test('Jellyfin is passed through only to people allowed to use it', async () => 
   assert.equal((await call('GET', '/api/jellyfin/session', null, nofilms)).status, 403);
 });
 
+test('AirPlay: a stream with a live Jellyfin token plays without the Roost cookie, nothing else does', async () => {
+  const sam = (await call('POST', '/api/login', { username: 'sam', password: 'sam pass 123' })).cookie;
+  await settle();
+  const { token } = (await call('GET', '/api/jellyfin/session', null, sam)).body;
+  assert.ok(token);
+  const ok = await call('GET', `/jellyfin/Videos/abc/master.m3u8?api_key=${token}`, null, null);
+  assert.equal(ok.location, null);
+  assert.equal((await call('GET', '/jellyfin/Videos/abc/master.m3u8?api_key=wrong', null, null)).location, '/');
+  assert.equal((await call('GET', '/jellyfin/Videos/abc/master.m3u8', null, null)).location, '/');
+  assert.equal((await call('GET', `/jellyfin/web/index.html?api_key=${token}`, null, null)).location, '/');
+  assert.equal((await call('GET', `/jellyfin/Users?api_key=${token}`, null, null)).location, '/');
+});
+
 test("Roostflix adds its skin to Jellyfin's page, and can be switched off", async () => {
   const sam = (await call('POST', '/api/login', { username: 'sam', password: 'sam pass 123' })).cookie;
   jf.page = true;
