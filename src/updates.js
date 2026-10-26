@@ -131,6 +131,12 @@ class UpdateChecker {
     return out;
   }
 
+  // Counts from saved results only; never starts a check.
+  summary() {
+    const states = Object.values(this.results).map((r) => r.state);
+    return { checked: states.length > 0, update: states.filter((x) => x === 'update').length, restart: states.filter((x) => x === 'restart').length };
+  }
+
   // The admin's "Check now", at most once a minute. → false when too soon.
   async checkNow(containers) {
     if (this.now() - this.lastCheckNow < CHECK_NOW_GAP_MS) return false;

@@ -1,0 +1,14 @@
+{
+  "version": "0.1.12",
+  "date": "2026-10-26",
+  "title": "Security check-up",
+  "summary": "A Security card in Admin, a Lock down button and sign-in alerts",
+  "items": [
+    {
+      "title": "Security check-up",
+      "text": "A new Security card in Admin lists what is safe and what needs you, with a Lock down button that pauses outside access and signs everyone out. Roost also alerts your phone about repeated failed sign-ins, admins on a new device, and password changes.",
+      "image": "security-page.png",
+      "admin": true
+    }
+  ]
+}

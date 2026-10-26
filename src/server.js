@@ -49,6 +49,8 @@ const { Jellyfin, PREFIX: JELLYFIN_PREFIX, OPENER_HTML } = require('./jellyfin')
 const roostflix = require('./roostflix');
 const { UptimeLog, watchDockerEvents } = require('./uptime');
 const { Watcher, alertSettings, alertsOf } = require('./alerts');
+const { AccountGuard, SecurityWatch, securityChecks } = require('./security');
+const { checkPorts } = require('./portcheck');
 const { Push } = require('./push');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -58,6 +60,23 @@ const APP_VERSION = RELEASES.length ? RELEASES[0].version : '0.1';
 const COOKIE = 'roost_session';
 // Remembers a device that passed two-step sign-in, so it isn't asked again for 30 days.
 const TRUST_COOKIE = 'roost_trust';
+// Roost's own pages: scripts only from Roost itself, so a script injected into
+// a page (a file name, a comment) can't run. Styles allow inline because the
+// app sets styles from script; Google Fonts is the one outside host.
+const APP_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data: blob:",
+  "media-src 'self' blob:",
+  "connect-src 'self'",
+  "worker-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join('; ');
 const TRUST_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_TRUSTED = 20;
 // A password that was right waits this long for its code.
@@ -238,7 +257,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, coffeeOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, registryFetch, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000, alertIntervalMs = 60 * 1000, readContainers, push: pushOptions = {} } = {}) {
+function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, coffeeOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, registryFetch, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000, alertIntervalMs = 60 * 1000, readContainers, push: pushOptions = {}, portOptions = {} } = {}) {
   const store = new Store(dataDir);
   const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
   // The few outside services Roost leans on, for the admin's status page.
@@ -289,6 +308,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     if (s.jf) jellyfin.logout(s.jf.token).catch(() => {});
   });
   const limiter = new RateLimiter(maxFailedSignIns);
+  const guard = new AccountGuard();
   // Sign-ins waiting for a code, and authenticator secrets waiting to be
   // confirmed. Both are short-lived, so they stay in memory.
   const pendingCodes = new Map();
@@ -455,8 +475,10 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     subject: () => (/^https:\/\//.test(db().settings.publicUrl || '') ? db().settings.publicUrl : undefined),
     ...pushOptions,
   });
+  const secWatch = new SecurityWatch({ store, push, newId: () => store.newId() });
   const watcher = new Watcher({
     store,
+    tidy: (t) => secWatch.tidy(t),
     onChange: (kind, alert) => push.alert(kind, alert),
     readContainers: readContainers || (async () => (events.live() && !lastDocker.error ? lastDocker : listContainers(dockerHost, probeTimeoutMs))),
     readDisks: () => readDisks(diskList),
@@ -552,6 +574,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
 
   function record(req, type, fields = {}) {
     activity.add(type, { ...fields, ip: clientIp(req, trustProxy) });
+    secWatch.onActivity(type, fields);
   }
 
   const gbText = (limit) => (limit === null ? 'no limit' : `${limit} GB`);
@@ -571,6 +594,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // key in the reply instead of a cookie.
   function login(req, res, user, { status = 200, cookies = [], device = '', password = null } = {}) {
     if (guestEnded(user)) throw new HttpError(403, 'Your guest pass has ended. Ask whoever invited you for more time.');
+    if (secWatch.adminDevice(user, device || deviceName(req.headers['user-agent']), clientIp(req, trustProxy))) store.save();
     if (device) {
       const key = sessions.create(user.id, { kind: 'app', name: device });
       return send(res, status, { user: publicUser(db(), user), key });
@@ -1012,9 +1036,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (!limiter.allow(clientIp(req, trustProxy))) throw new HttpError(429, 'Too many attempts, wait a few minutes');
       const body = await readJson(req);
       const username = str(body.username, 32).toLowerCase();
+      if (!guard.allow(username, clientIp(req, trustProxy), Boolean(req.socket.encrypted))) throw new HttpError(429, 'Too many wrong passwords for this account. Wait a few minutes, or sign in from home.');
       const user = db().users.find((u) => u.username === username);
       if (!user || typeof body.password !== 'string' || !verifyPassword(body.password, user.password)) {
         limiter.fail(clientIp(req, trustProxy));
+        guard.fail(username);
         // Only the username typed is kept, never the password.
         record(req, 'sign-in-failed', { target: username || null, detail: user ? 'wrong password' : 'no such user' });
         throw new HttpError(401, 'Wrong username or password');
@@ -1022,6 +1048,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const device = str(body.device, 60);
       if (guestEnded(user)) record(req, 'sign-in-failed', { target: user.username, detail: 'guest pass ended' });
       if (!user.twoStep || isTrusted(req, user)) {
+        guard.clear(username);
         record(req, 'sign-in', { actor: user.username, detail: user.twoStep ? 'trusted device' : '' });
         return login(req, res, user, { device, password: body.password });
       }
@@ -1044,6 +1071,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         pendingCodes.delete(body.ticket);
         throw new HttpError(401, 'Sign in again');
       }
+      if (!guard.allow(user.username, clientIp(req, trustProxy), Boolean(req.socket.encrypted))) throw new HttpError(429, 'Too many wrong codes for this account. Wait a few minutes, or sign in from home.');
       const code = str(body.code, 40);
       let ok = false;
       if (/^\d{6}$/.test(code.replace(/\s/g, ''))) {
@@ -1057,6 +1085,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       }
       if (!ok) {
         limiter.fail(clientIp(req, trustProxy));
+        guard.fail(user.username);
         record(req, 'sign-in-failed', { target: user.username, detail: 'wrong two-step code' });
         pending.tries++;
         if (pending.tries >= CODE_TRIES) {
@@ -1066,6 +1095,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         throw new HttpError(400, "That code didn't work. Check your app's newest code.");
       }
       pendingCodes.delete(body.ticket);
+      guard.clear(user.username);
       record(req, 'sign-in', { actor: user.username, detail: /^\d/.test(code) ? 'with code' : 'with recovery code' });
       const cookies = body.trust === true && !pending.device ? [trustDevice(req, user)] : [];
       store.save();
@@ -2154,6 +2184,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (body.alertApps !== undefined) db().settings.alertApps = body.alertApps === true;
       if (body.alertDisks !== undefined) db().settings.alertDisks = body.alertDisks === true;
       if (body.alertDiskPct !== undefined) db().settings.alertDiskPct = cleanDiskPct(body.alertDiskPct);
+      if (body.alertSecurity !== undefined) db().settings.alertSecurity = body.alertSecurity === true;
       const alertsChanged = JSON.stringify(alertsBefore) !== JSON.stringify(alertSettings(db()));
       if (alertsChanged) changes.push('alert settings');
       let tellBackups = false;
@@ -2243,6 +2274,68 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     },
 
     // "Ignore until fixed": the alert stays listed but stops counting on the bell.
+    // The Admin → Security checklist, worked out from what Roost already knows.
+    'GET /api/admin/security': (req, res) => {
+      requireAdmin(req);
+      const cert = certSummary();
+      send(res, 200, {
+        ...securityChecks({
+          db: db(),
+          entries: activity.entries,
+          cert,
+          updates: updates.summary(),
+          backup: backup.summarize(backup.readStatus(dataDir)),
+          pushDevices: db().users.filter((u) => u.role === 'admin').reduce((n, u) => n + push.devicesOf(u.id).length, 0),
+          outside: Boolean(cert),
+          lockdown: db().settings.lockdown || null,
+          ports: db().settings.portCheck || null,
+          backupTest: (backup.readStatus(dataDir) || {}).verify || null,
+        }),
+        lockdown: db().settings.lockdown || null,
+        checkedAt: new Date().toISOString(),
+      });
+    },
+
+    // Tries common ports on Roost's public address. Only when asked, at most once a minute.
+    'POST /api/admin/security/ports': async (req, res) => {
+      const admin = requireAdmin(req);
+      const last = db().settings.portCheck;
+      if (last && Date.now() - last.at < 60 * 1000) throw new HttpError(429, 'Checked a moment ago. Try again in a minute.');
+      let ip;
+      try {
+        ip = await remote.homeIp();
+      } catch (err) {
+        throw new HttpError(502, err.message);
+      }
+      db().settings.portCheck = await checkPorts(ip, portOptions);
+      store.save();
+      record(req, 'settings-changed', { actor: admin.username, detail: 'checked which ports are open' });
+      send(res, 200, { ports: db().settings.portCheck });
+    },
+
+    // One tap to shut the door: outside access pauses, every sign-in ends (except
+    // this one) and two-step "trusted device" cookies stop counting. Lifting it
+    // brings outside access back; people sign in again.
+    'POST /api/admin/lockdown': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const on = body.on === true;
+      if (on === Boolean(db().settings.lockdown)) return send(res, 200, { lockdown: db().settings.lockdown || null });
+      if (on) {
+        db().settings.lockdown = { at: new Date().toISOString(), by: admin.username };
+        for (const u of db().users) {
+          u.trusted = [];
+          sessions.destroyUser(u.id, u.id === admin.id ? tokenOf(req) : null);
+        }
+        secWatch.raise('sec:lockdown', 'Lockdown is on', `${admin.username} paused outside access and signed everyone out.`);
+      } else {
+        delete db().settings.lockdown;
+      }
+      store.save();
+      record(req, on ? 'lockdown-on' : 'lockdown-off', { actor: admin.username });
+      send(res, 200, { lockdown: db().settings.lockdown || null });
+    },
+
     'POST /api/alerts/:id/dismiss': (req, res, id) => {
       requireAdmin(req);
       const alert = alertsOf(db()).find((a) => a.id === id && !a.resolvedAt);
@@ -2824,6 +2917,13 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     return remote.blocks(req);
   }
 
+  // Lockdown pauses everything that comes in from outside. The router forwards
+  // 443 only, so outside traffic is exactly what arrives over HTTPS; the plain
+  // home address keeps working so the admin can always get back in and lift it.
+  function lockedOut(req) {
+    return Boolean(db().settings.lockdown && req.socket.encrypted);
+  }
+
   // Which app a request counts against on the upload meter.
   function trafficApp(pathname) {
     if (pathname === JELLYFIN_PREFIX || pathname.startsWith(`${JELLYFIN_PREFIX}/`)) return 'jellyfin';
@@ -2836,9 +2936,17 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
       return res.end('Use the Roost address, not the IP');
     }
+    if (lockedOut(req)) {
+      res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8', 'Retry-After': '3600' });
+      return res.end('Roost is locked down for now.');
+    }
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
     res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+    // Over HTTPS, browsers keep to HTTPS for six months. No includeSubDomains, so
+    // other names (Coffee Galaxy, home-only addresses) are untouched.
+    if (req.socket.encrypted) res.setHeader('Strict-Transport-Security', 'max-age=15552000');
     try {
       const { pathname, searchParams } = new URL(req.url, 'http://roost');
       traffic.track(req, res, trafficApp(pathname), clientIp(req, trustProxy));
@@ -2876,6 +2984,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         // The showcase pictures; the name changes whenever the picture does, so they cache well.
         if (!releaseImages.serve(req, res, pathname.slice('/releases/img'.length), searchParams.get('v'))) send(res, 404, { error: 'Not found' });
       } else if (req.method === 'GET' || req.method === 'HEAD') {
+        res.setHeader('Content-Security-Policy', APP_CSP);
         if (!assets.serve(req, res, pathname, searchParams.get('v'))) send(res, 404, { error: 'Not found' });
       } else {
         throw new HttpError(405, 'Method not allowed');
@@ -2890,7 +2999,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // Live updates from Jellyfin (a WebSocket) pass through on both the HTTP and
   // HTTPS side.
   function onUpgrade(req, socket, head) {
-    if (screen(req)) return socket.destroy();
+    if (screen(req) || lockedOut(req)) return socket.destroy();
     const { pathname } = new URL(req.url, 'http://roost');
     if (pathname.startsWith(`${JELLYFIN_PREFIX}/`) && jellyfinAllowed(req)) return jellyfin.proxyUpgrade(req, socket, head);
     socket.destroy();

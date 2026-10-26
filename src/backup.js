@@ -209,6 +209,39 @@ async function readManifest(dir) {
   }
 }
 
+// ---------- restore test ----------
+
+// Reads a few random files back out of a snapshot, the way a restore would
+// (un-gzipping where needed), and checks each against the checksum saved when
+// it was backed up. Proves the backup can be read and has not rotted, without
+// writing anything. Big files are skipped so the test stays quick.
+async function verifySnapshot(dest, name, { sample = 20, maxBytes = 64 << 20, signal, random = Math.random } = {}) {
+  const dir = path.join(dest, ROOT, name);
+  const manifest = await readManifest(dir);
+  if (!manifest) return { ok: false, snapshot: name, checked: 0, bad: [], error: 'The snapshot list could not be read' };
+  const pool = manifest.files.filter((f) => f[1] <= maxBytes);
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  const bad = [];
+  const picked = pool.slice(0, sample);
+  for (const [rel, , , hash, gz] of picked) {
+    if (signal && signal.aborted) break;
+    try {
+      const hasher = crypto.createHash('sha256');
+      const steps = [fs.createReadStream(path.join(dir, storedName(rel, gz)))];
+      if (gz) steps.push(zlib.createGunzip());
+      steps.push(new Transform({ transform(chunk, enc, cb) { hasher.update(chunk); cb(); } }));
+      await pipeline(steps, signal ? { signal } : {});
+      if (hasher.digest('base64url') !== hash) bad.push(rel);
+    } catch {
+      bad.push(rel);
+    }
+  }
+  return { ok: bad.length === 0, snapshot: name, checked: picked.length, bad: bad.slice(0, 10), at: new Date().toISOString() };
+}
+
 // ---------- a run ----------
 
 const storedName = (rel, gz) => (gz ? `${rel}.gz` : rel);
@@ -566,6 +599,6 @@ function summarize(status, now = Date.now()) {
 module.exports = {
   ROOT, MANIFEST, STATUS_FILE, REBUILDABLE, DEFAULT_KEEP,
   checkDrive, listSnapshots, toPrune, prune, readManifest, runBackup,
-  readStatus, writeStatus, summarize, snapshotName,
+  readStatus, writeStatus, summarize, snapshotName, verifySnapshot,
   config, cleanConfig, LIMITS, writeRequest, takeRequest, hasRequest,
 };
