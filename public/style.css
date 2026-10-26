@@ -1715,3 +1715,16 @@ a.app-card:active { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--shad
 .sentinel-main { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .sentinel-sub { margin-top: 16px; }
 .sentinel-actions { display: flex; gap: 8px; align-items: center; flex: none; }
+
+/* ---------- power and heat charts ---------- */
+
+.power-charts { margin-top: 12px; }
+.power-chart { margin-top: 18px; }
+.power-chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: baseline; }
+.power-chart svg { display: block; width: 100%; height: auto; margin-top: 8px; overflow: visible; }
+.power-chart .line { fill: none; stroke: var(--ink); stroke-width: 1.5; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.power-chart .line.alt { stroke: var(--muted); stroke-dasharray: 4 3; }
+.power-chart .grid { stroke: var(--line); stroke-width: 1; stroke-dasharray: 2 4; }
+.power-chart text { fill: var(--muted); font-family: var(--mono); font-size: 11px; }
+.power-chart-foot { display: flex; justify-content: space-between; font-size: 11px; margin-top: 4px; }
+.power-chart-head span, .power-chart-foot { text-transform: none; }

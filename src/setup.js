@@ -585,6 +585,7 @@ const NO_STEP = {
   alertDisks: 'on by default, switched under Admin → Alerts',
   alertDiskPct: 'starts at 90%, changed under Admin → Alerts',
   alertSecurity: 'on by default, switched under Admin → Alerts',
+  alertDriveTrend: 'on by default, switched under Admin → Alerts',
   portCheck: 'a button in Admin → Security, run when you want it',
   lockdown: 'a panic button in Admin → Security, off until pressed',
   PORT: 'fixed by the compose file',
