@@ -1,10 +1,3 @@
 {
-  "items": [
-    {
-      "title": "Power and heat on the status page",
-      "text": "See roughly how many watts the server draws, what that costs at your electricity price, and how hot the CPU and drives are. Set your price under Admin → Server.",
-      "image": "power-heat.png",
-      "admin": true
-    }
-  ]
+  "items": []
 }
