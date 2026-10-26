@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { createServer } = require('../src/server');
-const { STEPS, NO_STEP, CARDS } = require('../src/setup');
+const { SECTIONS, STEPS, NO_STEP, CARDS } = require('../src/setup');
 const { setUpTwoStep } = require('./helpers');
 
 let server;
@@ -47,11 +47,31 @@ test('every step explains itself', () => {
     assert.ok(!ids.has(s.id), `duplicate ${s.id}`);
     ids.add(s.id);
     assert.equal(typeof s.check, 'function');
+    assert.ok(SECTIONS.includes(s.section), `${s.id} needs a section from SECTIONS`);
   }
 });
 
 // Keeps the checklist the one tally of setup: a new environment variable or
 // saved setting can't land without a step (or a reason it needs none).
+test('every Admin card that setup folds away belongs to a section', () => {
+  for (const card of CARDS) assert.ok(SECTIONS.includes(card.section), `${card.id} needs a section`);
+});
+
+test('every Admin card sits in a section, and setup cards match their CARDS section', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  const admin = html.slice(html.indexOf('id="view-admin"'), html.indexOf('<footer'));
+  const cards = [...admin.matchAll(/<(?:div|form)[^>]*class="card panel[^"]*"[^>]*>/g)].map((m) => m[0]);
+  assert.ok(cards.length >= 20);
+  for (const tag of cards) {
+    const sec = (tag.match(/data-sec="([^"]+)"/) || [])[1];
+    assert.ok(sec && sec.split(' ').every((x) => SECTIONS.includes(x)), `Admin card without a section: ${tag}`);
+  }
+  for (const card of CARDS) {
+    const tag = cards.find((t) => t.includes(`id="${card.id}"`));
+    assert.ok(tag && tag.includes(`data-sec="${card.section}"`), `${card.id} should be in section ${card.section}`);
+  }
+});
+
 test('every setting in the code has a setup step', () => {
   const src = path.join(__dirname, '..', 'src');
   const found = new Set();
