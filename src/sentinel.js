@@ -35,6 +35,9 @@ const KEEP_INCIDENTS = 30;
 const MAX_TRACKED = 1000;
 const SAVE_DELAY_MS = 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const TRACE_MAX = 400; // recent outside requests kept in memory, never saved
+const EVIDENCE_MAX = 40; // requests kept with an incident
+const EVIDENCE_KEPT = 10; // incidents that keep their evidence
 
 // Places nothing in Roost lives at, but scanners always ask for.
 const SCANNER_PATH = /^\/(\.(env|git|svn|aws|ssh|ds_store|htaccess|htpasswd)|wp-(login|admin|content|includes|json)|xmlrpc\.php|phpmyadmin|pma\b|myadmin|adminer|admin\.php|cgi-bin|boaform|actuator|vendor\/phpunit|hnap1|owa\/|ecp\/|solr\/|manager\/html|config\.(json|php|yml|yaml|ini)|backup\.(zip|sql|tar|tgz)|setup\.cgi|shell\b|console\b|server-status)/i;
@@ -54,6 +57,14 @@ function fingerprint(db) {
     .map((u) => [u.id, u.username, u.password, u.twoStep ? 1 : 0])
     .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
   return crypto.createHash('sha256').update(JSON.stringify([admins, db.settings.adminsNeedTwoStep !== false])).digest('hex');
+}
+
+// A request as it goes in a report: no query (that is where tokens and search
+// text live), no cookies, no body, and long random path parts (link tokens)
+// blanked out.
+function redactPath(url) {
+  const path = String(url || '').split('?')[0].slice(0, 200);
+  return path.split('/').map((seg) => (/^[A-Za-z0-9_-]{20,}$/.test(seg) ? '…' : seg)).join('/').slice(0, 120);
 }
 
 function load(file) {
@@ -89,6 +100,7 @@ class Sentinel {
     this.seal = typeof saved.seal === 'string' ? saved.seal : null;
     this.bans = Array.isArray(saved.bans) ? saved.bans.filter((b) => b.until > now()) : [];
     this.incidents = Array.isArray(saved.incidents) ? saved.incidents.slice(-KEEP_INCIDENTS) : [];
+    this.recent = []; // the last few outside requests, for the evidence in a report
     this.scans = new Map(); // ip → times
     this.names = new Map(); // ip → Map(name → time)
     this.timer = null;
@@ -125,6 +137,16 @@ class Sentinel {
   }
 
   // ---------- what it sees ----------
+
+  // Remembers an outside request (kept in memory only). The caller fills in the
+  // status when the answer is sent.
+  trace(ip, method, url, userAgent = '') {
+    if (!this.on()) return null;
+    const entry = { at: new Date(this.now()).toISOString(), ip, method: String(method || ''), path: redactPath(url), status: null, ua: String(userAgent).slice(0, 80) };
+    this.recent.push(entry);
+    if (this.recent.length > TRACE_MAX) this.recent.shift();
+    return entry;
+  }
 
   // Called for each request. Cheap: one regex, and only matching requests count.
   request(ip, url) {
@@ -175,9 +197,13 @@ class Sentinel {
   // ---------- what it does ----------
 
   incident(kind, ip, detail, serious = false) {
-    const inc = { id: this.newId(), at: new Date(this.now()).toISOString(), kind, ip, detail, serious, handled: null };
+    // What the report will show: that address's last requests, or, with no
+    // address (tampering), the most recent changes anyone made from outside.
+    const evidence = (ip ? this.recent.filter((r) => r.ip === ip) : this.recent.filter((r) => r.method !== 'GET')).slice(-EVIDENCE_MAX).map((r) => ({ ...r }));
+    const inc = { id: this.newId(), at: new Date(this.now()).toISOString(), kind, ip, detail, serious, handled: null, evidence };
     this.incidents.push(inc);
     if (this.incidents.length > KEEP_INCIDENTS) this.incidents.shift();
+    for (const old of this.incidents.slice(0, -EVIDENCE_KEPT)) delete old.evidence;
     const what = { scanner: 'A scanner is probing Roost', spray: 'Someone is guessing usernames', tamper: 'Admin accounts were changed behind Roost' }[kind];
     const auto = this.mode === 'auto';
     let home = false;
@@ -229,7 +255,7 @@ class Sentinel {
     return {
       mode: this.mode,
       bans: this.bans.filter((b) => b.until > t).map((b) => ({ ip: b.ip, reason: b.reason, auto: b.auto, at: b.at, until: new Date(b.until).toISOString() })),
-      incidents: [...this.incidents].reverse(),
+      incidents: [...this.incidents].reverse().map(({ evidence, ...rest }) => ({ ...rest, report: Boolean(evidence) })),
     };
   }
 
@@ -255,4 +281,49 @@ class Sentinel {
   }
 }
 
-module.exports = { Sentinel, MODES, isScannerRequest, fingerprint, sealFile, BAN_MS };
+// The incident report an admin downloads and hands to Claude: enough to work
+// out how someone got in, with nothing that could be used to get in again.
+function buildReport({ incident, entries = [], users = [], settings = {}, version = '', mode = '', bans = [], now = new Date() }) {
+  const at = Date.parse(incident.at);
+  const near = entries.filter((e) => Math.abs(Date.parse(e.at) - at) <= 15 * 60 * 1000).slice(-60);
+  const rows = (list, cols) => (list.length ? list.map((r) => `| ${cols.map((c) => String(r[c] ?? '').replace(/\|/g, '/')).join(' | ')} |`).join('\n') : '_none kept_');
+  const head = (cols) => `| ${cols.join(' | ')} |\n|${cols.map(() => '---').join('|')}|`;
+  const evidence = incident.evidence || [];
+  return [
+    '# Roost incident report',
+    '',
+    `Made ${now.toISOString()} · Roost ${version} · Sentinel ${mode}`,
+    '',
+    '## The incident',
+    `- What: ${incident.kind}${incident.serious ? ' (serious)' : ''}`,
+    `- When: ${incident.at}`,
+    `- From: ${incident.ip || 'no address (the accounts changed behind Roost)'}`,
+    `- Seen: ${incident.detail}`,
+    `- Handled: ${incident.handled || 'not yet'}`,
+    '',
+    incident.ip ? '## That address\'s last requests from outside' : '## The latest changes (POST/PUT/PATCH/DELETE) from outside',
+    head(['at', 'ip', 'method', 'path', 'status', 'ua']),
+    rows(evidence, ['at', 'ip', 'method', 'path', 'status', 'ua']),
+    '',
+    '## Activity log within 15 minutes',
+    head(['at', 'type', 'actor', 'target', 'detail', 'ip']),
+    rows(near, ['at', 'type', 'actor', 'target', 'detail', 'ip']),
+    '',
+    '## Accounts now',
+    head(['username', 'role', 'two-step']),
+    rows(users.map((u) => ({ username: u.username, role: u.role, 'two-step': u.twoStep ? 'on' : 'off' })), ['username', 'role', 'two-step']),
+    '',
+    '## State',
+    `- Lockdown: ${settings.lockdown ? `on since ${settings.lockdown.at} (${settings.lockdown.by})` : 'off'}`,
+    `- Public Nest links: ${settings.publicLinks === false ? 'off' : 'on'}`,
+    `- Admins must use two-step: ${settings.adminsNeedTwoStep === false ? 'no' : 'yes'}`,
+    `- Banned addresses: ${bans.length ? bans.map((b) => b.ip).join(', ') : 'none'}`,
+    '',
+    '---',
+    'Left out on purpose: passwords and their hashes, cookies, request bodies, query strings, link tokens and every stored secret.',
+    'Hand this file to Claude in the Roost project thread to work out the cause and fix it.',
+    '',
+  ].join('\n');
+}
+
+module.exports = { buildReport, redactPath, Sentinel, MODES, isScannerRequest, fingerprint, sealFile, BAN_MS };

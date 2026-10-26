@@ -2921,12 +2921,13 @@ function sentinelRow(inc) {
   const act = inc.handled ? el('span', { class: 'pill', text: inc.handled })
     : inc.ip ? el('button', { class: 'btn ghost small', type: 'button', text: 'Ban', onclick: () => sentinelPost('ban', { incident: inc.id }) })
       : '';
+  const report = inc.report ? el('a', { class: 'btn ghost small', href: `/api/admin/sentinel/report?incident=${encodeURIComponent(inc.id)}`, download: '', text: 'Report' }) : '';
   return el('li', { class: 'security-row sentinel-row' },
     el('span', { class: `dot ${inc.handled ? 'online' : 'offline'}` }),
     el('div', { class: 'sentinel-main' },
       el('div', { class: 'security-what', text: `${SENTINEL_WHAT[inc.kind] || inc.kind}${inc.ip ? ` · ${inc.ip}` : ''}` }),
       el('div', { class: 'mono muted', text: `${inc.detail} ${ago(inc.at)}` })),
-    act);
+    el('div', { class: 'sentinel-actions' }, report, act));
 }
 
 async function sentinelPost(action, body) {
