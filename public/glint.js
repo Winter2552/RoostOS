@@ -287,11 +287,15 @@
     const parts = [];
     let grid = null;
     let month = '';
+    let year = '';
     for (const p of G.items) {
       const m = monthName(p.taken);
       if (m !== month) {
         month = m;
-        parts.push(el('h3', { class: 'glint-month mono muted', text: m }));
+        // The year level shows one label per year (the first month of it) and no month names.
+        const y = String(new Date(p.taken).getFullYear());
+        parts.push(el('h3', { class: `glint-month mono muted${y !== year ? ' yr' : ''}`, 'data-year': y, text: m }));
+        year = y;
         grid = el('div', { class: 'glint-grid' });
         parts.push(grid);
       }
@@ -378,7 +382,7 @@
   // buttons. Only a CSS class changes (see data-zoom in style.css), the page
   // keeps its one-finger scroll, and the photo under the fingers stays put.
 
-  const ZOOM_MAX = 2;
+  const ZOOM_MAX = 3; // 3 is the whole library by year
   let zoomedAt = 0;
   const zoomable = () => ['photos', 'favourites', 'album'].includes(G.mode) && G.items.length > 0 && !V.open;
 
@@ -393,18 +397,52 @@
   }
 
   // Changes the density and scrolls so the photo at (x, y) stays under that point.
+  // The tiles glide from where they were to where they land (a "FLIP": measure,
+  // change, then animate the difference with transforms only).
+  let glide = [];
+  const motionOk = () => !reduceMotion.matches && typeof Element.prototype.animate === 'function';
+
+  // Where the tiles near the screen are now (what the eye sees, including any glide in progress).
+  function snapshot(anchor) {
+    const tiles = [...body.querySelectorAll('.gtile')];
+    const first = new Map();
+    if (!tiles.length) return first;
+    const at = Math.max(0, tiles.indexOf(anchor));
+    const near = (r) => r.bottom > -innerHeight && r.top < innerHeight * 2;
+    for (let i = at; i >= 0; i--) { const r = tiles[i].getBoundingClientRect(); if (!near(r)) break; first.set(tiles[i], r); }
+    for (let i = at + 1; i < tiles.length; i++) { const r = tiles[i].getBoundingClientRect(); if (!near(r)) break; first.set(tiles[i], r); }
+    return first;
+  }
+
   function setZoom(next, x, y) {
     next = Math.max(0, Math.min(ZOOM_MAX, next));
     if (next === G.zoom) return false;
     const t = tileAt(x, y);
     let frac = 0.5;
     if (t) { const r = t.getBoundingClientRect(); frac = Math.min(1, Math.max(0, (y - r.top) / r.height)); }
+    const first = motionOk() ? snapshot(t) : null;
+    for (const a of glide) a.cancel();
+    glide = [];
+    body.style.transform = ''; // a live pinch scale ends here: the new level replaces it
     G.zoom = next;
     body.dataset.zoom = String(next);
     document.querySelectorAll('#glint-tools .glint-zoom button').forEach(paintZoomButton);
     if (t) {
       const r = t.getBoundingClientRect(); // reading it lays the new grid out
       scrollBy(0, r.top + frac * r.height - y);
+    }
+    if (first) {
+      for (const [tile, r1] of first) {
+        const r2 = tile.getBoundingClientRect();
+        if (r2.bottom < -40 || r2.top > innerHeight + 40) continue;
+        const dx = r1.left - r2.left;
+        const dy = r1.top - r2.top;
+        const k = r1.width / r2.width;
+        if (Math.abs(dx) + Math.abs(dy) < 1 && Math.abs(k - 1) < 0.01) continue;
+        glide.push(tile.animate(
+          [{ transformOrigin: '0 0', transform: `translate(${dx}px, ${dy}px) scale(${k})` }, { transformOrigin: '0 0', transform: 'none' }],
+          { duration: 240, easing: 'cubic-bezier(0.25, 0.8, 0.25, 1)' }));
+      }
     }
     return true;
   }
@@ -427,22 +465,41 @@
   let pinch = null;
   const spread = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
   const centre = (t) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
+  // While the fingers move, the whole grid scales with them (one transform);
+  // after about a third of the way it settles into the next level.
+  function liveOrigin(c) {
+    const r = body.getBoundingClientRect(); // with no scale applied
+    body.style.transformOrigin = `${c.x - r.left}px ${c.y - r.top}px`;
+  }
   body.addEventListener('touchstart', (e) => {
     if (e.touches.length !== 2 || !zoomable()) { pinch = null; return; }
     endPress();
     pinch = { d: spread(e.touches) };
     zoomedAt = Date.now();
+    if (motionOk()) { liveOrigin(centre(e.touches)); body.style.willChange = 'transform'; }
   }, { passive: true });
   body.addEventListener('touchmove', (e) => {
     if (!pinch || e.touches.length !== 2) return;
     const d = spread(e.touches);
     const c = centre(e.touches);
     zoomedAt = Date.now();
-    // Each time the fingers have moved about a third of the way, go one level.
-    if (d < pinch.d * 0.72) { if (setZoom(G.zoom + 1, c.x, c.y)) pinch.d = d; }
-    else if (d > pinch.d * 1.35) { if (setZoom(G.zoom - 1, c.x, c.y)) pinch.d = d; }
+    const ratio = d / pinch.d;
+    if (ratio < 0.72 && setZoom(G.zoom + 1, c.x, c.y)) { pinch.d = d; liveOrigin(c); return; }
+    if (ratio > 1.35 && setZoom(G.zoom - 1, c.x, c.y)) { pinch.d = d; liveOrigin(c); return; }
+    if (!motionOk()) return;
+    // At the last level there is nothing to settle into: only a slight give.
+    const lo = G.zoom < ZOOM_MAX ? 0.72 : 0.96;
+    const hi = G.zoom > 0 ? 1.35 : 1.04;
+    body.style.transform = `scale(${Math.min(hi, Math.max(lo, ratio))})`;
   }, { passive: true });
-  const endPinch = (e) => { if (e.touches.length < 2) { if (pinch) zoomedAt = Date.now(); pinch = null; } };
+  // Fingers up: whatever scale is left eases back to 1.
+  function settleLive() {
+    const was = body.style.transform;
+    body.style.transform = '';
+    body.style.willChange = '';
+    if (was && motionOk()) body.animate([{ transform: was }, { transform: 'none' }], { duration: 200, easing: 'cubic-bezier(0.25, 0.8, 0.25, 1)' });
+  }
+  const endPinch = (e) => { if (e.touches.length < 2) { if (pinch) { zoomedAt = Date.now(); settleLive(); } pinch = null; } };
   body.addEventListener('touchend', endPinch, { passive: true });
   body.addEventListener('touchcancel', endPinch, { passive: true });
   // Older Safari also reports the pinch as a page-zoom gesture.
