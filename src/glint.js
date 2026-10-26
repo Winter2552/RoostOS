@@ -21,6 +21,7 @@ const fsp = fs.promises;
 const path = require('path');
 const crypto = require('crypto');
 const { HttpError, send, readJson, str } = require('./http');
+const { Memories } = require('./glint-memories');
 
 const PAGE = 240; // photos per timeline page
 const THUMB_MAX = 512 * 1024; // previews are about 30 KB; this is a ceiling
@@ -194,6 +195,7 @@ class Glint {
       removeFromAlbum: q('DELETE FROM album_photos WHERE album = ? AND photo = ?'),
     };
     this.pages = new Map();
+    this.memories = new Memories({ db: this.db, count: (owner) => this.q.count.get(owner).n });
     this.repairDates();
   }
 
@@ -609,6 +611,23 @@ class Glint {
       return send(res, 200, { deleted, storage: nest.storage(user) });
     }
 
+    if (method === 'GET' && pathname === '/api/glint/memories') {
+      // New photos are indexed first, as for the timeline, so a fresh upload can appear in a memory.
+      if (this.q.index.run(user.id).changes) this.dirty.add(user.id);
+      const cards = this.memories.cards(user.id, tzParam(params));
+      return send(res, 200, { memories: cards.map(({ ids, ...c }) => c) });
+    }
+    if (method === 'GET' && (r = m(/^\/api\/glint\/memories\/([\w-]+)$/))) {
+      const mem = this.memories.find(user.id, r[1], tzParam(params));
+      if (!mem) throw new HttpError(404, 'That memory is gone');
+      const items = mem.ids.map((id) => this.q.photo.get(id, user.id)).filter(Boolean).map(photoItem);
+      const { ids, ...card } = mem;
+      return send(res, 200, { memory: card, items });
+    }
+    if (method === 'POST' && (r = m(/^\/api\/glint\/memories\/([\w-]+)\/hide$/))) {
+      this.memories.hide(user.id, r[1].slice(0, 40));
+      return send(res, 200, { ok: true });
+    }
     if (method === 'GET' && pathname === '/api/glint/albums') {
       return send(res, 200, { albums: this.albums(user) });
     }
@@ -641,6 +660,11 @@ class Glint {
     }
     throw new HttpError(404, 'Not found');
   }
+}
+
+// The viewer's offset from UTC in minutes, as Date#getTimezoneOffset gives it.
+function tzParam(params) {
+  return num(params.get('tz'), -840, 840) || 0;
 }
 
 function photoItem(p) {
