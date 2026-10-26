@@ -23,6 +23,7 @@ const { UpdateChecker } = require('./updates');
 const { DriveHealth } = require('./smart');
 const { Sensors, priceOf, money } = require('./sensors');
 const { HealthHistory } = require('./health-history');
+const driveTrends = require('./drive-trends');
 const { OutsideServices } = require('./outside');
 const remoteAccess = require('./remote');
 const { Coffee, validSecret, newSecret } = require('./coffee');
@@ -494,11 +495,21 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   const healthHistory = new HealthHistory(dataDir);
   const watcher = new Watcher({
     store,
-    sample: () => {
-      const view = sensors.view({ driveHealth: driveHealth.read(), settings: db().settings });
-      if (!view || view.missing || view.stale) return;
-      healthHistory.sample({ watts: view.power ? view.power.watts : null, cpuTemp: view.cpuTemp, driveTemp: view.hottestDrive ? view.hottestDrive.temp : null });
+    sample: (t) => {
+      const drives = driveHealth.read();
+      healthHistory.recordDrives(drives && drives.drives, t);
+      const view = sensors.view({ driveHealth: drives, settings: db().settings });
+      const live = view && !view.missing && !view.stale ? view : null;
+      const checked = drives && !drives.missing && !drives.stale ? drives.drives : [];
+      const hot = driveTrends.hottest(checked);
+      healthHistory.sample({
+        watts: live && live.power ? live.power.watts : null,
+        cpuTemp: live ? live.cpuTemp : null,
+        driveTemp: hot ? hot.details.temp : null,
+        driveHeat: driveTrends.heatMargin(checked),
+      }, t);
     },
+    readTrends: (open, t) => driveTrends.trendProblems({ history: healthHistory, driveHealth: driveHealth.read(), now: t, open }),
     tidy: (t) => secWatch.tidy(t),
     onChange: (kind, alert) => push.alert(kind, alert),
     readContainers: readContainers || (async () => (events.live() && !lastDocker.error ? lastDocker : listContainers(dockerHost, probeTimeoutMs))),
@@ -1489,6 +1500,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         driveHealth: driveHealth.read(),
         // Power, CPU heat and the hottest drive, for admins only.
         sensors: user.role === 'admin' ? sensors.view({ driveHealth: driveHealth.read(), settings: db().settings }) : null,
+        // Wear and sector trends per drive, for admins only.
+        driveOutlook: user.role === 'admin' ? driveTrends.outlooks(healthHistory, (driveHealth.read() || {}).drives, Date.now()) : null,
         apps,
         // Everything else Docker runs, for admins only.
         otherContainers: user.role === 'admin' ? all.filter((c) => !claimed.has(c.id)) : [],
@@ -2246,6 +2259,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (body.alertDisks !== undefined) db().settings.alertDisks = body.alertDisks === true;
       if (body.alertDiskPct !== undefined) db().settings.alertDiskPct = cleanDiskPct(body.alertDiskPct);
       if (body.alertSecurity !== undefined) db().settings.alertSecurity = body.alertSecurity === true;
+      if (body.alertDriveTrend !== undefined) db().settings.alertDriveTrend = body.alertDriveTrend === true;
       const alertsChanged = JSON.stringify(alertsBefore) !== JSON.stringify(alertSettings(db()));
       if (alertsChanged) changes.push('alert settings');
       let tellBackups = false;

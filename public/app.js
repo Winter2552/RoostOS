@@ -964,6 +964,7 @@ function renderAlertSettings(s) {
   alertForm.alertApps.checked = s.alertApps;
   alertForm.alertDisks.checked = s.alertDisks;
   alertForm.alertSecurity.checked = s.alertSecurity;
+  alertForm.alertDriveTrend.checked = s.alertDriveTrend;
   alertForm.alertDiskPct.value = s.alertDiskPct;
   paintAlertPct();
 }
@@ -975,6 +976,7 @@ alertForm.addEventListener('submit', async (e) => {
       alertApps: alertForm.alertApps.checked,
       alertDisks: alertForm.alertDisks.checked,
       alertSecurity: alertForm.alertSecurity.checked,
+      alertDriveTrend: alertForm.alertDriveTrend.checked,
       alertDiskPct: Number(alertForm.alertDiskPct.value),
     });
     flash(alertForm, 'Saved');
@@ -1760,13 +1762,16 @@ function hoursOn(h) {
   return h >= 48 ? `${Math.round(h / 24)} days` : `${h} hours`;
 }
 
-function healthLines(d) {
+function healthLines(d, outlook) {
   const x = d.details || {};
+  const o = outlook || {};
   const n = (v) => Number(v).toLocaleString();
   return [
     x.temp !== null && x.temp !== undefined ? `Temperature ${x.temp}°C` : null,
     x.hours !== null && x.hours !== undefined ? `Powered on ${hoursOn(x.hours)} (${n(x.hours)} h)` : null,
     x.wear !== null && x.wear !== undefined ? `Life used ${x.wear}%` : null,
+    o.yearsLeft !== null && o.yearsLeft !== undefined ? `About ${o.yearsLeft} years left at this rate` : o.wearTracked ? 'Wear is barely moving' : null,
+    o.sectorsWeek ? `${o.sectorsWeek} more replaced sectors this week` : null,
     x.written ? `Written ${bytes(x.written)}` : null,
     x.reallocated !== null && x.reallocated !== undefined ? `Replaced sectors ${n(x.reallocated)}` : null,
     x.pending !== null && x.pending !== undefined ? `Unreadable sectors ${n(x.pending)}` : null,
@@ -1780,7 +1785,7 @@ function healthLines(d) {
 
 // One card per drive: a verdict in plain words, the reason that matters, and
 // the numbers behind it when you tap it.
-function healthCard(d, open) {
+function healthCard(d, open, outlook) {
   const x = d.details || {};
   const name = [d.kind, driveSize(d.capacity)].filter(Boolean).join(' · ') || `/dev/${d.device}`;
   const fine = [x.temp !== null && x.temp !== undefined ? `${x.temp}°C` : null, x.hours ? `${hoursOn(x.hours)} on` : null].filter(Boolean).join(' · ');
@@ -1792,7 +1797,7 @@ function healthCard(d, open) {
       el('div', { class: 'mono stat-state' }, el('span', { class: `dot ${HEALTH_DOT[d.verdict]}` }), why)),
     el('div', { class: 'stat-lines mono muted' },
       (d.reasons || []).slice(1).map((t) => el('div', { class: 'health-reason', text: t })),
-      healthLines(d).map((t) => el('div', { text: t }))));
+      healthLines(d, outlook).map((t) => el('div', { text: t }))));
   return card;
 }
 
@@ -1921,12 +1926,12 @@ $('#status-power-charts').addEventListener('click', (e) => {
   loadPowerCharts(true);
 });
 
-function renderHealth(h) {
+function renderHealth(h, outlook) {
   $('#status-health-wrap').classList.toggle('hidden', !h);
   if (!h) return;
   // The page refreshes every few seconds; keep any card you opened open.
   const open = new Set([...document.querySelectorAll('#status-health details[open]')].map((n) => n.dataset.device));
-  $('#status-health').replaceChildren(...h.drives.map((d) => healthCard(d, open.has(d.device))));
+  $('#status-health').replaceChildren(...h.drives.map((d) => healthCard(d, open.has(d.device), outlook && outlook[d.device])));
   const note = $('#status-health-note');
   const text = h.missing || (!h.drives.length && !h.checkedAt)
     ? 'Waiting for the first health check from the roost-smart helper.'
@@ -1980,7 +1985,7 @@ function renderStatus(s) {
   }));
 
   renderPower(s.sensors);
-  renderHealth(s.driveHealth);
+  renderHealth(s.driveHealth, s.driveOutlook);
   renderOutside(s.outside);
 
   $('#status-apps').replaceChildren(...s.apps.map((a) => appStatusCard(a, s.docker.ok, s.history)));
