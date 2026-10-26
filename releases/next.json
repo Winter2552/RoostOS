@@ -1,9 +1,3 @@
 {
-  "items": [
-    {
-      "title": "Automatic iPhone backup",
-      "text": "The free Immich app can now back up your iPhone's photos to Glint on its own. Make a backup key on Profile and sign in to the app with it.",
-      "image": "immich-backup.png"
-    }
-  ]
+  "items": []
 }

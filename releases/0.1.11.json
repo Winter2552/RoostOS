@@ -1,0 +1,13 @@
+{
+  "version": "0.1.11",
+  "date": "2026-10-26",
+  "title": "Automatic iPhone backup",
+  "summary": "The free Immich app backs up your iPhone to Glint on its own.",
+  "items": [
+    {
+      "title": "Automatic iPhone backup",
+      "text": "The free Immich app can now back up your iPhone's photos to Glint on its own. Make a backup key on Profile and sign in to the app with it.",
+      "image": "immich-backup.png"
+    }
+  ]
+}
