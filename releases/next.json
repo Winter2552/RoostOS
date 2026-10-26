@@ -1,16 +1,3 @@
 {
-  "items": [
-    {
-      "title": "Power and heat history",
-      "text": "Day, Week and Month charts of power draw and heat, with peaks and the energy used and its cost. Roost keeps about 90 days in a tiny file, written once an hour.",
-      "image": "power-history.png",
-      "admin": true
-    },
-    {
-      "title": "Heads-up before a drive fails",
-      "text": "Roost now watches each drive's trend. It warns you on the bell and your phone when a drive starts losing sectors, an SSD is wearing out within a year, or a drive stays hot for half an hour. Drive cards show about how many years an SSD has left.",
-      "image": "drive-heads-up.png",
-      "admin": true
-    }
-  ]
+  "items": []
 }
