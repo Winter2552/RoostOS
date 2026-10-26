@@ -1812,6 +1812,31 @@ function renderOutside(list) {
   }));
 }
 
+// Power and heat (admins). Power is the CPU's reading plus an allowance, so it
+// is labelled an estimate; a tile the server can't read is left out.
+function renderPower(p) {
+  $('#status-power-wrap').classList.toggle('hidden', !p);
+  if (!p) return;
+  const tiles = [];
+  if (p.power) {
+    tiles.push(
+      statCard('Power (estimate)', `${Math.round(p.power.watts)} W`, `CPU ${p.power.cpuWatts} W`),
+      statCard('Cost at this rate', `${p.power.perHour} an hour`, `${p.power.perDay} a day · ${p.power.perMonth} a month`));
+  }
+  if (p.cpuTemp !== null && p.cpuTemp !== undefined) tiles.push(statCard('CPU heat', `${p.cpuTemp}°C`, p.fanRpm ? `Fan ${p.fanRpm.toLocaleString()} rpm` : 'No fan reading'));
+  if (p.hottestDrive) tiles.push(statCard('Hottest drive', `${p.hottestDrive.temp}°C`, p.hottestDrive.name));
+  $('#status-power').replaceChildren(...tiles);
+  const note = $('#status-power-note');
+  let text = '';
+  if (p.missing) text = 'Waiting for the roost-smart helper. Power and heat appear once it is running with the /sys line from the compose file.';
+  else if (p.stale) text = `Power and heat readings have stopped; the last was ${ago(p.at)}. Is roost-smart running?`;
+  else if (!tiles.length) text = 'This server doesn\'t report power or heat to Roost.';
+  else if (p.power) text = 'Power is the CPU\'s own reading plus about 6 W for the board and 4 W per spinning hard drive, so the wall figure is usually a few watts higher. The cost uses your price under Admin → Server.';
+  else text = 'This server doesn\'t report CPU power, so there is no power estimate.';
+  note.textContent = text;
+  note.classList.toggle('hidden', !text);
+}
+
 function renderHealth(h) {
   $('#status-health-wrap').classList.toggle('hidden', !h);
   if (!h) return;
@@ -1870,6 +1895,7 @@ function renderStatus(s) {
     return statCard(d.label, `${bytes(d.free)} free`, `${bytes(used)} of ${bytes(d.total)} used`, pct(used, d.total));
   }));
 
+  renderPower(s.sensors);
   renderHealth(s.driveHealth);
   renderOutside(s.outside);
 
@@ -2425,6 +2451,8 @@ const adminLoaders = {
     const form = $('#settings-form');
     form.adminsNeedTwoStep.checked = settings.adminsNeedTwoStep;
     form.publicLinks.checked = settings.publicLinks;
+    form.energyPrice.value = settings.energyPrice;
+    form.energyCurrency.value = settings.energyCurrency;
     form.serverName.value = state.serverName;
     form.publicUrl.value = settings.publicUrl;
     state.publicUrl = settings.publicUrl;
@@ -2884,6 +2912,8 @@ $('#settings-form').addEventListener('submit', async (e) => {
       defaultLimitGb: pickers.default.getValue(),
       adminsNeedTwoStep: e.target.adminsNeedTwoStep.checked,
       publicLinks: e.target.publicLinks.checked,
+      energyPrice: e.target.energyPrice.value,
+      energyCurrency: e.target.energyCurrency.value,
       publicUrl: e.target.publicUrl.value,
     });
     setServerName(settings.serverName);

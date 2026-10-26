@@ -21,6 +21,7 @@ const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor, restartContainer } = require('./docker');
 const { UpdateChecker } = require('./updates');
 const { DriveHealth } = require('./smart');
+const { Sensors, priceOf } = require('./sensors');
 const { OutsideServices } = require('./outside');
 const remoteAccess = require('./remote');
 const { Coffee, validSecret, newSecret } = require('./coffee');
@@ -325,6 +326,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   const updates = new UpdateChecker({ dataDir, dockerHost, fetch: registryFetch });
   // SMART readings the roost-smart helper leaves behind; null when it isn't set up.
   const driveHealth = new DriveHealth(smartDir);
+  // CPU power and heat from the same helper; null when it isn't set up.
+  const sensors = new Sensors(smartDir);
 
   // The family space is stored in Nest like one more user (see src/family.js).
   family.familyOf(db());
@@ -822,7 +825,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   function settingsView() {
     // The Cloudflare token (in tls) stays on the server.
     const { mail: _mail, jellyfin: _jellyfin, tls: _tls, coffee: _coffee, wireguard: _wireguard, galaxies: _galaxies, ...rest } = db().settings;
-    return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()), publicLinks: rest.publicLinks !== false };
+    return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()), publicLinks: rest.publicLinks !== false, ...energyView() };
   }
 
   // The admin's notice on the dashboard. Expired notices are simply not
@@ -861,6 +864,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       ...certs.status(),
       connection: { secure: isSecure(req, trustProxy), viaCloudflare: !!req.headers['cf-connecting-ip'], host: requestHost(req) },
     };
+  }
+
+  // The electricity price for the power cost, per kWh in pence (or cents).
+  function energyView() {
+    const { price, currency } = priceOf(db().settings);
+    return { energyPrice: price, energyCurrency: currency };
   }
 
   function cleanDiskPct(v) {
@@ -1463,6 +1472,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         ...health,
         docker: docker.error ? { ok: false, error: docker.error } : { ok: true },
         driveHealth: driveHealth.read(),
+        // Power, CPU heat and the hottest drive, for admins only.
+        sensors: user.role === 'admin' ? sensors.view({ driveHealth: driveHealth.read(), settings: db().settings }) : null,
         apps,
         // Everything else Docker runs, for admins only.
         otherContainers: user.role === 'admin' ? all.filter((c) => !claimed.has(c.id)) : [],
@@ -2022,6 +2033,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         nestDir: nestDir || path.join(dataDir, 'nest'),
         drives: readDisks(diskList),
         driveHealth: driveHealth.read(),
+        sensors: sensors.view({ driveHealth: driveHealth.read(), settings: db().settings }),
         dockerOk: !docker.error,
         restartable: docker.restartable || [],
         secureCookies,
@@ -2200,6 +2212,19 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (body.mail !== undefined) {
         db().settings.mail = cleanMail(body.mail, mailSettings());
         changes.push(`email ${db().settings.mail ? `via ${db().settings.mail.host}` : 'turned off'}`);
+      }
+      if (body.energyPrice === '' || body.energyPrice === null) {
+        delete db().settings.energyPrice; // back to the built-in default
+      } else if (body.energyPrice !== undefined) {
+        const n = Number(body.energyPrice);
+        if (!Number.isFinite(n) || n < 0 || n > 1000) throw new HttpError(400, 'Electricity price must be a number from 0 to 1000 (pence per kWh)');
+        db().settings.energyPrice = +n.toFixed(2);
+        changes.push('electricity price');
+      }
+      if (body.energyCurrency !== undefined) {
+        const c = String(body.energyCurrency).trim();
+        if (!c || c.length > 3) throw new HttpError(400, 'Currency symbol must be 1 to 3 characters');
+        db().settings.energyCurrency = c;
       }
       const alertsBefore = alertSettings(db());
       if (body.alertApps !== undefined) db().settings.alertApps = body.alertApps === true;
