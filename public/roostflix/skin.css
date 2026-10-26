@@ -150,9 +150,9 @@ a { color: var(--rf-cream); }
 }
 
 /* Request a movie, Save to Files */
-.rf-request, .rf-save { background: transparent; color: #fff; border: 1px solid #555; border-radius: 999px; padding: 0 14px; min-height: 36px; margin: 0 8px; font: inherit; font-size: 0.85rem; cursor: pointer; display: inline-flex; align-items: center; text-decoration: none; }
-@media (hover: hover) { .rf-request:hover, .rf-save:hover { border-color: #fff; } }
-@media (pointer: coarse) { .rf-request, .rf-save { min-height: 44px; } }
+.rf-save { background: transparent; color: #fff; border: 1px solid #555; border-radius: 999px; padding: 0 14px; min-height: 36px; margin: 0 8px; font: inherit; font-size: 0.85rem; cursor: pointer; display: inline-flex; align-items: center; text-decoration: none; }
+@media (hover: hover) { .rf-save:hover { border-color: #fff; } }
+@media (pointer: coarse) { .rf-save { min-height: 44px; } }
 .rf-sheet { position: fixed; inset: 0; z-index: 10000; background: rgba(0,0,0,.75); display: flex; align-items: center; justify-content: center; padding: 16px; }
 .rf-box { background: #0b0b0b; color: #fff; border: 1px solid #333; border-radius: 12px; padding: 20px; width: min(420px, 100%); max-height: 90dvh; overflow: auto; }
 .rf-box h2 { margin: 0 0 12px; font-size: 1.1rem; }

@@ -333,15 +333,25 @@
     input.focus();
   }
 
+  // In Jellyfin's pop-out menu (not the header, so never over the player).
   function mountRequestButton() {
-    if (document.querySelector('.rf-request')) return;
-    const host = document.querySelector('.headerRight') || document.querySelector('.skinHeader');
-    if (!host) return;
-    const b = el('button', 'rf-request', 'Request');
-    b.type = 'button';
-    b.title = 'Request a movie';
-    b.onclick = openRequest;
-    host.prepend(b);
+    if (document.querySelector('.rf-request')) return true;
+    const host = document.querySelector('.mainDrawer .customMenuOptions') || document.querySelector('.mainDrawer-scrollContainer');
+    if (!host) return false;
+    const a = el('a', 'navMenuOption rf-request');
+    a.href = '#';
+    a.setAttribute('role', 'button');
+    const icon = el('span', 'material-icons navMenuOptionIcon', 'movie');
+    icon.setAttribute('aria-hidden', 'true');
+    a.append(icon, el('span', 'navMenuOptionText', 'Request a movie'));
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const close = document.querySelector('.mainDrawer-backdrop, .dialogBackdrop');
+      if (close) close.click();
+      openRequest();
+    });
+    host.append(a);
+    return true;
   }
 
   // ---------- Save to Files ----------
@@ -364,7 +374,7 @@
   }
 
   const later = (fn) => { let n = 0; const t = () => { if (!fn() && n++ < 20) setTimeout(t, 250); }; t(); };
-  const refreshExtras = () => { later(() => { mountRequestButton(); return document.querySelector('.rf-request'); }); mountSave(); };
+  const refreshExtras = () => { later(mountRequestButton); mountSave(); };
   document.addEventListener('viewshow', refreshExtras);
   refreshExtras();
 
