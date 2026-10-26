@@ -1714,3 +1714,4 @@ a.app-card:active { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--shad
 .sentinel-row { align-items: center; justify-content: space-between; }
 .sentinel-main { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .sentinel-sub { margin-top: 16px; }
+.sentinel-actions { display: flex; gap: 8px; align-items: center; flex: none; }

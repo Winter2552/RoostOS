@@ -52,7 +52,7 @@ const roostflix = require('./roostflix');
 const { UptimeLog, watchDockerEvents } = require('./uptime');
 const { Watcher, alertSettings, alertsOf } = require('./alerts');
 const { AccountGuard, SecurityWatch, securityChecks, isPrivateIp } = require('./security');
-const { Sentinel, MODES: SENTINEL_MODES } = require('./sentinel');
+const { Sentinel, MODES: SENTINEL_MODES, buildReport } = require('./sentinel');
 const { checkPorts } = require('./portcheck');
 const { Push } = require('./push');
 
@@ -640,6 +640,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   }
 
   // ---------- Jellyfin ----------
+
+  const movieRequests = () => {
+    if (!Array.isArray(db().movieRequests)) db().movieRequests = [];
+    return db().movieRequests;
+  };
 
   function canUseJellyfin(user) {
     return visibleApps(db(), user).some((a) => a.id === 'jellyfin');
@@ -1607,6 +1612,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (jellyfin.enabled()) jellyfin.disable(gone.username).catch(jellyfinFailed);
       db().links = (db().links || []).filter((l) => l.userId !== id);
       db().storageRequests = storage.requestsOf(db()).filter((r) => r.userId !== id);
+      db().movieRequests = movieRequests().filter((r) => r.userId !== id);
       const fam = family.familyOf(db());
       fam.members = fam.members.filter((m) => m !== id);
       store.save();
@@ -2373,6 +2379,17 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 200, sentinel.view());
     },
 
+    // A text file to hand to Claude: how the incident looked, with no secrets.
+    'GET /api/admin/sentinel/report': (req, res) => {
+      requireAdmin(req);
+      const id = new URL(req.url, 'http://roost').searchParams.get('incident');
+      const incident = sentinel.incidents.find((i) => i.id === id);
+      if (!incident || !incident.evidence) throw new HttpError(404, 'That incident has no report any more');
+      const text = buildReport({ incident, entries: activity.entries, users: db().users, settings: db().settings, version: APP_VERSION, mode: sentinel.mode, bans: sentinel.view().bans });
+      res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Content-Disposition': `attachment; filename="roost-incident-${incident.at.slice(0, 10)}-${incident.kind}.md"`, 'Cache-Control': 'no-store' });
+      res.end(text);
+    },
+
     'POST /api/admin/sentinel/ban': async (req, res) => {
       const admin = requireAdmin(req);
       const body = await readJson(req);
@@ -2706,6 +2723,55 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 201, { request });
     },
 
+    // Roostflix "Request a movie": people ask, the admin gets a phone alert and
+    // marks it added or dismissed.
+    'GET /api/roostflix/requests': (req, res) => {
+      const user = requireUser(req);
+      if (!canUseJellyfin(user)) throw new HttpError(403, "You don't have access to Roostflix");
+      send(res, 200, { requests: movieRequests().filter((r) => r.userId === user.id).slice(-8).reverse().map(({ id, title, status }) => ({ id, title, status })) });
+    },
+
+    'POST /api/roostflix/requests': async (req, res) => {
+      const user = requireUser(req);
+      if (!canUseJellyfin(user)) throw new HttpError(403, "You don't have access to Roostflix");
+      const body = await readJson(req);
+      const title = str(body.title, 120);
+      if (!title) throw new HttpError(400, 'Type the title you want');
+      const mine = movieRequests().filter((r) => r.userId === user.id && r.status === 'open');
+      if (mine.length >= 5) throw new HttpError(409, 'You already have 5 requests waiting');
+      if (mine.some((r) => r.title.toLowerCase() === title.toLowerCase())) throw new HttpError(409, 'You already asked for that one');
+      const request = { id: store.newId(), userId: user.id, title, note: str(body.note, 300), status: 'open', createdAt: new Date().toISOString() };
+      movieRequests().push(request);
+      store.save();
+      record(req, 'movie-requested', { actor: user.username, detail: title });
+      push.notify({ title: 'Movie request', body: `${user.displayName || user.username} asks for ${title}`, tag: `movie-${request.id}`, url: '/#/admin' });
+      send(res, 201, { request: { id: request.id, title, status: 'open' } });
+    },
+
+    'GET /api/admin/movie-requests': (req, res) => {
+      requireAdmin(req);
+      const users = new Map(db().users.map((u) => [u.id, u]));
+      const requests = movieRequests().filter((r) => r.status === 'open').map((r) => {
+        const u = users.get(r.userId);
+        return { ...r, user: u && { username: u.username, displayName: u.displayName } };
+      });
+      send(res, 200, { requests });
+    },
+
+    'POST /api/admin/movie-requests/:id': async (req, res, id) => {
+      const admin = requireAdmin(req);
+      const request = movieRequests().find((r) => r.id === id);
+      if (!request) throw new HttpError(404, 'No such request');
+      if (request.status !== 'open') throw new HttpError(409, `That request was already ${request.status}`);
+      const body = await readJson(req);
+      if (body.action !== 'added' && body.action !== 'dismiss') throw new HttpError(400, 'Action must be added or dismiss');
+      request.status = body.action === 'added' ? 'added' : 'dismissed';
+      request.decidedAt = new Date().toISOString();
+      store.save();
+      if (request.status === 'added') push.notify({ title: 'Now on Roostflix', body: request.title, tag: `movie-${request.id}`, url: `${JELLYFIN_PREFIX}/` }, request.userId);
+      send(res, 200, { request });
+    },
+
     'GET /api/admin/storage-requests': (req, res) => {
       requireAdmin(req);
       const users = new Map(db().users.map((u) => [u.id, u]));
@@ -2774,7 +2840,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/setup|admin\/galaxies|storage\/users|links|me\/devices|alerts|push\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart|\/secret|\/compose|\/check|\/dismiss)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/movie-requests|admin\/setup|admin\/galaxies|storage\/users|links|me\/devices|alerts|push\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart|\/secret|\/compose|\/check|\/dismiss)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }
@@ -2807,8 +2873,22 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     return Boolean(user && jellyfin.enabled() && canUseJellyfin(user));
   }
 
+  // AirPlay hands the video's address to the Apple TV, which fetches it
+  // itself with no Roost cookie, only the Jellyfin token in the address. Let
+  // that one kind of request through: reading a stream, with a token Roost
+  // issued to someone still allowed to use Jellyfin.
+  function jellyfinStreamAllowed(req, pathname) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+    if (!/^\/jellyfin\/(?:Videos|Audio)\//i.test(pathname)) return false;
+    const q = new URL(req.url, 'http://roost').searchParams;
+    const token = q.get('api_key') || q.get('ApiKey') || q.get('apikey') || req.headers['x-emby-token'];
+    const s = sessions.byJellyfinToken(token);
+    const user = s && db().users.find((u) => u.id === s.userId);
+    return Boolean(user && !guestEnded(user) && jellyfin.enabled() && canUseJellyfin(user));
+  }
+
   function serveJellyfin(req, res, pathname) {
-    if (!jellyfinAllowed(req)) {
+    if (!jellyfinAllowed(req) && !jellyfinStreamAllowed(req, pathname)) {
       if (req.method === 'GET') {
         res.writeHead(302, { Location: '/', 'Cache-Control': 'no-store' });
         return res.end();
@@ -3026,6 +3106,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
         return res.end('Blocked');
       }
+      const seen = sentinel.trace(ip, req.method, req.url, req.headers['user-agent']);
+      if (seen) res.on('finish', () => { seen.status = res.statusCode; });
       sentinel.request(ip, req.url);
     }
     if (lockedOut(req)) {

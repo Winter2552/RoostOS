@@ -2351,6 +2351,31 @@ function openSetupAction({ view, focus, field }) {
 
 // ---------- admin sections ----------
 
+async function loadMovieRequests() {
+  try {
+    const { requests } = await api('GET', '/api/admin/movie-requests');
+    $('#movie-requests-panel').classList.toggle('hidden', !requests.length);
+    $('#movie-requests-admin').replaceChildren(...requests.map((r) => {
+      const name = r.user ? r.user.displayName : 'Removed user';
+      const msg = el('div', { class: 'msg' });
+      const decide = async (action) => {
+        try { await api('POST', `/api/admin/movie-requests/${r.id}`, { action }); loadMovieRequests(); } catch (err) { msg.className = 'msg error'; msg.textContent = err.message; }
+      };
+      return el('div', { class: 'request-row' },
+        el('div', { class: 'who' },
+          el('span', { class: 'avatar', text: name.charAt(0).toUpperCase() }),
+          el('div', {},
+            el('div', { text: r.title }),
+            el('div', { class: 'mono muted', text: `${name} · ${shortDate(r.createdAt)}` }),
+            r.note ? el('div', { class: 'request-note', text: `“${r.note}”` }) : null)),
+        el('div', { class: 'row', style: 'margin:0' },
+          el('button', { class: 'btn small', type: 'button', text: 'Added', onclick: () => decide('added') }),
+          el('button', { class: 'btn ghost small', type: 'button', text: 'Dismiss', onclick: () => decide('dismiss') })),
+        msg);
+    }));
+  } catch { /* the panel just stays hidden */ }
+}
+
 function renderAdminNav() {
   const todo = new Set(setupState.steps.filter((s) => !s.done && !s.optional).map((s) => s.section));
   $('#admin-nav').replaceChildren(...ADMIN_SECTIONS.map(([id, name]) => el('a', {
@@ -2380,6 +2405,7 @@ const adminLoaders = {
   async overview() {
     const [{ requests }] = await Promise.all([api('GET', '/api/admin/storage-requests'), loadSecurity()]);
     renderStorageRequests(requests);
+    loadMovieRequests();
     $('#requests-panel').classList.toggle('hidden', !requests.length);
     if (state.notice && !$('#notice-form').text.value) { $('#notice-form').text.value = state.notice.text; previewNotice(); }
   },
@@ -2925,12 +2951,13 @@ function sentinelRow(inc) {
   const act = inc.handled ? el('span', { class: 'pill', text: inc.handled })
     : inc.ip ? el('button', { class: 'btn ghost small', type: 'button', text: 'Ban', onclick: () => sentinelPost('ban', { incident: inc.id }) })
       : '';
+  const report = inc.report ? el('a', { class: 'btn ghost small', href: `/api/admin/sentinel/report?incident=${encodeURIComponent(inc.id)}`, download: '', text: 'Report' }) : '';
   return el('li', { class: 'security-row sentinel-row' },
     el('span', { class: `dot ${inc.handled ? 'online' : 'offline'}` }),
     el('div', { class: 'sentinel-main' },
       el('div', { class: 'security-what', text: `${SENTINEL_WHAT[inc.kind] || inc.kind}${inc.ip ? ` · ${inc.ip}` : ''}` }),
       el('div', { class: 'mono muted', text: `${inc.detail} ${ago(inc.at)}` })),
-    act);
+    el('div', { class: 'sentinel-actions' }, report, act));
 }
 
 async function sentinelPost(action, body) {

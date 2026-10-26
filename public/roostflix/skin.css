@@ -148,3 +148,21 @@ a { color: var(--rf-cream); }
   .rf-slide { transition: none; }
   .rf-slide.rf-active .rf-back { animation: none; }
 }
+
+/* Request a movie, Save to Files */
+.rf-save { background: transparent; color: #fff; border: 1px solid #555; border-radius: 999px; padding: 0 14px; min-height: 36px; margin: 0 8px; font: inherit; font-size: 0.85rem; cursor: pointer; display: inline-flex; align-items: center; text-decoration: none; }
+@media (hover: hover) { .rf-save:hover { border-color: #fff; } }
+@media (pointer: coarse) { .rf-save { min-height: 44px; } }
+.rf-sheet { position: fixed; inset: 0; z-index: 10000; background: rgba(0,0,0,.75); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.rf-box { background: #0b0b0b; color: #fff; border: 1px solid #333; border-radius: 12px; padding: 20px; width: min(420px, 100%); max-height: 90dvh; overflow: auto; }
+.rf-box h2 { margin: 0 0 12px; font-size: 1.1rem; }
+.rf-box input { width: 100%; box-sizing: border-box; background: #000; color: #fff; border: 1px solid #444; border-radius: 8px; padding: 10px; margin-bottom: 8px; font-size: 16px; }
+.rf-row { display: flex; gap: 8px; }
+.rf-btn { background: #fff; color: #000; border: 0; border-radius: 999px; padding: 0 18px; min-height: 40px; font: inherit; cursor: pointer; }
+.rf-btn.rf-ghost { background: transparent; color: #fff; border: 1px solid #555; }
+.rf-btn:disabled { opacity: .5; }
+.rf-msg { min-height: 1.2em; font-size: .85rem; color: #bbb; margin: 8px 0; }
+.rf-list { list-style: none; margin: 0; padding: 0; font-size: .9rem; }
+.rf-list li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid #222; }
+.rf-list b { font-weight: 400; color: #999; }
+.rf-list b.rf-added { color: #fff; }
