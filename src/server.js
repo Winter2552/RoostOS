@@ -3,6 +3,7 @@
 const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
+const net = require('net');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -49,7 +50,8 @@ const { Jellyfin, PREFIX: JELLYFIN_PREFIX, OPENER_HTML } = require('./jellyfin')
 const roostflix = require('./roostflix');
 const { UptimeLog, watchDockerEvents } = require('./uptime');
 const { Watcher, alertSettings, alertsOf } = require('./alerts');
-const { AccountGuard, SecurityWatch, securityChecks } = require('./security');
+const { AccountGuard, SecurityWatch, securityChecks, isPrivateIp } = require('./security');
+const { Sentinel, MODES: SENTINEL_MODES } = require('./sentinel');
 const { checkPorts } = require('./portcheck');
 const { Push } = require('./push');
 
@@ -476,6 +478,14 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     ...pushOptions,
   });
   const secWatch = new SecurityWatch({ store, push, newId: () => store.newId() });
+  const sentinel = new Sentinel({
+    dataDir,
+    store,
+    raise: (key, title, detail) => secWatch.raise(key, title, detail),
+    lockdown: (by) => engageLockdown(by),
+    // Never ban the home network, or Cloudflare's own addresses.
+    skip: (ip) => isPrivateIp(ip) || remoteAccess.isCloudflare(ip),
+  });
   const watcher = new Watcher({
     store,
     tidy: (t) => secWatch.tidy(t),
@@ -575,6 +585,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   function record(req, type, fields = {}) {
     activity.add(type, { ...fields, ip: clientIp(req, trustProxy) });
     secWatch.onActivity(type, fields);
+    if (type === 'sign-in-failed') {
+      if (req.socket.encrypted && !/^guest/.test(fields.detail || '')) sentinel.failedSignIn(clientIp(req, trustProxy), fields.target);
+    } else if (type !== 'sign-in' && type !== 'sign-out') {
+      sentinel.reseal(); // a change through a Roost screen, so not tampering
+    }
   }
 
   const gbText = (limit) => (limit === null ? 'no limit' : `${limit} GB`);
@@ -2289,6 +2304,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
           outside: Boolean(cert),
           lockdown: db().settings.lockdown || null,
           ports: db().settings.portCheck || null,
+          sentinelMode: sentinel.mode,
           backupTest: (backup.readStatus(dataDir) || {}).verify || null,
         }),
         lockdown: db().settings.lockdown || null,
@@ -2313,6 +2329,43 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 200, { ports: db().settings.portCheck });
     },
 
+    // ---------- Sentinel ----------
+
+    'GET /api/admin/sentinel': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, sentinel.view());
+    },
+
+    'PUT /api/admin/sentinel': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      if (!SENTINEL_MODES.includes(body.mode)) throw new HttpError(400, 'Choose off, manual or auto');
+      if (body.mode !== sentinel.mode) {
+        sentinel.setMode(body.mode);
+        record(req, 'settings-changed', { actor: admin.username, detail: `Sentinel ${body.mode}` });
+        if (body.mode !== 'off') sentinel.checkSeal();
+      }
+      send(res, 200, sentinel.view());
+    },
+
+    'POST /api/admin/sentinel/ban': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const incident = typeof body.incident === 'string' && sentinel.incidents.find((i) => i.id === body.incident);
+      const ip = incident ? incident.ip : str(body.ip, 45);
+      if (!ip || net.isIP(ip) === 0) throw new HttpError(400, 'That is not an address');
+      if (!sentinel.ban(ip, incident ? incident.kind : 'by hand')) throw new HttpError(400, 'That address is on your home network or Cloudflare, so it can’t be banned');
+      record(req, 'settings-changed', { actor: admin.username, detail: `Sentinel banned ${ip}` });
+      send(res, 200, sentinel.view());
+    },
+
+    'POST /api/admin/sentinel/unban': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      if (sentinel.unban(str(body.ip, 45))) record(req, 'settings-changed', { actor: admin.username, detail: `Sentinel unbanned ${str(body.ip, 45)}` });
+      send(res, 200, sentinel.view());
+    },
+
     // One tap to shut the door: outside access pauses, every sign-in ends (except
     // this one) and two-step "trusted device" cookies stop counting. Lifting it
     // brings outside access back; people sign in again.
@@ -2321,16 +2374,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const body = await readJson(req);
       const on = body.on === true;
       if (on === Boolean(db().settings.lockdown)) return send(res, 200, { lockdown: db().settings.lockdown || null });
-      if (on) {
-        db().settings.lockdown = { at: new Date().toISOString(), by: admin.username };
-        for (const u of db().users) {
-          u.trusted = [];
-          sessions.destroyUser(u.id, u.id === admin.id ? tokenOf(req) : null);
-        }
-        secWatch.raise('sec:lockdown', 'Lockdown is on', `${admin.username} paused outside access and signed everyone out.`);
-      } else {
-        delete db().settings.lockdown;
-      }
+      if (on) engageLockdown(admin.username, admin.id, tokenOf(req));
+      else delete db().settings.lockdown;
       store.save();
       record(req, on ? 'lockdown-on' : 'lockdown-off', { actor: admin.username });
       send(res, 200, { lockdown: db().settings.lockdown || null });
@@ -2917,6 +2962,20 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     return remote.blocks(req);
   }
 
+  // Shuts outside access and ends every sign-in except one (the admin pressing
+  // the button; Sentinel, acting alone, keeps none).
+  function engageLockdown(by, keepUserId = null, keepToken = null) {
+    if (db().settings.lockdown) return;
+    db().settings.lockdown = { at: new Date().toISOString(), by };
+    for (const u of db().users) {
+      u.trusted = [];
+      sessions.destroyUser(u.id, u.id === keepUserId ? keepToken : null);
+    }
+    secWatch.raise('sec:lockdown', 'Lockdown is on', `${by} paused outside access and signed everyone out.`);
+    store.save();
+    if (by === 'Sentinel') activity.add('lockdown-on', { actor: by, ip: '' });
+  }
+
   // Lockdown pauses everything that comes in from outside. The router forwards
   // 443 only, so outside traffic is exactly what arrives over HTTPS; the plain
   // home address keeps working so the admin can always get back in and lift it.
@@ -2935,6 +2994,14 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     if (screen(req)) {
       res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
       return res.end('Use the Roost address, not the IP');
+    }
+    if (req.socket.encrypted) {
+      const ip = clientIp(req, trustProxy);
+      if (sentinel.isBanned(ip)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+        return res.end('Blocked');
+      }
+      sentinel.request(ip, req.url);
     }
     if (lockedOut(req)) {
       res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8', 'Retry-After': '3600' });
@@ -2999,7 +3066,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // Live updates from Jellyfin (a WebSocket) pass through on both the HTTP and
   // HTTPS side.
   function onUpgrade(req, socket, head) {
-    if (screen(req) || lockedOut(req)) return socket.destroy();
+    if (screen(req) || lockedOut(req) || (req.socket.encrypted && sentinel.isBanned(clientIp(req, trustProxy)))) return socket.destroy();
     const { pathname } = new URL(req.url, 'http://roost');
     if (pathname.startsWith(`${JELLYFIN_PREFIX}/`) && jellyfinAllowed(req)) return jellyfin.proxyUpgrade(req, socket, head);
     socket.destroy();
@@ -3020,8 +3087,10 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     return secureServer;
   };
   watcher.start(alertIntervalMs);
+  sentinel.start();
   server.on('close', () => {
     watcher.stop();
+    sentinel.stop();
     certs.stop();
     outside.stop();
     remote.stop();
@@ -3043,6 +3112,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   server.glint = glint;
   server.photoBackup = photoBackup;
   server.watcher = watcher;
+  server.sentinel = sentinel;
   server.push = push;
   // Save anything still waiting, e.g. when the container is stopped.
   server.flushAll = () => {
@@ -3051,6 +3121,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     activity.flush();
     traffic.flush();
     sessions.flush();
+    sentinel.flush();
   };
   return server;
 }

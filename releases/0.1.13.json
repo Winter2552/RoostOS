@@ -1,0 +1,14 @@
+{
+  "version": "0.1.13",
+  "date": "2026-10-26",
+  "title": "Sentinel",
+  "summary": "A forced-entry watcher with off, manual and auto modes",
+  "items": [
+    {
+      "title": "Sentinel",
+      "text": "A small watcher that spots scanners, password guessing and tampering with the admin accounts. In Manual it alerts you and offers a Ban button; in Auto it bans offenders and locks Roost down on its own while you're busy.",
+      "image": "sentinel.png",
+      "admin": true
+    }
+  ]
+}

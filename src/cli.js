@@ -7,6 +7,7 @@
 
 const path = require('path');
 const { Store } = require('./store');
+const { sealFile } = require('./sentinel');
 
 const [command, username] = process.argv.slice(2);
 const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
@@ -25,4 +26,6 @@ if (!user) {
 delete user.twoStep;
 user.trusted = [];
 store.save();
+store.flush();
+sealFile(dataDir, store.db); // a fix by hand, so Sentinel shouldn't call it tampering
 console.log(`Two-step sign-in is off for ${user.username}. Restart Roost (docker restart roost), then sign in with just the password and set it up again.`);
