@@ -367,4 +367,59 @@
   const refreshExtras = () => { later(() => { mountRequestButton(); return document.querySelector('.rf-request'); }); mountSave(); };
   document.addEventListener('viewshow', refreshExtras);
   refreshExtras();
+
+  // ---------- AirPlay: send H.264 ----------
+  // Many TVs with built-in AirPlay take the sound of an HEVC film but not the
+  // picture. While this page is casting, Jellyfin is told the player can't do
+  // HEVC, so it converts the picture to H.264, then the film restarts where it was.
+  let casting = false;
+  const noHevc = (list) => String(list || '').split(',').map((c) => c.trim()).filter((c) => c && !/^(hevc|h265)$/i.test(c)).join(',');
+  function plainProfile(profile) {
+    const p = JSON.parse(JSON.stringify(profile));
+    for (const key of ['DirectPlayProfiles', 'TranscodingProfiles']) {
+      p[key] = (p[key] || []).filter((x) => x.Type !== 'Video' || x.VideoCodec === undefined || noHevc(x.VideoCodec) || !x.VideoCodec).map((x) => {
+        if (x.Type === 'Video' && x.VideoCodec) x.VideoCodec = noHevc(x.VideoCodec);
+        return x;
+      });
+    }
+    return p;
+  }
+  const realFetch = window.fetch;
+  window.fetch = function (input, init) {
+    try {
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      if (casting && init && typeof init.body === 'string' && /\/Items\/[\w-]+\/PlaybackInfo/.test(url)) {
+        const body = JSON.parse(init.body);
+        if (body && body.DeviceProfile) {
+          body.DeviceProfile = plainProfile(body.DeviceProfile);
+          init = { ...init, body: JSON.stringify(body) };
+        }
+      }
+    } catch { /* leave the request as it was */ }
+    return realFetch.call(this, input, init);
+  };
+
+  async function restartForCast(video) {
+    const s = session();
+    const c = window.ApiClient;
+    if (!s || !c || !c.deviceId) return;
+    try {
+      const list = await get(s, `/Sessions?DeviceId=${encodeURIComponent(c.deviceId())}`);
+      const now = (list.find((x) => x.NowPlayingItem) || {});
+      if (!now.Id || !safe(now.NowPlayingItem.Id)) return;
+      const ticks = Math.floor((video.currentTime || 0) * 1e7);
+      await realFetch(`${s.base}/Sessions/${encodeURIComponent(now.Id)}/Playing?playCommand=PlayNow&itemIds=${now.NowPlayingItem.Id}&startPositionTicks=${ticks}`, {
+        method: 'POST', headers: { Authorization: `MediaBrowser Client="Roostflix", Device="Browser", DeviceId="roostflix", Version="1", Token="${s.token}"` },
+      });
+    } catch { /* it keeps playing as it was */ }
+  }
+
+  document.addEventListener('webkitcurrentplaybacktargetiswirelesschanged', (e) => {
+    const video = e.target;
+    if (!video || video.tagName !== 'VIDEO') return;
+    const now = Boolean(video.webkitCurrentPlaybackTargetIsWireless);
+    if (now === casting) return;
+    casting = now;
+    restartForCast(video);
+  }, true);
 })();
