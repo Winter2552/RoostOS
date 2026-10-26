@@ -8,6 +8,7 @@
 //
 // Each step:
 //   id, group, title    shown in the list
+//   section             the Admin section it belongs to (one of SECTIONS), used to group the list
 //   why                 one line: what it gives you
 //   how                 the steps, in order, including any outside Roost
 //   action              where in Roost to do it: { label, view, focus, field }
@@ -30,10 +31,14 @@ function driveSize(dir) {
   }
 }
 
+// The Admin sections, in nav order. Admin's tabs (public/app.js ADMIN_SECTIONS) match.
+const SECTIONS = ['overview', 'setup', 'people', 'apps', 'storage', 'network', 'security', 'server'];
+
 const STEPS = [
   // ---------- the server ----------
   {
     id: 'data-drive',
+    section: 'storage',
     group: 'Server',
     title: 'Keep Nest and Glint on the 3 TB drive',
     why: 'Files and photos go on the big data drive, not the 240 GB system SSD. Glint keeps its photos in Nest\'s folder, so this one setting covers both.',
@@ -42,12 +47,13 @@ const STEPS = [
       'Under "Where Nest keeps its files", pick the drive and press Move Nest here. This works while Nest is empty; Roost restarts for a minute or two.',
       'If Nest already has files, copy them across by hand first (see the README).',
     ],
-    action: { label: 'Open Admin', view: 'admin' },
+    action: { label: 'Open Storage', view: 'admin', focus: 'nestdrive-panel' },
     covers: ['NEST_DIR'],
     check: (ctx) => driveSize(ctx.nestDir) >= TB,
   },
   {
     id: 'drives',
+    section: 'storage',
     group: 'Server',
     title: 'Show both drives on the status page',
     why: 'See how full the SSD and the data drive are, and get warned before either fills up.',
@@ -61,6 +67,7 @@ const STEPS = [
   },
   {
     id: 'drive-health',
+    section: 'storage',
     group: 'Server',
     title: 'Watch your drives\' health',
     covers: ['SMART_DIR'],
@@ -81,6 +88,7 @@ const STEPS = [
   },
   {
     id: 'docker',
+    section: 'server',
     group: 'Server',
     title: 'Let Roost see your containers',
     why: 'The status page shows whether each app\'s container is running, crashing or stopped.',
@@ -94,6 +102,7 @@ const STEPS = [
   },
   {
     id: 'restart',
+    section: 'apps',
     group: 'Server',
     title: 'Choose which apps admins can restart, and when',
     why: 'A stuck app gets a Restart button on the status page, and apps can restart themselves on a schedule.',
@@ -111,6 +120,7 @@ const STEPS = [
   },
   {
     id: 'backup-drive',
+    section: 'storage',
     group: 'Server',
     title: 'Plug in the backup drive',
     why: 'Every night Roost backs up Nest, the apps\' settings and its own data to it. Films and shows are left out.',
@@ -125,6 +135,7 @@ const STEPS = [
   },
   {
     id: 'first-backup',
+    section: 'storage',
     group: 'Server',
     title: 'Finish the first backup',
     why: 'Starts by itself a few minutes after Roost finds the drive. The first one copies everything, so it takes longest.',
@@ -136,6 +147,7 @@ const STEPS = [
   },
   {
     id: 'self-update',
+    section: 'server',
     group: 'Server',
     title: 'Update Roost from inside Roost',
     why: 'The Update card on the Status page shows what is new on GitHub and updates Roost with one button, putting the old version back if the new one fails.',
@@ -150,6 +162,7 @@ const STEPS = [
   },
   {
     id: 'app-links',
+    section: 'apps',
     group: 'Server',
     title: 'Link every app',
     why: 'App cards open the app instead of showing "Not set up".',
@@ -162,6 +175,7 @@ const STEPS = [
   },
   {
     id: 'jellyfin-sign-in',
+    section: 'apps',
     group: 'Server',
     title: 'Connect Jellyfin sign-in',
     why: 'Everyone uses their Roost username and password in Jellyfin, and the Jellyfin card opens it already signed in. The dashboard also shows what each person was part way through watching.',
@@ -178,6 +192,7 @@ const STEPS = [
   },
   {
     id: 'roostflix',
+    section: 'apps',
     group: 'Server',
     title: 'Roostflix look for Jellyfin',
     why: 'Jellyfin opens as Roostflix: a black, Netflix-style page with its own name and logo.',
@@ -194,6 +209,7 @@ const STEPS = [
   // ---------- reaching Roost from anywhere ----------
   {
     id: 'public-address',
+    section: 'server',
     group: 'Reach it from anywhere',
     title: 'Give Roost its web address',
     why: 'Invite and reset links use it, so they open from anywhere.',
@@ -208,6 +224,7 @@ const STEPS = [
   },
   {
     id: 'behind-proxy',
+    section: 'network',
     group: 'Reach it from anywhere',
     title: 'Behind a tunnel or proxy? Tell Roost',
     why: 'Sign-in cookies stay on HTTPS and the activity log shows visitors\' real addresses. Skip this if Roost answers on its own address.',
@@ -221,6 +238,7 @@ const STEPS = [
   },
   {
     id: 'upload-meter',
+    section: 'network',
     group: 'Reach it from anywhere',
     title: 'Watch what leaves the house',
     why: 'Home upload is slow. The status page shows how much Roost, Nest and Jellyfin send to people away from home, so you can see if it is filling up.',
@@ -235,6 +253,7 @@ const STEPS = [
   },
   {
     id: 'https',
+    section: 'network',
     group: 'Reach it from anywhere',
     title: 'Get a certificate for HTTPS',
     why: 'Roost opens securely at home and away, with no browser warnings. The installable app needs it.',
@@ -255,6 +274,7 @@ const STEPS = [
 
   {
     id: 'remote-dns',
+    section: 'network',
     group: 'Reach it from anywhere',
     title: 'Keep your domain pointed at home',
     why: 'Your home address changes now and then; Roost updates the domain\'s record so the address keeps working.',
@@ -270,6 +290,7 @@ const STEPS = [
   },
   {
     id: 'remote-forward',
+    section: 'network',
     group: 'Reach it from anywhere',
     title: 'Open port 443 on your router',
     why: 'Lets Cloudflare reach Roost from outside the house.',
@@ -286,6 +307,7 @@ const STEPS = [
   },
   {
     id: 'remote-cloudflare-only',
+    section: 'network',
     group: 'Reach it from anywhere',
     title: 'Only accept traffic through Cloudflare',
     why: 'Anyone who finds your home address can\'t skip Cloudflare\'s protection; at home you still get in directly.',
@@ -300,6 +322,7 @@ const STEPS = [
 
   {
     id: 'coffee-link',
+    section: 'apps',
     group: 'Coffee Galaxy',
     title: 'Link Roost to the Coffee Galaxy server',
     why: 'A private WireGuard link, so the server needs no open door but one UDP port and Roost needs no router change.',
@@ -317,6 +340,7 @@ const STEPS = [
   },
   {
     id: 'coffee-gateway',
+    section: 'apps',
     group: 'Coffee Galaxy',
     title: 'Open Coffee Galaxy at nova.roostos.network',
     why: 'People sign in to Roost only; Coffee Galaxy trusts Roost\'s signed sign-in. The Van Reader phone app keeps using its own token.',
@@ -334,6 +358,7 @@ const STEPS = [
 
   {
     id: 'galaxies',
+    section: 'apps',
     group: 'Galaxies',
     title: 'Add a galaxy that runs on this server',
     why: 'Every galaxy except Coffee Galaxy runs as a Docker container here. Roost gives it a name under nova.roostos.network and the same one sign-in.',
@@ -352,6 +377,7 @@ const STEPS = [
   // ---------- email ----------
   {
     id: 'email',
+    section: 'server',
     group: 'Email',
     title: 'Send email as server@roostos.network',
     why: '"Forgot password?" and emailed invites need it.',
@@ -367,6 +393,7 @@ const STEPS = [
   },
   {
     id: 'admin-email',
+    section: 'server',
     group: 'Email',
     title: 'Add your own email',
     why: 'So you can reset your password, and test emails have somewhere to go.',
@@ -376,6 +403,7 @@ const STEPS = [
   },
   {
     id: 'email-replies',
+    section: 'server',
     group: 'Email',
     title: 'Forward replies to server@ to your inbox',
     why: 'If someone answers an email from Roost, you see it.',
@@ -392,6 +420,7 @@ const STEPS = [
   // ---------- people ----------
   {
     id: 'two-step',
+    section: 'security',
     group: 'People',
     title: 'Use two-step sign-in',
     why: 'A stolen password alone can\'t get into Roost once it is reachable from outside.',
@@ -406,6 +435,7 @@ const STEPS = [
   },
   {
     id: 'public-links',
+    section: 'server',
     group: 'People',
     title: 'Decide on public file links',
     why: 'Anyone with a Nest link can open that one file without signing in. Links expire (7 days by default, 30 at most) and can have a password.',
@@ -421,6 +451,7 @@ const STEPS = [
   },
   {
     id: 'invite',
+    section: 'people',
     group: 'People',
     title: 'Invite someone',
     why: 'Send a link; they pick their own username and password.',
@@ -430,6 +461,7 @@ const STEPS = [
   },
   {
     id: 'install-app',
+    section: 'people',
     group: 'People',
     title: 'Put Roost on phones and PCs',
     why: 'Roost opens like an app, with the bird icon, from the home screen, Start menu or taskbar.',
@@ -445,6 +477,7 @@ const STEPS = [
   },
   {
     id: 'phone-photos',
+    section: 'people',
     group: 'People',
     title: 'Back up phone photos to Glint',
     why: 'New photos and videos go to your own drive on their own, so losing a phone doesn\'t lose them.',
@@ -462,6 +495,7 @@ const STEPS = [
   },
   {
     id: 'google-photos',
+    section: 'people',
     group: 'People',
     title: 'Move your Google Photos to Glint',
     why: 'Glint becomes the master copy of your photos on your own drive, so a full Google account stops mattering.',
@@ -477,6 +511,7 @@ const STEPS = [
   },
   {
     id: 'google-drive',
+    section: 'people',
     group: 'People',
     title: 'Move your Google Drive to Nest',
     why: 'Nest becomes the master copy of your files on your own drive, including files others shared with you.',
@@ -493,6 +528,7 @@ const STEPS = [
   },
   {
     id: 'phone-alerts',
+    section: 'security',
     group: 'People',
     title: 'Get alerts on your phone',
     why: 'Roost taps your phone when an app stops or a drive is nearly full, without you opening it.',
@@ -508,6 +544,7 @@ const STEPS = [
   },
   {
     id: 'guest-pass',
+    section: 'people',
     group: 'People',
     title: 'Give a visitor a guest pass',
     why: 'Someone staying a while can use Jellyfin (or any app you pick) and is turned away on the day you choose.',
@@ -550,13 +587,13 @@ const MANUAL = STEPS.filter((s) => s.manual).map((s) => s.id);
 // optional steps (Remote access, Coffee Galaxy) when all of them are.
 // test/setup.test.js checks every id here exists.
 const CARDS = [
-  { id: 'setup-panel', steps: 'all' },
-  { id: 'jellyfin-form', steps: ['jellyfin-sign-in'] },
-  { id: 'tls-form', steps: ['https'] },
-  { id: 'remote-form', steps: ['remote-dns', 'remote-forward', 'remote-cloudflare-only'] },
-  { id: 'coffee-form', steps: ['coffee-link', 'coffee-gateway'] },
-  { id: 'mail-form', steps: ['email'] },
-  { id: 'backup-form', steps: ['backup-drive', 'first-backup'] },
+  { id: 'setup-panel', section: 'setup', steps: 'all' },
+  { id: 'jellyfin-form', section: 'apps', steps: ['jellyfin-sign-in'] },
+  { id: 'tls-form', section: 'network', steps: ['https'] },
+  { id: 'remote-form', section: 'network', steps: ['remote-dns', 'remote-forward', 'remote-cloudflare-only'] },
+  { id: 'coffee-form', section: 'apps', steps: ['coffee-link', 'coffee-gateway'] },
+  { id: 'mail-form', section: 'server', steps: ['email'] },
+  { id: 'backup-form', section: 'storage', steps: ['backup-drive', 'first-backup'] },
 ];
 
 function cardsDone(steps) {
@@ -583,4 +620,4 @@ async function checklist(ctx) {
   return { steps, done: required.filter((s) => s.done).length, total: required.length, cards: cardsDone(steps) };
 }
 
-module.exports = { STEPS, NO_STEP, MANUAL, CARDS, checklist };
+module.exports = { SECTIONS, STEPS, NO_STEP, MANUAL, CARDS, checklist };

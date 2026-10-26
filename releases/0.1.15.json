@@ -1,0 +1,14 @@
+{
+  "version": "0.1.15",
+  "date": "2026-10-26",
+  "title": "Incident reports",
+  "summary": "A Report button on each Sentinel incident",
+  "items": [
+    {
+      "title": "Incident reports",
+      "text": "Each Sentinel incident now has a Report button: a short file with what the address did and what changed, with no passwords or secrets, ready to hand to Claude to find and fix the cause.",
+      "image": "sentinel-report.png",
+      "admin": true
+    }
+  ]
+}

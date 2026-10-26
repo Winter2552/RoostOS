@@ -131,7 +131,7 @@
         <div class="card alerts-panel hidden" id="alerts-panel" role="dialog" aria-label="Alerts">
           <div class="alerts-head"><h3>Alerts</h3><span class="mono muted" id="alerts-checked"></span></div>
           <div id="alerts-list"></div>
-          <a class="more-link mono" href="#/admin" id="alerts-settings-link">Alert settings →</a>
+          <a class="more-link mono" href="#/admin/security" id="alerts-settings-link">Alert settings →</a>
         </div>
       </div>
       <div class="who" id="who">
@@ -167,7 +167,7 @@
         </div>
         <a class="backup-line mono member-only hidden" id="backup-line"></a>
         <a class="more-link mono member-only" href="#/status">Server status →</a>
-        <a class="more-link mono setup-nudge hidden" id="setup-nudge" href="#/admin"></a>
+        <a class="more-link mono setup-nudge hidden" id="setup-nudge" href="#/admin/setup"></a>
       </div>
       <!-- One search box across the apps (public/search.js) -->
       <div class="search hidden" id="search" role="search">
@@ -454,26 +454,43 @@
 
     <!-- Admin view -->
     <section id="view-admin" class="section hidden">
-      <div class="section-head"><h2>Admin</h2><span class="mono muted">Apps · users · server</span></div>
+      <div class="section-head"><h2>Admin</h2><span class="mono muted" id="admin-crumb"></span></div>
+      <div class="admin-layout">
+      <nav class="admin-nav" id="admin-nav" aria-label="Admin sections"></nav>
+      <div class="admin-main" id="admin-main">
 
-      <div class="card panel" id="setup-panel">
+      <div class="card panel" id="next-panel" data-sec="overview">
         <div class="setup-head">
-          <div><h3>Setup</h3><span class="mono muted" id="setup-count">Checking…</span></div>
-          <button class="link-btn mono hidden" type="button" id="setup-toggle">Show steps</button>
+          <div><h3>Setup</h3><span class="mono muted" id="next-count">Checking…</span></div>
+          <a class="link-btn mono" href="#/admin/setup">All steps →</a>
         </div>
-        <div class="meter setup-meter" aria-hidden="true"><i id="setup-fill" style="width:0"></i></div>
-        <div id="setup-body">
-          <div class="setup-step" id="setup-step" aria-live="polite"></div>
-          <ol class="setup-list" id="setup-list"></ol>
-        </div>
+        <div class="meter setup-meter" aria-hidden="true"><i id="next-fill" style="width:0"></i></div>
+        <div class="setup-step" id="next-step" aria-live="polite"></div>
       </div>
 
-      <div class="card panel" id="requests-panel">
+      <div class="card panel" id="needs-panel" data-sec="overview">
+        <h3>Needs you</h3><span class="mono muted" id="needs-count">Checking…</span>
+        <ul class="security-list" id="needs-list"></ul>
+      </div>
+
+      <div class="card panel" id="setup-panel" data-sec="setup">
+        <div class="setup-head">
+          <div><h3>Setup</h3><span class="mono muted" id="setup-count">Checking…</span></div>
+        </div>
+        <div class="meter setup-meter" aria-hidden="true"><i id="setup-fill" style="width:0"></i></div>
+        <ol class="setup-list" id="setup-list"></ol>
+        <details class="setup-optional" id="setup-optional">
+          <summary><b>Nice to have</b><span class="mono muted" id="setup-optional-count"></span></summary>
+          <ol class="setup-list" id="setup-optional-list"></ol>
+        </details>
+      </div>
+
+      <div class="card panel" id="requests-panel" data-sec="overview">
         <h3>Storage requests</h3><span class="mono muted">Users asking for more space</span>
         <div id="storage-requests-admin"></div>
       </div>
 
-      <div class="card panel hidden" id="nestdrive-panel">
+      <div class="card panel hidden" id="nestdrive-panel" data-sec="storage">
         <h3>Where Nest keeps its files</h3><span class="mono muted" id="nestdrive-sub">Nest and Glint store everyone's files on one drive.</span>
         <p class="tls-state" id="nestdrive-state"><span class="dot"></span><span>Checking…</span></p>
         <p class="mono muted tls-help hidden" id="nestdrive-note"></p>
@@ -494,7 +511,7 @@
         <div class="msg" role="status"></div>
       </div>
 
-      <form class="card panel" id="notice-form">
+      <form class="card panel" id="notice-form" data-sec="overview">
         <h3>Notice</h3><span class="mono muted">A short message at the top of everyone's dashboard, e.g. for maintenance</span>
         <div class="form-grid">
           <label class="field"><span>Message <b class="notice-count" id="notice-count">0 / 200</b></span><input type="text" name="text" maxlength="200" placeholder="Server maintenance tonight at 10pm"></label>
@@ -517,7 +534,7 @@
         <div class="msg" role="status"></div>
       </form>
 
-      <form class="card panel" id="apps-form">
+      <form class="card panel" id="apps-form" data-sec="apps">
         <h3>Apps</h3>
         <span class="mono muted">Use {host} in a link to mean "the address you opened Roost on", e.g. http://{host}:8096</span>
         <div id="apps-editor"></div>
@@ -529,12 +546,12 @@
         <div class="msg" role="status"></div>
       </form>
 
-      <div class="card panel">
+      <div class="card panel" id="users-panel" data-sec="people">
         <h3>Users</h3><span class="mono muted">Who can sign in, which apps they see and how much storage they get</span>
         <div id="users"></div>
       </div>
 
-      <form class="card panel" id="family-form">
+      <form class="card panel" id="family-form" data-sec="people">
         <h3>Family</h3><span class="mono muted">A shared Family space in Nest and Glint. Members can all open, add, rename and remove what's in it, and share Family albums. Its files and photos count against the family's own limit, not anyone's personal space.</span>
         <div class="checks family-members" id="family-members"></div>
         <div class="row user-storage">
@@ -545,7 +562,7 @@
         <div class="msg" role="status"></div>
       </form>
 
-      <form class="card panel" id="invite-form">
+      <form class="card panel" id="invite-form" data-sec="people">
         <h3>Invite someone</h3><span class="mono muted">Send them a link. They pick their own username and password. Works once, for 7 days. A guest pass stops working on the day you pick.</span>
         <div class="form-grid">
           <label class="field"><span>Who it's for (only you see this)</span><input type="text" name="label" maxlength="60" placeholder="e.g. Mum"></label>
@@ -563,7 +580,7 @@
         <div id="invites"></div>
       </form>
 
-      <form class="card panel" id="jellyfin-form">
+      <form class="card panel" id="jellyfin-form" data-sec="apps">
         <h3>Jellyfin sign-in</h3><span class="mono muted">Same username and password in Jellyfin, which opens already signed in</span>
         <p class="two-step-state"><span class="dot" id="jellyfin-dot"></span><span id="jellyfin-text">Checking…</span></p>
         <div class="form-grid">
@@ -577,7 +594,7 @@
         <div class="msg" role="status"></div>
       </form>
 
-      <div class="card panel" id="security-panel">
+      <div class="card panel" id="security-panel" data-sec="security">
         <h3>Security</h3><span class="mono muted" id="security-headline">Checking…</span>
         <ul class="security-list" id="security-list"></ul>
         <div class="row"><button class="btn ghost small" type="button" id="ports-btn">Check open ports</button></div>
@@ -588,7 +605,7 @@
         <div class="msg" role="status"></div>
       </div>
 
-      <div class="card panel" id="sentinel-panel">
+      <div class="card panel" id="sentinel-panel" data-sec="security">
         <h3>Sentinel</h3><span class="mono muted" id="sentinel-lead">Watches for forced entry.</span>
         <div class="chips" id="sentinel-modes" role="group" aria-label="Sentinel mode">
           <button type="button" class="chip" data-mode="off" aria-pressed="false">Off</button>
@@ -602,7 +619,7 @@
         <div class="msg" role="status"></div>
       </div>
 
-      <form class="card panel" id="alerts-form">
+      <form class="card panel" id="alerts-form" data-sec="security">
         <h3>Alerts</h3><span class="mono muted">Roost checks every minute. A problem has to last 2 minutes before it shows on the bell, so restarts and updates stay quiet.</span>
         <div class="checks alert-checks">
           <label><input type="checkbox" name="alertApps"> Apps that stop, crash or turn unhealthy</label>
@@ -620,7 +637,7 @@
         <div class="msg" role="status"></div>
       </form>
 
-      <div class="card panel" id="push-panel">
+      <div class="card panel" id="push-panel" data-sec="security">
         <h3>Alerts on your phone</h3><span class="mono muted">Roost sends the alert itself and your phone or PC shows it, even when Roost is closed. Turn it on once per device.</span>
         <p class="push-note" id="push-note"></p>
         <div class="row push-actions">
@@ -632,7 +649,7 @@
         <div id="push-devices"></div>
       </div>
 
-      <form class="card panel" id="settings-form">
+      <form class="card panel" id="settings-form" data-sec="server">
         <h3>Server</h3><span class="mono muted">The name shown across Roost, the storage new users start with, the address invite links use, and sign-in rules</span>
         <div class="form-grid">
           <label class="field"><span>Server name</span><input type="text" name="serverName" maxlength="40"></label>
@@ -645,7 +662,7 @@
         <div class="msg" role="status"></div>
       </form>
 
-      <form class="card panel" id="tls-form">
+      <form class="card panel" id="tls-form" data-sec="network">
         <h3>Secure connection</h3><span class="mono muted">HTTPS for your domain and every name under it, renewed automatically</span>
         <p class="tls-state" id="tls-state"><span class="dot"></span><span>Checking…</span></p>
         <p class="mono muted tls-detail" id="tls-detail"></p>
@@ -662,7 +679,7 @@
         </div>
         <div class="msg" role="status"></div>
       </form>
-      <form class="card panel" id="remote-form">
+      <form class="card panel" id="remote-form" data-sec="network">
         <h3>Remote access</h3><span class="mono muted">Reach Roost away from home, through Cloudflare</span>
         <p class="tls-state" id="remote-state"><span class="dot"></span><span>Checking…</span></p>
         <p class="mono muted tls-detail" id="remote-detail"></p>
@@ -675,7 +692,7 @@
         </div>
         <div class="msg" role="status"></div>
       </form>
-      <form class="card panel" id="coffee-form">
+      <form class="card panel" id="coffee-form" data-sec="apps">
         <h3>Coffee Galaxy</h3><span class="mono muted">A private link to the Coffee Galaxy server, opened through Roost at nova.&lt;your domain&gt;/coffee</span>
         <p class="tls-state" id="coffee-state"><span class="dot"></span><span>Checking…</span></p>
         <p class="mono muted tls-detail" id="coffee-detail"></p>
@@ -696,7 +713,7 @@
         </div>
         <div class="msg" role="status"></div>
       </form>
-      <form class="card panel" id="galaxies-panel">
+      <form class="card panel" id="galaxies-panel" data-sec="apps">
         <h3>Galaxies</h3><span class="mono muted">Other galaxies run as Docker containers on this server, opened through Roost at nova.&lt;your domain&gt;/&lt;name&gt;. Coffee Galaxy has its own card above.</span>
         <div id="galaxies-list"></div>
         <p class="mono muted tls-help" id="galaxy-new" hidden></p>
@@ -710,7 +727,7 @@
         </div>
         <div class="msg" role="status"></div>
       </form>
-      <form class="card panel" id="mail-form">
+      <form class="card panel" id="mail-form" data-sec="server">
         <h3>Email</h3><span class="mono muted">For "Forgot password?" and emailed invites. Roost hands mail to a relay such as Resend or Brevo; see the README.</span>
         <div class="form-grid">
           <label class="field"><span>Mail server</span><input type="text" name="host" placeholder="smtp.resend.com" autocapitalize="none" spellcheck="false"></label>
@@ -728,7 +745,7 @@
         <div class="msg" role="status"></div>
       </form>
 
-      <form class="card panel" id="backup-form">
+      <form class="card panel" id="backup-form" data-sec="storage">
         <h3>Backups</h3><span class="mono muted">Every night Roost copies Nest, the apps' settings and its own data to the backup drive. Films and shows aren't included.</span>
         <p class="tls-state" id="backup-state"><span class="dot"></span><span>Checking…</span></p>
         <p class="mono muted tls-detail" id="backup-detail"></p>
@@ -752,7 +769,7 @@
         <ol class="activity" id="backup-history"></ol>
       </form>
 
-      <div class="card panel hidden" id="restore-panel">
+      <div class="card panel hidden" id="restore-panel" data-sec="storage">
         <h3>Get files back</h3><span class="mono muted">Browse any backup like a folder. Nothing is overwritten: files come back as a download, or as a new folder in the person's Nest.</span>
         <p class="mono muted tls-help hidden" id="restore-hint"></p>
         <div id="restore-browser">
@@ -765,7 +782,7 @@
         <p class="mono muted restore-job hidden" id="restore-job" role="status"></p>
       </div>
 
-      <div class="card panel" id="activity-panel">
+      <div class="card panel" id="activity-panel" data-sec="security">
         <h3>Activity</h3><span class="mono muted">Sign-ins and changes, newest first. Tap a time for the exact date.</span>
         <div class="chips" id="activity-filters" role="group" aria-label="Show">
           <button type="button" class="chip" data-filter="" aria-pressed="true">All</button>
@@ -780,15 +797,8 @@
         <div class="row hidden" id="activity-more-row"><button class="btn ghost small" type="button" id="activity-more">Show more</button></div>
         <div class="msg" role="status"></div>
       </div>
-
-      <!-- Finished setup cards fold in here (see arrangeAdminCards in app.js). -->
-      <details class="done-drawer hidden" id="done-drawer">
-        <summary>
-          <span class="done-drawer-title"><b>Set up</b><span class="mono muted" id="done-drawer-names"></span></span>
-          <span class="pill" id="done-drawer-count"></span>
-        </summary>
-        <div id="done-drawer-body"></div>
-      </details>
+      </div>
+      </div>
     </section>
 
     <footer class="footer mono muted">
