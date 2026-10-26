@@ -1,3 +1,10 @@
 {
-  "items": []
+  "items": [
+    {
+      "title": "A tidier Admin",
+      "text": "Admin is now split into sections: Overview, Setup, People, Apps, Storage & backups, Network, Alerts & security and Server. Overview shows your next setup step and what needs you. Setup is a short grouped list that opens each step in place, with the optional extras folded away. Each section loads only when you open it.",
+      "image": "admin-sections.png",
+      "admin": true
+    }
+  ]
 }
