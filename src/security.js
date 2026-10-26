@@ -164,8 +164,9 @@ const order = { ok: 0, info: 0, warn: 1, bad: 2 };
 //   pushDevices (phones with alerts on, for admins), outside (reachable from outside),
 //   lockdown ({ at, by } while outside access is paused),
 //   ports (the last open-port check, src/portcheck.js, or null),
-//   backupTest (the backup service's last restore test, or null)
-function securityChecks({ db, now = Date.now(), entries = [], cert = null, updates = null, backup = { state: 'off' }, pushDevices = 0, outside = false, lockdown = null, ports = null, backupTest = null }) {
+//   backupTest (the backup service's last restore test, or null),
+//   sentinelMode ('off' | 'manual' | 'auto')
+function securityChecks({ db, now = Date.now(), entries = [], cert = null, updates = null, backup = { state: 'off' }, pushDevices = 0, outside = false, lockdown = null, ports = null, backupTest = null, sentinelMode = 'manual' }) {
   const checks = [];
   const add = (id, status, title, detail = '') => checks.push({ id, status, title, detail });
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -212,6 +213,9 @@ function securityChecks({ db, now = Date.now(), entries = [], cert = null, updat
   } else if (backup.state === 'ok') {
     add('backup-test', 'info', 'Backup test restore not run yet', 'The backup service tests a few random files about once a month.');
   }
+
+  if (sentinelMode === 'off') add('sentinel', 'warn', 'Sentinel is off', 'It watches for scanners, password guessing and tampering. Turn it on under Admin → Sentinel.');
+  else add('sentinel', 'ok', sentinelMode === 'auto' ? 'Sentinel is on and acts on its own' : 'Sentinel is on and asks before acting');
 
   const failed = entries.filter((e) => e.type === 'sign-in-failed' && now - Date.parse(e.at) < DAY_MS);
   if (failed.length >= 50) add('failed', 'bad', `${failed.length} failed sign-ins in the last day`, 'Somebody is hammering the sign-in page.');

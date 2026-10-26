@@ -1711,3 +1711,6 @@ a.app-card:active { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--shad
 .lockdown-row { display: flex; gap: 16px; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 14px; margin-top: 4px; }
 .lockdown-row.on { color: var(--ink); }
 @media (max-width: 600px) { .lockdown-row { flex-direction: column; align-items: stretch; } }
+.sentinel-row { align-items: center; justify-content: space-between; }
+.sentinel-main { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.sentinel-sub { margin-top: 16px; }
