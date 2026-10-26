@@ -1826,6 +1826,9 @@ function renderPower(p) {
   if (p.cpuTemp !== null && p.cpuTemp !== undefined) tiles.push(statCard('CPU heat', `${p.cpuTemp}°C`, p.fanRpm ? `Fan ${p.fanRpm.toLocaleString()} rpm` : 'No fan reading'));
   if (p.hottestDrive) tiles.push(statCard('Hottest drive', `${p.hottestDrive.temp}°C`, p.hottestDrive.name));
   $('#status-power').replaceChildren(...tiles);
+  const charts = !p.missing && !p.stale && tiles.length > 0;
+  $('#status-power-charts').classList.toggle('hidden', !charts);
+  if (charts) loadPowerCharts(false);
   const note = $('#status-power-note');
   let text = '';
   if (p.missing) text = 'Waiting for the roost-smart helper. Power and heat appear once it is running with the /sys line from the compose file.';
@@ -1836,6 +1839,87 @@ function renderPower(p) {
   note.textContent = text;
   note.classList.toggle('hidden', !text);
 }
+
+// ---------- power and heat charts (admins) ----------
+
+// Fetched when the section first shows, when the range changes, and at most
+// every 5 minutes after that: the history only gains a point every 5 minutes.
+const powerChart = { range: 'day', at: 0, busy: false };
+
+// One line from points, broken where the history has a gap.
+function chartPath(points, key, x, y, gap) {
+  let d = '';
+  let prev = null;
+  for (const p of points) {
+    const v = p[key];
+    if (typeof v !== 'number') { prev = null; continue; }
+    d += `${prev === null || p.t - prev > gap ? 'M' : 'L'}${x(p.t).toFixed(1)},${y(v).toFixed(1)}`;
+    prev = p.t;
+  }
+  return d;
+}
+
+function chartSvg(h, keys, unit) {
+  const W = 480;
+  const H = 90;
+  const end = Date.now();
+  const spans = { day: 864e5, week: 6048e5, month: 2592e6 };
+  const start = end - spans[h.range];
+  const values = h.points.flatMap((p) => keys.map((k) => p[k])).filter((v) => typeof v === 'number');
+  if (!values.length) return null;
+  let lo = Math.min(...values);
+  let hi = Math.max(...values);
+  if (hi - lo < 4) { hi += 2; lo -= 2; }
+  lo = Math.max(0, Math.floor(lo));
+  hi = Math.ceil(hi);
+  const x = (t) => 36 + ((t - start) / (end - start)) * (W - 36);
+  const y = (v) => H - 4 - ((v - lo) / (hi - lo)) * (H - 12);
+  const gap = h.step * 2.5;
+  const lines = keys.map((k, i) => `<path class="line${i ? ' alt' : ''}" d="${chartPath(h.points, k, x, y, gap)}"/>`).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${unit} over the last ${h.range}">
+    <line class="grid" x1="36" x2="${W}" y1="${y(hi).toFixed(1)}" y2="${y(hi).toFixed(1)}"/>
+    <line class="grid" x1="36" x2="${W}" y1="${y(lo).toFixed(1)}" y2="${y(lo).toFixed(1)}"/>
+    <text x="30" y="${(y(hi) + 3).toFixed(1)}" text-anchor="end">${hi}</text>
+    <text x="30" y="${(y(lo) + 3).toFixed(1)}" text-anchor="end">${lo}</text>${lines}</svg>`;
+}
+
+function renderPowerCharts(h) {
+  const body = $('#power-chart-body');
+  const range = { day: 'last 24 hours', week: 'last 7 days', month: 'last 30 days' }[h.range];
+  const blocks = [];
+  const power = chartSvg(h, ['w'], 'Watts');
+  if (power) {
+    blocks.push(`<div class="power-chart"><div class="power-chart-head"><b>Power</b><span class="mono muted">${h.peaks.w !== null ? `peak ${Math.round(h.peaks.w)} W · ` : ''}${h.kwh} kWh${h.cost ? ` · ${h.cost}` : ''}</span></div>${power}</div>`);
+  }
+  const heat = chartSvg(h, ['c', 'd'], '°C');
+  if (heat) {
+    const bits = [h.peaks.c !== null ? `CPU peak ${h.peaks.c}°C` : null, h.peaks.d !== null ? `drive peak ${h.peaks.d}°C` : null].filter(Boolean).join(' · ');
+    blocks.push(`<div class="power-chart"><div class="power-chart-head"><b>Heat</b><span class="mono muted">${bits}</span></div>${heat}<div class="power-chart-foot mono muted"><span>Solid: CPU</span><span>Dashed: hottest drive</span></div></div>`);
+  }
+  body.innerHTML = blocks.length ? blocks.join('') : '<p class="mono muted status-note">History starts filling in a few minutes after the helper begins reading. One point every 5 minutes.</p>';
+  if (blocks.length) body.insertAdjacentHTML('beforeend', `<p class="mono muted status-note" style="margin-top:12px">${range}, since ${h.since ? when(new Date(h.since).toISOString()) : 'now'}.</p>`);
+}
+
+async function loadPowerCharts(force) {
+  if (powerChart.busy || (!force && Date.now() - powerChart.at < 5 * 60 * 1000)) return;
+  powerChart.busy = true;
+  try {
+    renderPowerCharts(await api('GET', `/api/admin/health-history?range=${powerChart.range}`));
+    powerChart.at = Date.now();
+  } catch {
+    // Leave the last chart up; it asks again on the next refresh.
+  } finally {
+    powerChart.busy = false;
+  }
+}
+
+$('#status-power-charts').addEventListener('click', (e) => {
+  const chip = e.target.closest('[data-range]');
+  if (!chip || chip.dataset.range === powerChart.range) return;
+  powerChart.range = chip.dataset.range;
+  for (const c of $('#status-power-charts').querySelectorAll('[data-range]')) c.setAttribute('aria-pressed', String(c === chip));
+  loadPowerCharts(true);
+});
 
 function renderHealth(h) {
   $('#status-health-wrap').classList.toggle('hidden', !h);

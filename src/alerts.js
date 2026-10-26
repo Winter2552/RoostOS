@@ -96,7 +96,7 @@ class Watcher {
   // readContainers: async () => { containers } | { error }
   // readDisks: () => [{ label, path, total, free } | { label, path, missing }]
   // onChange(event, alert): 'raised' | 'resolved' | 'event', for phone push later.
-  constructor({ store, readContainers, readDisks, onChange = () => {}, now = Date.now, newId, tidy = null }) {
+  constructor({ store, readContainers, readDisks, onChange = () => {}, now = Date.now, newId, tidy = null, sample = null }) {
     this.store = store;
     this.readContainers = readContainers;
     this.readDisks = readDisks;
@@ -104,6 +104,7 @@ class Watcher {
     this.now = now;
     this.newId = newId;
     this.tidy = tidy; // (time) => true when it changed an alert
+    this.sample = sample; // (time) => void, called every check; keeps the health history
     this.pending = new Map(); // key → when it was first seen
     this.restarts = new Map(); // container name → restart count last time
     this.checkedAt = null;
@@ -125,6 +126,13 @@ class Watcher {
       settings.alertDisks ? this.readDisks() : [],
     ]);
     const t = this.now();
+    if (this.sample) {
+      try {
+        this.sample(t);
+      } catch (err) {
+        console.error('Health history failed:', err);
+      }
+    }
     const iso = new Date(t).toISOString();
     // Sign-in alerts (src/security.js) are not this watcher's to open or clear.
     const openList = alerts.filter((a) => !a.resolvedAt && !a.security);

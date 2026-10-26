@@ -1,3 +1,10 @@
 {
-  "items": []
+  "items": [
+    {
+      "title": "Power and heat history",
+      "text": "Day, Week and Month charts of power draw and heat, with peaks and the energy used and its cost. Roost keeps about 90 days in a tiny file, written once an hour.",
+      "image": "power-history.png",
+      "admin": true
+    }
+  ]
 }

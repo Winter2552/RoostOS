@@ -21,7 +21,8 @@ const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor, restartContainer } = require('./docker');
 const { UpdateChecker } = require('./updates');
 const { DriveHealth } = require('./smart');
-const { Sensors, priceOf } = require('./sensors');
+const { Sensors, priceOf, money } = require('./sensors');
+const { HealthHistory } = require('./health-history');
 const { OutsideServices } = require('./outside');
 const remoteAccess = require('./remote');
 const { Coffee, validSecret, newSecret } = require('./coffee');
@@ -489,8 +490,15 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     // Never ban the home network, or Cloudflare's own addresses.
     skip: (ip) => isPrivateIp(ip) || remoteAccess.isCloudflare(ip),
   });
+  // Power and heat history for the charts, fed by the watcher's minute check.
+  const healthHistory = new HealthHistory(dataDir);
   const watcher = new Watcher({
     store,
+    sample: () => {
+      const view = sensors.view({ driveHealth: driveHealth.read(), settings: db().settings });
+      if (!view || view.missing || view.stale) return;
+      healthHistory.sample({ watts: view.power ? view.power.watts : null, cpuTemp: view.cpuTemp, driveTemp: view.hottestDrive ? view.hottestDrive.temp : null });
+    },
     tidy: (t) => secWatch.tidy(t),
     onChange: (kind, alert) => push.alert(kind, alert),
     readContainers: readContainers || (async () => (events.live() && !lastDocker.error ? lastDocker : listContainers(dockerHost, probeTimeoutMs))),
@@ -1383,6 +1391,13 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 200, { status });
     },
 
+    // Power and heat over the last day, week or month, for the status charts.
+    'GET /api/admin/health-history': (req, res) => {
+      requireAdmin(req);
+      const out = healthHistory.series(new URL(req.url, 'http://roost').searchParams.get('range') || 'day');
+      const { price, currency } = priceOf(db().settings);
+      send(res, 200, { ...out, cost: money(out.kwh * price, currency) });
+    },
     'GET /api/system': (req, res) => {
       requireMember(req);
       // The dashboard shows every drive Roost uses added together; `nest` is the drive
@@ -3208,6 +3223,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     clearTimeout(uptimeSoon);
     events.stop();
     uptime.save();
+    healthHistory.flush();
     store.flush();
     activity.flush();
     traffic.flush();
@@ -3219,11 +3235,13 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   server.glint = glint;
   server.photoBackup = photoBackup;
   server.watcher = watcher;
+  server.healthHistory = healthHistory;
   server.sentinel = sentinel;
   server.push = push;
   // Save anything still waiting, e.g. when the container is stopped.
   server.flushAll = () => {
     uptime.save();
+    healthHistory.flush();
     store.flush();
     activity.flush();
     traffic.flush();
