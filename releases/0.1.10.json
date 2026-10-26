@@ -1,0 +1,13 @@
+{
+  "version": "0.1.10",
+  "date": "2026-10-26",
+  "title": "Zoom all the way out to years",
+  "summary": "Pinch zoom glides, and a new years level.",
+  "items": [
+    {
+      "title": "Zoom all the way out to years",
+      "text": "Pinching Glint now follows your fingers and glides between sizes instead of snapping, and there is a new level past months that shows your whole library by year.",
+      "image": "glint-years.png"
+    }
+  ]
+}

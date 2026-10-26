@@ -1,9 +1,3 @@
 {
-  "items": [
-    {
-      "title": "Zoom all the way out to years",
-      "text": "Pinching Glint now follows your fingers and glides between sizes instead of snapping, and there is a new level past months that shows your whole library by year.",
-      "image": "glint-years.png"
-    }
-  ]
+  "items": []
 }
