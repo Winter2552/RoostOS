@@ -258,6 +258,7 @@
           <a href="#/glint/favourites" data-place="favourites">Favourites</a>
           <a href="#/glint/undated" data-place="undated">Undated</a>
           <a href="#/glint/albums" data-place="albums">Albums</a>
+          <a href="#/glint/people" data-place="people" id="glint-people-link" class="hidden">People</a>
           <a href="#/glint/trash" data-place="trash">Trash</a>
           <a href="#/glint/move" data-place="move">Move to Glint</a>
         </nav>
@@ -388,6 +389,9 @@
         <h3>Glint</h3><span class="mono muted">What Glint shows you</span>
         <label class="glint-toggle mono"><input type="checkbox" id="pref-memories"><span>Show memories</span></label>
         <p class="muted" style="margin:6px 0 0">On this day, trips and years above your photos. Made from your photo dates; nothing leaves Roost.</p>
+        <label class="glint-toggle mono" style="margin-top:14px"><input type="checkbox" id="pref-people"><span>Find people in photos</span></label>
+        <p class="muted" style="margin:6px 0 0">Groups photos by who is in them, like Google Photos. Faces are found in your own browser while the People page is open, and only a short numeric fingerprint of each face is kept on your Roost. Only you can see it.</p>
+        <div class="row hidden" id="people-delete-row"><button class="btn ghost small" type="button" id="people-delete">Delete face data</button></div>
         <div class="msg" role="status"></div>
       </div>
       <div class="card panel" id="two-step-panel">
@@ -822,6 +826,7 @@
   <script src="/fileinfo.js"></script>
   <script src="/move.js"></script>
   <script src="/nest.js"></script>
+  <script src="/faces.js"></script>
   <script src="/glint.js"></script>
   <script src="/whatsnew.js"></script>
   <script src="/search.js"></script>

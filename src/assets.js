@@ -51,6 +51,7 @@ class Assets {
       type: MIME[ext] || 'application/octet-stream',
       hash: crypto.createHash('sha256').update(data).digest('base64url').slice(0, 12),
       compress: COMPRESS.has(ext) && data.length > 512,
+      vendored: rel.startsWith('/vendor/'),
       encoded: {},
     };
     this.cache.set(rel, asset);
@@ -69,7 +70,8 @@ class Assets {
     if (!enc || !asset.compress) return null;
     if (!asset.encoded[enc]) {
       asset.encoded[enc] = enc === 'br'
-        ? zlib.brotliCompressSync(asset.data, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 11 } })
+        // Top quality for the small files; a big vendored script would hold the server up for seconds.
+        ? zlib.brotliCompressSync(asset.data, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: asset.data.length > 262144 ? 5 : 11 } })
         : zlib.gzipSync(asset.data, { level: 9 });
     }
     return asset.encoded[enc];
@@ -92,7 +94,8 @@ class Assets {
       ETag: etag,
       // App icons rarely change, so they are kept for a week without asking.
       'Cache-Control': version && version === asset.hash ? `public, max-age=${YEAR}, immutable`
-        : rel.startsWith('/icons/') ? 'public, max-age=604800' : 'no-cache',
+        : rel.startsWith('/icons/') ? 'public, max-age=604800'
+          : asset.vendored ? `public, max-age=${YEAR}, immutable` : 'no-cache', // vendored folders carry their version in the path
     };
     if (asset.compress) headers.Vary = 'Accept-Encoding';
     if (req.headers['if-none-match'] === etag) {

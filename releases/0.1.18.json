@@ -1,0 +1,13 @@
+{
+  "version": "0.1.18",
+  "date": "2026-10-26",
+  "title": "People in Glint",
+  "summary": "Photos grouped by who is in them.",
+  "items": [
+    {
+      "title": "People in Glint",
+      "text": "Glint can group your photos by who is in them. Turn it on in Profile, then open People and press Start. Faces are found in your own browser; nothing leaves Roost.",
+      "image": "glint-people.png"
+    }
+  ]
+}
