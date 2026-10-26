@@ -278,6 +278,26 @@ docker exec -it roost-backup node src/restore-cli.js restore "2026-10-08 0300" /
 
 You can pass a path inside the backup after the output folder (for example `Nest`) to get back only that part. The files land in `/DATA/restored` as `Nest/`, `Roost/` and `App settings/`; stop Roost, move each folder to where it came from (Nest to `/DATA/roost-nest`, Roost to `/DATA/AppData/roost`, App settings to `/DATA/AppData`), and start it again. The command refuses a folder that already has files in it. With `--replace` it moves the existing folder aside (to `<folder>.before-restore-<time>`, never deleted) after you type `restore` to confirm.
 
+### If you think someone got in
+
+1. **Lock down** (Admin → Security → Lock down now). Outside access pauses and everyone else is signed out. If you can't reach Admin, stop Roost: `cd /DATA/AppData/roost-src && sudo docker compose stop roost`.
+2. **Update Roost** to the latest version (`update-roost.sh`), so any hole that was fixed is closed.
+3. **Pick a clean night.** Admin → Activity shows when odd things started. Restore the Roost folder from a backup *before* that (see "If the server itself is gone"; use `restore-cli` with the night's name and move `Roost/` to `/DATA/AppData/roost` with Roost stopped). With no backup, skip this step and recover the data as it is.
+4. **Run recovery** with Roost stopped:
+
+   ```sh
+   cd /DATA/AppData/roost-src
+   sudo docker compose stop roost
+   sudo docker compose run --rm --no-deps roost node src/recover.js --admin raven
+   sudo docker compose up -d roost
+   ```
+
+   Type `recover` when asked. It signs everyone out, gives that one admin a new temporary password (shown once on screen), makes every other admin's password unusable until you make them a reset link, clears two-step so admins set up fresh authenticators, deletes invite/reset links, phone-alert keys and public Nest links (add `--keep-links` to keep the Nest links), removes the secrets Roost stored (Cloudflare token, email password, Jellyfin key, Coffee Galaxy and galaxy secrets, WireGuard key, HTTPS certificate keys), turns lockdown on, and re-seals Sentinel. It keeps a copy of the old accounts file next to the new one.
+5. **Do the by-hand list** it prints (and saves to `recovery-report.txt`): a new Cloudflare token (and delete the old one), new email and Jellyfin keys, Coffee Galaxy secret, router check, ZimaOS password, and a look at `docker ps` for containers you didn't install.
+6. Sign in, set up two-step, check Admin → Users, ask people to change their passwords, then **lift lockdown**.
+
+If a container you didn't install is running, or ZimaOS itself was changed, Roost can't clean that up: reinstall ZimaOS and restore from the backup.
+
 ## Saving home upload
 
 Home upload is slow (about 18 Mb/s), so Roost sends as little as it can to people away from home, with nothing outside to set up:
