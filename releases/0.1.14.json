@@ -1,18 +1,14 @@
 {
   "version": "0.1.14",
   "date": "2026-10-26",
-  "title": "Roostflix extras",
-  "summary": "Request a movie and Save to Files, plus an AirPlay fix",
+  "title": "A tidier Admin",
+  "summary": "Admin split into sections, with a shorter Setup list",
   "items": [
     {
-      "title": "Request a movie",
-      "text": "A Request button in Roostflix lets anyone ask for a title. The admin gets a phone alert, and you get a note when it's added.",
-      "image": "movie-requests.png"
-    },
-    {
-      "title": "Save to Files",
-      "text": "Open a film in Roostflix and tap Save to Files to download the original to your phone or PC for offline watching.",
-      "image": "movie-requests.png"
+      "title": "A tidier Admin",
+      "text": "Admin is now split into sections: Overview, Setup, People, Apps, Storage & backups, Network, Alerts & security and Server. Overview shows your next setup step and what needs you. Setup is a short grouped list that opens each step in place, with the optional extras folded away. Each section loads only when you open it.",
+      "image": "admin-sections.png",
+      "admin": true
     }
   ]
 }

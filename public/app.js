@@ -294,7 +294,7 @@ $('#welcome-form').addEventListener('submit', async (e) => {
     }
     f.reset();
     // A brand-new Roost opens on the setup checklist (after two-step sign-in).
-    if (setupMode) location.hash = '#/admin';
+    if (setupMode) location.hash = '#/admin/setup';
     await enter(res.user);
   } catch (err) {
     $('#welcome-msg').textContent = err.message;
@@ -750,7 +750,7 @@ function route() {
   document.querySelectorAll('#app-bar a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
   $('#account-btn').classList.toggle('active', ['status', 'whatsnew', 'profile', 'admin'].includes(view));
   closeMenu(false);
-  if (view === 'admin') { loadAdmin(); loadJellyfin(); }
+  if (view === 'admin') showAdmin(rest[0]);
   if (view === 'profile') { if (!isGuest(state.user)) loadStorage(); loadTwoStep(); loadDevices(); $('#backup-key-panel').classList.toggle('hidden', isGuest(state.user) || !hasGlint()); }
   if (view === 'status') { loadStatus(); loadUpdate(); }
   if (view === 'whatsnew') { $('#wn-current').textContent = state.version ? `Roost v${state.version}` : ''; window.whatsNewPage(); }
@@ -944,7 +944,7 @@ document.addEventListener('keydown', (e) => {
 $('#alerts-settings-link').addEventListener('click', () => {
   closeAlerts();
   // Wait for the admin view to show, then bring the alert settings into view.
-  setTimeout(() => $('#alerts-form').scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+  setTimeout(() => $('#alerts-form').scrollIntoView({ behavior: 'smooth', block: 'start' }), 400);
 });
 
 const alertForm = $('#alerts-form');
@@ -1399,7 +1399,7 @@ async function loadBackup() {
   if (!text) return;
   line.replaceChildren(el('span', { class: `dot ${dot}` }), text);
   // Admins can tap through to the setup checklist, where the backup steps are.
-  if (state.user.role === 'admin') line.href = '#/admin';
+  if (state.user.role === 'admin') line.href = '#/admin/storage';
   else line.removeAttribute('href');
   line.title = b.message || '';
 }
@@ -2164,11 +2164,16 @@ function renderStorageRequests(requests) {
   }));
 }
 
-// ---------- admin ----------
-
 // ---------- setup checklist ----------
 
-const setupState = { steps: [], current: null, open: null };
+// Admin is split into sections; only the open one is shown and loaded.
+const ADMIN_SECTIONS = [
+  ['overview', 'Overview'], ['setup', 'Setup'], ['people', 'People'], ['apps', 'Apps'],
+  ['storage', 'Storage & backups'], ['network', 'Network'], ['security', 'Alerts & security'], ['server', 'Server'],
+];
+const adminName = (id) => (ADMIN_SECTIONS.find((s) => s[0] === id) || [])[1] || id;
+const adminState = { sec: null };
+const setupState = { steps: [], current: undefined };
 
 async function loadSetup(arrange = false) {
   try {
@@ -2179,117 +2184,146 @@ async function loadSetup(arrange = false) {
   } catch { /* the panel keeps its last state */ }
 }
 
-// Finished setup cards fold into a "Set up" drawer at the bottom of Admin; they
-// come back out by themselves if something stops being set up. Each card leaves
-// a marker where it belongs on the page, so it returns to the same spot.
-// Only done when Admin opens, so a card never jumps while someone is using it.
+// Finished setup cards fold into a "Done" drawer at the bottom of their own
+// section; they come back out by themselves if something stops being set up.
+// Each card leaves a marker where it belongs, so it returns to the same spot.
+// Only done when a section opens, so a card never jumps while someone is using it.
 function arrangeAdminCards(cards) {
-  const drawer = $('#done-drawer');
-  const body = $('#done-drawer-body');
-  const moved = [];
+  const main = $('#admin-main');
+  const moved = {};
   for (const { id, done } of cards) {
     const card = document.getElementById(id);
     if (!card) continue;
+    const sec = card.dataset.sec;
+    let drawer = document.getElementById(`done-${sec}`);
+    if (!drawer) {
+      drawer = el('details', { class: 'done-drawer hidden', id: `done-${sec}`, 'data-sec': sec },
+        el('summary', {}, el('span', { class: 'done-drawer-title' }, el('b', { text: 'Done' }), el('span', { class: 'mono muted' })), el('span', { class: 'pill' })),
+        el('div', { class: 'done-body' }));
+      main.append(drawer);
+    }
+    const body = $('.done-body', drawer);
     if (!card.homeMarker) {
       card.homeMarker = document.createComment(id);
       card.before(card.homeMarker);
     }
     const inDrawer = card.parentNode === body;
-    if (done && !card.contains(document.activeElement)) {
-      moved.push(card);
-    } else if (!done && inDrawer && !card.contains(document.activeElement)) {
-      card.homeMarker.after(card);
-    } else if (inDrawer) {
-      moved.push(card);
-    }
+    const using = card.contains(document.activeElement);
+    if (done && !using) (moved[sec] ||= []).push(card);
+    else if (!done && inDrawer && !using) card.homeMarker.after(card);
+    else if (inDrawer) (moved[sec] ||= []).push(card);
   }
-  body.append(...moved);
-  drawer.classList.toggle('hidden', moved.length === 0);
-  $('#done-drawer-count').textContent = String(moved.length);
-  $('#done-drawer-names').textContent = moved.map((c) => $('h3', c).textContent).join(' · ');
+  for (const drawer of main.querySelectorAll('.done-drawer')) {
+    const list = moved[drawer.dataset.sec] || [];
+    $('.done-body', drawer).append(...list);
+    drawer.classList.toggle('hidden', list.length === 0);
+    $('.pill', drawer).textContent = String(list.length);
+    $('.done-drawer-title .mono', drawer).textContent = list.map((c) => $('h3', c).textContent).join(' · ');
+  }
+  applyAdminSection();
 }
 
-function renderSetup({ steps, done, total }) {
-  const complete = done === total;
-  const nudge = $('#setup-nudge');
-  nudge.classList.toggle('hidden', complete);
-  nudge.textContent = `Setup · ${done} of ${total} done · Continue →`;
-  $('#setup-count').textContent = complete ? `All ${total} steps done` : `${done} of ${total} done`;
-  $('#setup-fill').style.width = `${Math.round((done / total) * 100)}%`;
-  // Once everything is done the panel folds away until asked for.
-  if (setupState.open === null) setupState.open = !complete;
-  $('#setup-toggle').classList.toggle('hidden', !complete);
-  $('#setup-toggle').textContent = setupState.open ? 'Hide steps' : 'Show steps';
-  $('#setup-body').classList.toggle('hidden', !setupState.open);
-  if (!steps.some((st) => st.id === setupState.current)) setupState.current = null;
-  if (!setupState.current) setupState.current = (steps.find((st) => !st.done && !st.optional) || steps.find((st) => !st.done) || steps[0]).id;
-
-  let group = null;
-  $('#setup-list').replaceChildren(...steps.flatMap((st) => {
-    const items = [];
-    if (st.group !== group) {
-      group = st.group;
-      items.push(el('li', { class: 'setup-group mono muted', text: group }));
-    }
-    items.push(el('li', {},
-      el('button', {
-        type: 'button',
-        class: `setup-row${st.id === setupState.current ? ' current' : ''}`,
-        'aria-current': st.id === setupState.current ? 'step' : false,
-        onclick: () => { setupState.current = st.id; renderSetup({ steps, done, total }); },
-      },
-      el('span', { class: `setup-tick${st.done ? ' done' : ''}`, 'aria-label': st.done ? 'Done' : 'Not done' }, st.done ? '✓' : ''),
-      el('span', { class: 'setup-title', text: st.title }),
-      st.optional ? el('span', { class: 'mono muted', text: 'Optional' }) : null)));
-    return items;
-  }));
-
-  const st = steps.find((x) => x.id === setupState.current);
-  const i = steps.indexOf(st);
-  const go = (to) => { setupState.current = steps[to].id; renderSetup({ steps, done, total }); };
+function stepDetail(st) {
   const action = st.action ? el('button', { class: 'btn small', type: 'button', text: st.action.label, onclick: () => openSetupAction(st.action) }) : null;
   const tick = st.manual ? el('button', {
     class: `btn ${st.done ? 'ghost ' : ''}small`, type: 'button', text: st.done ? 'Mark not done' : 'Mark done',
     onclick: async () => { await api('POST', `/api/admin/setup/${st.id}`, { done: !st.done }); loadSetup(); },
   }) : null;
-  $('#setup-step').replaceChildren(
-    el('div', { class: 'mono muted', text: `${st.group} · step ${i + 1} of ${steps.length}${st.done ? ' · done' : ''}` }),
-    el('h4', { text: st.title }),
+  return [
     el('p', { class: 'setup-why', text: st.why }),
     el('ol', { class: 'setup-how' }, st.how.map((h) => el('li', { text: h }))),
     el('div', { class: 'row', style: 'margin-top:16px' },
       action, tick,
-      st.manual ? null : el('button', { class: 'btn ghost small', type: 'button', text: 'Check again', onclick: loadSetup }),
-      el('span', { class: 'setup-nav' },
-        el('button', { class: 'link-btn mono', type: 'button', text: '← Back', disabled: i === 0, onclick: () => go(i - 1) }),
-        el('button', { class: 'link-btn mono', type: 'button', text: 'Next →', disabled: i === steps.length - 1, onclick: () => go(i + 1) }))));
+      st.manual ? null : el('button', { class: 'btn ghost small', type: 'button', text: 'Check again', onclick: () => loadSetup() })),
+  ];
 }
 
-// Jumps to the form a step is done in and puts the cursor in it.
+// One list of steps, grouped by the Admin section they belong to. A step opens
+// in place; only one is open at a time.
+function stepRows(steps) {
+  const out = [];
+  // Groups appear in the order the steps do, which is the order to do them in.
+  for (const id of [...new Set(steps.map((s) => s.section))]) {
+    const name = adminName(id);
+    const mine = steps.filter((s) => s.section === id);
+    const left = mine.filter((s) => s.done).length;
+    out.push(el('li', { class: 'setup-group mono muted' }, el('span', { text: name }), el('span', { text: `${left} of ${mine.length}` })));
+    for (const st of mine) {
+      const open = st.id === setupState.current;
+      out.push(el('li', {},
+        el('button', {
+          type: 'button', class: `setup-row${open ? ' current' : ''}`, 'aria-expanded': String(open),
+          onclick: () => { setupState.current = open ? null : st.id; renderSetup(setupState.data); },
+        },
+        el('span', { class: `setup-tick${st.done ? ' done' : ''}`, 'aria-label': st.done ? 'Done' : 'Not done' }, st.done ? '✓' : ''),
+        el('span', { class: 'setup-title', text: st.title }),
+        el('span', { class: 'mono muted', text: open ? 'Close ▴' : '' })),
+        open ? el('div', { class: 'setup-detail' }, ...stepDetail(st)) : null));
+    }
+  }
+  return out;
+}
+
+function renderSetup(data) {
+  setupState.data = data;
+  const { steps, done, total } = data;
+  const complete = done === total;
+  const nudge = $('#setup-nudge');
+  nudge.classList.toggle('hidden', complete);
+  nudge.textContent = `Setup · ${done} of ${total} done · Continue →`;
+  const required = steps.filter((s) => !s.optional);
+  const optional = steps.filter((s) => s.optional);
+  const next = required.find((s) => !s.done);
+  const pct = `${Math.round((done / total) * 100)}%`;
+  const count = complete ? `All ${total} steps done` : `${done} of ${total} done`;
+
+  // The first step still to do opens by itself, until someone opens or closes one.
+  if (setupState.current === undefined) setupState.current = next ? next.id : null;
+  if (setupState.current && !steps.some((s) => s.id === setupState.current)) setupState.current = null;
+
+  $('#setup-count').textContent = `${count} · ${optional.length} optional`;
+  $('#setup-fill').style.width = pct;
+  $('#setup-list').replaceChildren(...stepRows(required));
+  $('#setup-optional-count').textContent = `${optional.filter((s) => s.done).length} of ${optional.length} done`;
+  $('#setup-optional-list').replaceChildren(...stepRows(optional));
+
+  // Overview shows just the step to do next.
+  $('#next-count').textContent = count;
+  $('#next-fill').style.width = pct;
+  $('#next-step').replaceChildren(...(next ? [
+    el('div', { class: 'mono muted', text: `Next · ${adminName(next.section)}` }),
+    el('h4', { text: next.title }),
+    el('p', { class: 'setup-why', text: next.why }),
+    el('div', { class: 'row', style: 'margin-top:16px' },
+      next.action ? el('button', { class: 'btn small', type: 'button', text: next.action.label, onclick: () => openSetupAction(next.action) }) : null,
+      el('a', { class: 'btn ghost small', href: '#/admin/setup', text: 'See how', onclick: () => { setupState.current = next.id; } })),
+  ] : [el('h4', { text: 'Roost is set up' }), el('p', { class: 'setup-why', text: 'Every required step is done. Optional extras are under Setup.' })]));
+  renderAdminNav();
+}
+
+// Jumps to the form a step is done in, in the right Admin section, and puts the cursor in it.
 function openSetupAction({ view, focus, field }) {
-  const target = `#/${view}`;
+  const form = focus && document.getElementById(focus);
+  const sec = view === 'admin' ? ((form && form.closest('[data-sec]') || {}).dataset || {}).sec : null;
+  const target = view === 'admin' ? `#/admin/${sec || 'overview'}` : `#/${view}`;
   const jump = () => {
-    const form = focus && document.getElementById(focus);
-    if (!form) return;
-    // A finished card lives in the Set up drawer; open it so the card can be seen.
-    const drawer = form.closest('details');
+    const f = focus && document.getElementById(focus);
+    if (!f) return;
+    // A finished card lives in the Done drawer; open it so the card can be seen.
+    const drawer = f.closest('details');
     if (drawer) drawer.open = true;
-    form.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    const input = (field && form.elements[field]) || form.querySelector('input:not([type=hidden]):not([disabled]), select, textarea');
+    f.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const input = (field && f.elements && f.elements[field]) || f.querySelector('input:not([type=hidden]):not([disabled]), select, textarea');
     if (input) input.focus({ preventScroll: true });
   };
   if (location.hash === target) jump();
   else {
     location.hash = target;
-    setTimeout(jump, 150);
+    setTimeout(jump, 400);
   }
 }
 
-$('#setup-toggle').addEventListener('click', () => {
-  setupState.open = !setupState.open;
-  $('#setup-body').classList.toggle('hidden', !setupState.open);
-  $('#setup-toggle').textContent = setupState.open ? 'Hide steps' : 'Show steps';
-});
+// ---------- admin sections ----------
 
 async function loadMovieRequests() {
   try {
@@ -2316,41 +2350,103 @@ async function loadMovieRequests() {
   } catch { /* the panel just stays hidden */ }
 }
 
-async function loadAdmin() {
-  loadMovieRequests();
+function renderAdminNav() {
+  const todo = new Set(setupState.steps.filter((s) => !s.done && !s.optional).map((s) => s.section));
+  $('#admin-nav').replaceChildren(...ADMIN_SECTIONS.map(([id, name]) => el('a', {
+    href: `#/admin/${id}`, class: id === adminState.sec ? 'on' : '', 'aria-current': id === adminState.sec ? 'page' : false,
+  }, name, !['overview', 'setup'].includes(id) && todo.has(id) ? el('i', { class: 'nav-dot', 'aria-label': 'Needs setup' }) : null)));
+  const on = $('#admin-nav a.on');
+  if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest', inline: 'center' });
+}
+
+function applyAdminSection() {
+  for (const c of $('#admin-main').children) c.classList.toggle('sec-off', !(c.dataset.sec || '').split(' ').includes(adminState.sec));
+}
+
+// What needs attention, from the security check-up. Each row opens the section that fixes it.
+const NEEDS_SECTION = { backup: 'storage', 'backup-test': 'storage', https: 'network', ports: 'network' };
+function renderNeeds(data) {
+  const open = data.checks.filter((c) => c.status === 'warn' || c.status === 'bad');
+  $('#needs-count').textContent = open.length ? `${open.length} thing${open.length === 1 ? '' : 's'}` : 'Nothing right now';
+  $('#needs-list').replaceChildren(...open.map((c) => el('li', { class: 'security-row' },
+    el('span', { class: `dot ${c.status === 'bad' ? 'offline' : 'warn'}` }),
+    el('div', {}, el('div', { class: 'security-what', text: c.title }), c.detail ? el('div', { class: 'mono muted', text: c.detail }) : ''),
+    el('a', { class: 'link-btn mono', href: c.id === 'updates' ? '#/status' : `#/admin/${NEEDS_SECTION[c.id] || 'security'}`, text: 'Open →' }))));
+}
+
+// Each section loads only its own data, when it is opened.
+const adminLoaders = {
+  async overview() {
+    const [{ requests }] = await Promise.all([api('GET', '/api/admin/storage-requests'), loadSecurity()]);
+    renderStorageRequests(requests);
+    loadMovieRequests();
+    $('#requests-panel').classList.toggle('hidden', !requests.length);
+    if (state.notice && !$('#notice-form').text.value) { $('#notice-form').text.value = state.notice.text; previewNotice(); }
+  },
+  async setup() {},
+  async people() {
+    const [{ users }, { apps }, { settings }, { invites, publicUrl }, { family }] = await Promise.all([
+      api('GET', '/api/admin/users'), api('GET', '/api/apps'), api('GET', '/api/admin/settings'), api('GET', '/api/admin/invites'), api('GET', '/api/admin/family')]);
+    state.users = users;
+    state.apps = apps;
+    state.defaultLimitGb = settings.defaultLimitGb;
+    state.publicUrl = publicUrl;
+    pickers.newUser.setValue(settings.defaultLimitGb);
+    renderUsers();
+    renderFamily(family);
+    renderInvites(invites);
+    $('#new-user-apps').replaceChildren(...appChecks(null));
+  },
+  async apps() {
+    const [{ apps }] = await Promise.all([api('GET', '/api/apps')]);
+    state.apps = apps;
+    renderAppsEditor();
+    loadJellyfin();
+    loadCoffee();
+    loadGalaxies();
+  },
+  async storage() {
+    loadNestDrive();
+    loadBackupAdmin();
+    restoreView.night = '';
+    browseBackup('');
+  },
+  async network() {
+    loadTls();
+    loadRemote();
+  },
+  async security() {
+    loadPush();
+    loadActivity();
+    loadSecurity();
+  },
+  async server() {
+    const { settings } = await api('GET', '/api/admin/settings');
+    const form = $('#settings-form');
+    form.adminsNeedTwoStep.checked = settings.adminsNeedTwoStep;
+    form.publicLinks.checked = settings.publicLinks;
+    form.serverName.value = state.serverName;
+    form.publicUrl.value = settings.publicUrl;
+    state.publicUrl = settings.publicUrl;
+    state.defaultLimitGb = settings.defaultLimitGb;
+    pickers.default.setValue(settings.defaultLimitGb);
+    renderMailSettings(settings);
+  },
+};
+
+// Reloads whatever the open section shows, after something in it changed.
+const loadAdmin = () => adminLoaders[adminState.sec || 'overview']();
+
+async function showAdmin(sec) {
+  if (!ADMIN_SECTIONS.some((s) => s[0] === sec)) sec = 'overview';
+  const changed = adminState.sec !== sec;
+  adminState.sec = sec;
+  $('#admin-crumb').textContent = adminName(sec);
+  renderAdminNav();
+  applyAdminSection();
+  if (changed) window.scrollTo(0, 0);
   loadSetup(true);
-  loadPush();
-  const [{ users }, { apps }, { requests, defaultLimitGb }, { invites, publicUrl }, { settings }, { family }] = await Promise.all([
-    api('GET', '/api/admin/users'), api('GET', '/api/apps'), api('GET', '/api/admin/storage-requests'), api('GET', '/api/admin/invites'),
-    api('GET', '/api/admin/settings'), api('GET', '/api/admin/family')]);
-  $('#settings-form').adminsNeedTwoStep.checked = settings.adminsNeedTwoStep;
-  $('#settings-form').publicLinks.checked = settings.publicLinks;
-  if (state.notice && !$('#notice-form').text.value) { $('#notice-form').text.value = state.notice.text; previewNotice(); }
-  renderMailSettings(settings);
-  state.users = users;
-  state.apps = apps;
-  state.defaultLimitGb = defaultLimitGb;
-  state.publicUrl = publicUrl;
-  $('#settings-form').serverName.value = state.serverName;
-  $('#settings-form').publicUrl.value = publicUrl;
-  pickers.default.setValue(defaultLimitGb);
-  pickers.newUser.setValue(defaultLimitGb);
-  renderStorageRequests(requests);
-  loadActivity();
-  loadSecurity();
-  renderAppsEditor();
-  renderUsers();
-  renderFamily(family);
-  renderInvites(invites);
-  $('#new-user-apps').replaceChildren(...appChecks(null));
-  loadTls();
-  loadRemote();
-  loadCoffee();
-  loadGalaxies();
-  loadBackupAdmin();
-  loadNestDrive();
-  restoreView.night = '';
-  browseBackup('');
+  try { await adminLoaders[sec](); } catch (err) { /* each card shows its own errors */ }
 }
 
 // ---------- Jellyfin sign-in ----------
@@ -2809,6 +2905,7 @@ async function loadSecurity() {
       el('span', { class: `dot ${c.status === 'ok' ? 'online' : c.status === 'warn' ? 'warn' : c.status === 'bad' ? 'offline' : ''}` }),
       el('div', {}, el('div', { class: 'security-what', text: c.title }), c.detail ? el('div', { class: 'mono muted', text: c.detail }) : ''))));
     $('#security-panel > .msg').textContent = '';
+    renderNeeds(data);
   } catch (err) { flash($('#security-panel'), err.message, false); }
 }
 
