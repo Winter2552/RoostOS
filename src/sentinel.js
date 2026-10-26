@@ -11,12 +11,17 @@
 //   spray     an address failing to sign in as four or more different names
 //   tamper    the admin accounts changed by something other than a Roost screen
 //             (checked against a seal kept in its own file)
+//   session   an admin's sign-in cookie used from a different browser or device
+//             than it was made on, a sign it was stolen
+//   container a container Sentinel has not seen before, or one now running a
+//             different image (checked on the container reading Roost already makes)
 //
 // Modes (Admin → Sentinel):
 //   off     watches nothing, bans nothing
 //   manual  alerts, and offers a Ban button; you decide
-//   auto    alerts and acts on its own: bans the address for 24 hours, and
-//           locks Roost down if the admin accounts were tampered with
+//   auto    alerts and acts on its own: bans the address for 24 hours, signs out
+//           a stolen session, and locks Roost down if the admin accounts were
+//           tampered with. It never touches containers; it only tells you.
 // Bans only ever apply to connections from outside (HTTPS), never to the home
 // address, so Sentinel can't shut Raven out. It keeps its state in
 // sentinel.json, separate from the accounts file it protects.
@@ -35,6 +40,8 @@ const KEEP_INCIDENTS = 30;
 const MAX_TRACKED = 1000;
 const SAVE_DELAY_MS = 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+// One-off containers (docker compose run) come and go; they aren't news.
+const EPHEMERAL = /-run-[0-9a-f]+$/;
 const TRACE_MAX = 400; // recent outside requests kept in memory, never saved
 const EVIDENCE_MAX = 40; // requests kept with an incident
 const EVIDENCE_KEPT = 10; // incidents that keep their evidence
@@ -87,11 +94,12 @@ function sealFile(dataDir, db) {
 class Sentinel {
   // store: { db }; raise(key, title, detail): an alert on the bell and phone;
   // lockdown(by): shut outside access; skip(ip): true for addresses never banned.
-  constructor({ dataDir, store, raise = () => {}, lockdown = () => {}, skip = () => false, now = Date.now, newId = () => crypto.randomBytes(6).toString('hex') }) {
+  constructor({ dataDir, store, raise = () => {}, lockdown = () => {}, endSession = () => {}, skip = () => false, now = Date.now, newId = () => crypto.randomBytes(6).toString('hex') }) {
     this.file = path.join(dataDir, 'sentinel.json');
     this.store = store;
     this.raise = raise;
     this.lockdown = lockdown;
+    this.endSession = endSession; // (userId, sessionId)
     this.skip = skip;
     this.now = now;
     this.newId = newId;
@@ -99,6 +107,10 @@ class Sentinel {
     this.mode = MODES.includes(saved.mode) ? saved.mode : 'manual';
     this.seal = typeof saved.seal === 'string' ? saved.seal : null;
     this.bans = Array.isArray(saved.bans) ? saved.bans.filter((b) => b.until > now()) : [];
+    // Containers seen and accepted, and ones flagged but not yet accepted (so a restart doesn't flag them again).
+    this.known = saved.known && typeof saved.known === 'object' ? saved.known : null;
+    this.unknown = saved.unknown && typeof saved.unknown === 'object' ? saved.unknown : {};
+    this.flaggedSessions = new Set();
     this.incidents = Array.isArray(saved.incidents) ? saved.incidents.slice(-KEEP_INCIDENTS) : [];
     this.recent = []; // the last few outside requests, for the evidence in a report
     this.scans = new Map(); // ip → times
@@ -169,6 +181,51 @@ class Sentinel {
     if (before < SPRAY_NAMES && seen.size >= SPRAY_NAMES) this.incident('spray', ip, `Tried ${seen.size} different usernames in ten minutes`);
   }
 
+  // An admin's sign-in cookie used from a different browser or device than it
+  // was made on. → true when Sentinel ended that sign-in (auto mode), so the
+  // request in flight is refused too.
+  sessionMismatch({ userId, username, sessionId, was, now, ip }) {
+    if (!this.on() || this.flaggedSessions.has(sessionId)) return false;
+    this.flaggedSessions.add(sessionId);
+    if (this.flaggedSessions.size > MAX_TRACKED) this.flaggedSessions.delete(this.flaggedSessions.values().next().value);
+    const inc = this.incident('session', ip, `The sign-in cookie for ${username}, made on ${was}, is being used from ${now}. It may have been stolen.`, true, { userId, sessionId });
+    if (this.mode !== 'auto') return false;
+    this.endSession(userId, sessionId);
+    inc.handled = inc.handled ? `${inc.handled}, signed out` : 'signed out';
+    this.saveSoon();
+    return true;
+  }
+
+  // The containers Docker reports. The first look is the baseline; after that,
+  // a new name or a changed image is an incident until you trust it.
+  containers(list) {
+    if (!this.on() || !Array.isArray(list)) return;
+    const seen = {};
+    for (const c of list) if (c.name && !EPHEMERAL.test(c.name)) seen[c.name] = c.imageRef || c.image || '';
+    if (!this.known) {
+      this.known = seen;
+      this.saveSoon();
+      return;
+    }
+    for (const [name, ref] of Object.entries(seen)) {
+      const was = this.known[name];
+      if (was === ref || this.unknown[name] === ref) continue;
+      this.unknown[name] = ref;
+      this.incident('container', null, was === undefined ? `A new container is running: ${name} (${ref}). If you did not install it, remove it in ZimaOS and run the recovery steps.` : `${name} now runs a different image: ${was} → ${ref}.`, was !== undefined, { name, ref });
+    }
+  }
+
+  // "I know that one": accepts a container (or its new image) as normal.
+  trust(incident) {
+    if (!incident || incident.kind !== 'container' || !incident.target) return false;
+    const { name, ref } = incident.target;
+    this.known = { ...(this.known || {}), [name]: ref };
+    delete this.unknown[name];
+    incident.handled = 'trusted';
+    this.saveSoon();
+    return true;
+  }
+
   checkSeal() {
     // A Roost screen changed something a moment ago; the reseal is on its way.
     if (!this.on() || this.sealTimer) return;
@@ -196,15 +253,15 @@ class Sentinel {
 
   // ---------- what it does ----------
 
-  incident(kind, ip, detail, serious = false) {
+  incident(kind, ip, detail, serious = false, target = null) {
     // What the report will show: that address's last requests, or, with no
     // address (tampering), the most recent changes anyone made from outside.
     const evidence = (ip ? this.recent.filter((r) => r.ip === ip) : this.recent.filter((r) => r.method !== 'GET')).slice(-EVIDENCE_MAX).map((r) => ({ ...r }));
-    const inc = { id: this.newId(), at: new Date(this.now()).toISOString(), kind, ip, detail, serious, handled: null, evidence };
+    const inc = { id: this.newId(), at: new Date(this.now()).toISOString(), kind, ip, detail, serious, handled: null, evidence, target };
     this.incidents.push(inc);
     if (this.incidents.length > KEEP_INCIDENTS) this.incidents.shift();
     for (const old of this.incidents.slice(0, -EVIDENCE_KEPT)) delete old.evidence;
-    const what = { scanner: 'A scanner is probing Roost', spray: 'Someone is guessing usernames', tamper: 'Admin accounts were changed behind Roost' }[kind];
+    const what = { scanner: 'A scanner is probing Roost', spray: 'Someone is guessing usernames', tamper: 'Admin accounts were changed behind Roost', session: 'A sign-in looks stolen', container: 'An unexpected container' }[kind];
     const auto = this.mode === 'auto';
     let home = false;
     if (auto && ip) {
@@ -215,11 +272,13 @@ class Sentinel {
       this.lockdown('Sentinel');
       inc.handled = 'locked down';
     }
-    const action = home ? ' That address is on your home network, so it was not banned.'
+    const action = kind === 'session' ? (auto ? ' Sentinel signed it out.' : ' Open Admin → Sentinel to sign it out.')
+      : kind === 'container' ? ' Open Admin → Sentinel to trust it if it is yours.'
+      : home ? ' That address is on your home network, so it was not banned.'
       : inc.handled === 'banned' ? ' Sentinel banned that address for 24 hours.'
       : inc.handled === 'locked down' ? ' Sentinel locked Roost down.'
         : kind === 'tamper' ? ' Open Admin → Security to lock down.' : ' Open Admin → Sentinel to ban it.';
-    this.raise(`sec:sentinel:${kind}:${ip || 'accounts'}`, ip ? `${what}: ${ip}` : what, `${detail}${action}`);
+    this.raise(`sec:sentinel:${kind}:${ip || (target && target.name) || 'accounts'}`, ip ? `${what}: ${ip}` : what, `${detail}${action}`);
     this.saveSoon();
     return inc;
   }
@@ -255,7 +314,7 @@ class Sentinel {
     return {
       mode: this.mode,
       bans: this.bans.filter((b) => b.until > t).map((b) => ({ ip: b.ip, reason: b.reason, auto: b.auto, at: b.at, until: new Date(b.until).toISOString() })),
-      incidents: [...this.incidents].reverse().map(({ evidence, ...rest }) => ({ ...rest, report: Boolean(evidence) })),
+      incidents: [...this.incidents].reverse().map(({ evidence, target, ...rest }) => ({ ...rest, report: Boolean(evidence), canTrust: rest.kind === 'container' && !rest.handled, canEnd: rest.kind === 'session' && !rest.handled?.includes('signed out') })),
     };
   }
 
@@ -273,7 +332,7 @@ class Sentinel {
     this.timer = null;
     try {
       const tmp = `${this.file}.${process.pid}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify({ mode: this.mode, seal: this.seal, bans: this.bans, incidents: this.incidents }));
+      fs.writeFileSync(tmp, JSON.stringify({ mode: this.mode, seal: this.seal, bans: this.bans, incidents: this.incidents, known: this.known, unknown: this.unknown }));
       fs.renameSync(tmp, this.file);
     } catch (err) {
       console.error('Could not save Sentinel:', err.message);

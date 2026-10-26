@@ -134,7 +134,8 @@ class UpdateChecker {
   // Counts from saved results only; never starts a check.
   summary() {
     const states = Object.values(this.results).map((r) => r.state);
-    return { checked: states.length > 0, update: states.filter((x) => x === 'update').length, restart: states.filter((x) => x === 'restart').length };
+    const waiting = Object.values(this.results).filter((r) => r.state === 'update' && r.since).map((r) => Math.floor((this.now() - Date.parse(r.since)) / 86400000));
+    return { checked: states.length > 0, update: states.filter((x) => x === 'update').length, restart: states.filter((x) => x === 'restart').length, waitingDays: waiting.length ? Math.max(...waiting) : 0 };
   }
 
   // The admin's "Check now", at most once a minute. → false when too soon.
@@ -162,7 +163,10 @@ class UpdateChecker {
           // Registry unreachable: keep what we knew rather than guess.
           state = before ? before.state : null;
         }
-        fresh[key] = { state, checkedAt: new Date(this.now()).toISOString() };
+        const at = new Date(this.now()).toISOString();
+        // `since`: when an update first showed up as waiting, so the Security card can say for how long.
+        const since = state === 'update' ? (before && before.state === 'update' && before.since) || at : undefined;
+        fresh[key] = { state, checkedAt: at, ...(since ? { since } : {}) };
       }));
       // Keep only images still in use, so the file doesn't grow.
       this.results = fresh;

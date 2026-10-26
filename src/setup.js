@@ -436,6 +436,59 @@ const STEPS = [
     check: (ctx) => ctx.ticked.includes('email-replies'),
   },
 
+  // ---------- staying safe (things only you can change) ----------
+  {
+    id: 'router-hardening',
+    section: 'security',
+    group: 'Reach it from anywhere',
+    title: 'Check the routers',
+    why: 'The fewer doors open to the internet, the less there is to attack.',
+    how: [
+      'On both routers, forward only port 443 (to this server) and nothing else.',
+      'Turn UPnP off on both, so no app can open a door by itself.',
+      'Change the routers\' admin passwords from the defaults.',
+      'Then press Check open ports on Admin → Security to see what answers from outside.',
+    ],
+    action: { label: 'Open Security', view: 'admin' },
+    optional: true,
+    // Lives in the routers, so Roost can't see it; tick it off yourself.
+    manual: true,
+    check: (ctx) => ctx.ticked.includes('router-hardening'),
+  },
+  {
+    id: 'cloudflare-protection',
+    section: 'security',
+    group: 'Reach it from anywhere',
+    title: 'Turn on Cloudflare\'s protection',
+    why: 'Cloudflare turns away a lot of attack traffic before it reaches your home connection.',
+    how: [
+      'In Cloudflare → Security → Bots, turn on Bot Fight Mode.',
+      'In Security → WAF, turn on the free managed rules.',
+      'Optional: in Zero Trust → Access, put /admin behind a second sign-in.',
+      'Make a Cloudflare token that can only edit DNS for roostos.network, and use that one in Roost.',
+    ],
+    optional: true,
+    // Lives in Cloudflare, so Roost can't see it; tick it off yourself.
+    manual: true,
+    check: (ctx) => ctx.ticked.includes('cloudflare-protection'),
+  },
+  {
+    id: 'zimaos-updates',
+    section: 'security',
+    group: 'Server',
+    title: 'Keep ZimaOS and its apps updated',
+    why: 'Most break-ins use a hole that was already fixed in a newer version.',
+    how: [
+      'In ZimaOS, open Settings → Update and install the latest ZimaOS.',
+      'Update each app from the ZimaOS App Store; Roost\'s Security card says when an app has an update waiting.',
+      'Do not expose the ZimaOS web page or SSH to the internet.',
+    ],
+    optional: true,
+    // Happens in ZimaOS, so Roost can't see it; tick it off yourself.
+    manual: true,
+    check: (ctx) => ctx.ticked.includes('zimaos-updates'),
+  },
+
   // ---------- people ----------
   {
     id: 'two-step',
