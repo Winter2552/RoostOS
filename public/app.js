@@ -873,7 +873,7 @@ function alertRow(a) {
   const cleared = Boolean(a.resolvedAt);
   const kind = cleared ? '' : a.dismissedAt ? 'starting' : 'offline';
   let meta;
-  if (!cleared) meta = `Since ${when(a.startedAt)} · ${ago(a.startedAt)}${a.dismissedAt ? ' · ignored until fixed' : ''}`;
+  if (!cleared) meta = `Since ${when(a.startedAt)} · ${ago(a.startedAt)}${a.dismissedAt ? (a.security ? ' · muted, fades after a day' : ' · ignored until fixed') : ''}`;
   else if (a.startedAt === a.resolvedAt) meta = when(a.resolvedAt);
   else meta = `${when(a.startedAt)} – ${clock(a.resolvedAt)} · lasted ${duration((Date.parse(a.resolvedAt) - Date.parse(a.startedAt)) / 1000)}`;
   const ignore = !cleared && !a.dismissedAt
