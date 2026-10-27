@@ -94,7 +94,7 @@ const STEPS = [
     covers: ['energyPrice', 'energyCurrency'],
     why: 'See roughly how many watts the server draws and what that costs, plus CPU and drive heat, on the status page.',
     how: [
-      'Keep the /sys line under roost-smart in the compose file in the README (it is read-only). Redeploy Roost.',
+      'On the Status page, press "Set up power and heat" under Power and heat. It builds the small helper once and the button goes away when the readings show. (If the button isn\'t there yet, Status shows one command to run in the server terminal first.)',
       'Under Admin → Server, check your electricity price per kWh (it starts at 26.84p).',
       'Power is the CPU\'s own reading plus an allowance for the board and drives, so it is an estimate, a few watts under the wall. A reading this server can\'t give is left off the page.',
     ],

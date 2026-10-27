@@ -11,7 +11,8 @@ const path = require('path');
 const REQUEST_FILE = 'update-request.json';
 const STATUS_FILE = 'update-status.json';
 const LOGGED_FILE = 'update-logged.txt';
-const ACTIONS = new Set(['check', 'apply']);
+const HELPER_FILE = 'helper-status.json';
+const ACTIONS = new Set(['check', 'apply', 'helper']);
 // The updater writes at least every 5 minutes while it is alive.
 const STOPPED_AFTER = 15 * 60 * 1000;
 
@@ -76,6 +77,28 @@ function summarize(status, now = Date.now()) {
   return { ...out, state: out.behind ? 'available' : 'current' };
 }
 
+// Building the roost-smart helper from Status. Only an updater new enough to do
+// it writes helper-status.json, so its absence means "rebuild the updater once".
+// capable also needs the updater to be alive, as the update card does.
+function readHelperStatus(dataDir) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dataDir, HELPER_FILE), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function summarizeHelper(helper, updaterState, requested) {
+  const last = helper && helper.last
+    ? { ok: helper.last.ok, error: helper.last.error || null, detail: helper.last.detail || null, finishedAt: helper.last.finishedAt || null }
+    : null;
+  return {
+    capable: Boolean(helper) && updaterState !== 'off' && updaterState !== 'stopped',
+    building: Boolean(requested) || Boolean(helper && helper.state === 'building'),
+    last,
+  };
+}
+
 // So an update's outcome is written to the activity log once, even across restarts.
 function lastLogged(dataDir) {
   try {
@@ -89,4 +112,4 @@ function markLogged(dataDir, at) {
   fs.writeFileSync(path.join(dataDir, LOGGED_FILE), String(at));
 }
 
-module.exports = { readStatus, writeRequest, hasRequest, summarize, lastLogged, markLogged, REQUEST_FILE, STATUS_FILE };
+module.exports = { readStatus, writeRequest, hasRequest, summarize, readHelperStatus, summarizeHelper, HELPER_FILE, lastLogged, markLogged, REQUEST_FILE, STATUS_FILE };
