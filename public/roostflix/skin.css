@@ -166,3 +166,5 @@ a { color: var(--rf-cream); }
 .rf-list li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid #222; }
 .rf-list b { font-weight: 400; color: #999; }
 .rf-list b.rf-added { color: #fff; }
+.rf-tvstate { margin-left: auto; opacity: .6; font-size: .85rem; }
+.rf-tv[aria-checked="true"] .rf-tvstate { opacity: 1; }

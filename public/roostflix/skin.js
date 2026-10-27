@@ -351,7 +351,29 @@
       openRequest();
     });
     host.append(a);
+    host.append(tvSwitch());
     return true;
+  }
+
+  // "Play for TV": a cookie Roost reads (see src/roostflix.js). On, films are
+  // sent as H.264, which TVs with built-in AirPlay can show.
+  const tvOn = () => /(?:^|;\s*)roost_h264=1(?:;|$)/.test(document.cookie);
+  function tvSwitch() {
+    const a = el('a', 'navMenuOption rf-tv');
+    a.href = '#';
+    a.setAttribute('role', 'switch');
+    const icon = el('span', 'material-icons navMenuOptionIcon', 'tv');
+    icon.setAttribute('aria-hidden', 'true');
+    const state = el('span', 'rf-tvstate');
+    const paint = () => { a.setAttribute('aria-checked', tvOn() ? 'true' : 'false'); state.textContent = tvOn() ? 'On' : 'Off'; };
+    a.append(icon, el('span', 'navMenuOptionText', 'Play for TV (AirPlay)'), state);
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      document.cookie = tvOn() ? 'roost_h264=; path=/jellyfin; max-age=0' : 'roost_h264=1; path=/jellyfin; max-age=31536000; samesite=lax';
+      paint();
+    });
+    paint();
+    return a;
   }
 
   // ---------- Save to Files ----------
@@ -378,66 +400,4 @@
   document.addEventListener('viewshow', refreshExtras);
   refreshExtras();
 
-  // ---------- AirPlay: send H.264 ----------
-  // Many TVs with built-in AirPlay take the sound of an HEVC film but not the
-  // picture. While this page is casting, Jellyfin is told the player can't do
-  // HEVC, so it converts the picture to H.264, then the film restarts where it was.
-  let casting = false;
-  const noHevc = (list) => String(list || '').split(',').map((c) => c.trim()).filter((c) => c && !/^(hevc|h265)$/i.test(c)).join(',');
-  function plainProfile(profile) {
-    const p = JSON.parse(JSON.stringify(profile));
-    for (const key of ['DirectPlayProfiles', 'TranscodingProfiles']) {
-      p[key] = (p[key] || []).filter((x) => x.Type !== 'Video' || x.VideoCodec === undefined || noHevc(x.VideoCodec) || !x.VideoCodec).map((x) => {
-        if (x.Type === 'Video' && x.VideoCodec) x.VideoCodec = noHevc(x.VideoCodec);
-        return x;
-      });
-    }
-    return p;
-  }
-  const realFetch = window.fetch;
-  window.fetch = function (input, init) {
-    try {
-      const url = typeof input === 'string' ? input : (input && input.url) || '';
-      if (casting && init && typeof init.body === 'string' && /\/Items\/[\w-]+\/PlaybackInfo/.test(url)) {
-        const body = JSON.parse(init.body);
-        if (body && body.DeviceProfile) {
-          body.DeviceProfile = plainProfile(body.DeviceProfile);
-          init = { ...init, body: JSON.stringify(body) };
-        }
-      }
-    } catch { /* leave the request as it was */ }
-    return realFetch.call(this, input, init);
-  };
-
-  async function restartForCast(video) {
-    const s = session();
-    const c = window.ApiClient;
-    if (!s || !c || !c.deviceId) return;
-    try {
-      const list = await get(s, `/Sessions?DeviceId=${encodeURIComponent(c.deviceId())}`);
-      const now = (list.find((x) => x.NowPlayingItem) || {});
-      if (!now.Id || !safe(now.NowPlayingItem.Id)) return;
-      const ticks = Math.floor((video.currentTime || 0) * 1e7);
-      await realFetch(`${s.base}/Sessions/${encodeURIComponent(now.Id)}/Playing?playCommand=PlayNow&itemIds=${now.NowPlayingItem.Id}&startPositionTicks=${ticks}`, {
-        method: 'POST', headers: { Authorization: `MediaBrowser Client="Roostflix", Device="Browser", DeviceId="roostflix", Version="1", Token="${s.token}"` },
-      });
-    } catch { /* it keeps playing as it was */ }
-  }
-
-  // One restart per time AirPlay is switched on. Restarting makes the player
-  // reconnect, which fires this event again, so anything inside the cooldown
-  // is ignored rather than restarted, and switching AirPlay off never restarts.
-  let lastRestart = 0;
-  document.addEventListener('webkitcurrentplaybacktargetiswirelesschanged', (e) => {
-    const video = e.target;
-    if (!video || video.tagName !== 'VIDEO') return;
-    const now = Boolean(video.webkitCurrentPlaybackTargetIsWireless);
-    if (Date.now() - lastRestart < 30000) { if (now) casting = true; return; }
-    if (now === casting) return;
-    casting = now;
-    if (now) {
-      lastRestart = Date.now();
-      restartForCast(video);
-    }
-  }, true);
 })();
