@@ -27,6 +27,15 @@ test('open ports are found, closed ones are not', async () => {
   assert.deepEqual(out, { ip: '127.0.0.1', at: 5, tried: 2, open: [{ port: openPort, name: 'test' }] });
 });
 
+test('an open port says who answered', async () => {
+  const web = net.createServer((c) => { c.once('data', () => c.end('HTTP/1.1 200 OK\r\nServer: HubOS\r\n\r\n')); });
+  await new Promise((r) => web.listen(0, '127.0.0.1', r));
+  const port = web.address().port;
+  const out = await checkPorts('127.0.0.1', { timeoutMs: 500, now: () => 5, ports: [{ port, name: 'Web' }] });
+  web.close();
+  assert.deepEqual(out.open, [{ port, name: 'Web', banner: 'HTTP/1.1 200 OK · HubOS' }]);
+});
+
 test('the checklist wants only 443 open', () => {
   const base = { db: { users: [], settings: {} } };
   const at = Date.parse('2026-10-26T12:00:00Z');
@@ -35,7 +44,8 @@ test('the checklist wants only 443 open', () => {
   const fine = securityChecks({ ...base, ports: { ip: '1.2.3.4', at, tried: 18, open: [{ port: 443, name: 'Roost (HTTPS)' }] } }).checks.find((c) => c.id === 'ports');
   assert.equal(fine.status, 'ok');
   const bad = securityChecks({ ...base, ports: { ip: '1.2.3.4', at, tried: 18, open: [{ port: 443, name: 'x' }, { port: 22, name: 'SSH' }] } }).checks.find((c) => c.id === 'ports');
-  assert.equal(bad.status, 'bad');
+  assert.equal(bad.status, 'warn');
+  assert.match(bad.title, /from inside your network/);
   assert.match(bad.detail, /22 \(SSH\)/);
 });
 
@@ -63,7 +73,7 @@ test('the button checks the public address, for admins, at most once a minute', 
     assert.equal(ran.body.ports.open[0].name, 'Mystery');
     assert.equal((await call('POST', '/api/admin/security/ports', null, cookie)).status, 429);
     const view = (await call('GET', '/api/admin/security', null, cookie)).body;
-    assert.equal(view.checks.find((c) => c.id === 'ports').status, 'bad');
+    assert.equal(view.checks.find((c) => c.id === 'ports').status, 'warn');
   } finally {
     server.close();
     open.close();
