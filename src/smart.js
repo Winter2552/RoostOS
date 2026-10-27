@@ -145,7 +145,7 @@ class DriveHealth {
     if (!this.dir) return null;
     let names;
     try {
-      names = fs.readdirSync(this.dir).filter((n) => !n.startsWith('.')).sort();
+      names = fs.readdirSync(this.dir).filter((n) => !n.startsWith('.') && n !== 'sensors').sort();
     } catch {
       return { drives: [], checkedAt: null, stale: false, missing: true };
     }
@@ -195,4 +195,4 @@ class DriveHealth {
   }
 }
 
-module.exports = { DriveHealth, judge, STALE_MS };
+module.exports = { DriveHealth, judge, STALE_MS, HOT };

@@ -1,6 +1,6 @@
 {
   "name": "roost",
-  "version": "0.1.18",
+  "version": "0.1.20",
   "description": "Roost OS homepage: dashboard and user accounts for the home server",
   "private": true,
   "main": "src/server.js",

@@ -329,6 +329,20 @@
       <h3 class="status-group mono muted">Server</h3>
       <div class="status-grid" id="status-server"></div>
 
+      <div id="status-power-wrap" class="hidden">
+        <h3 class="status-group mono muted">Power and heat</h3>
+        <div class="status-grid" id="status-power"></div>
+        <p class="mono muted status-note hidden" id="status-power-note"></p>
+        <div class="card power-charts hidden" id="status-power-charts">
+          <div class="chips" role="group" aria-label="Chart range">
+            <button class="chip" type="button" data-range="day" aria-pressed="true">Day</button>
+            <button class="chip" type="button" data-range="week" aria-pressed="false">Week</button>
+            <button class="chip" type="button" data-range="month" aria-pressed="false">Month</button>
+          </div>
+          <div id="power-chart-body"></div>
+        </div>
+      </div>
+
       <h3 class="status-group mono muted">Drives</h3>
       <div class="status-grid" id="status-disks"></div>
 
@@ -639,6 +653,7 @@
         <div class="checks alert-checks">
           <label><input type="checkbox" name="alertApps"> Apps that stop, crash or turn unhealthy</label>
           <label><input type="checkbox" name="alertDisks"> Drives that fill up or go missing</label>
+          <label><input type="checkbox" name="alertDriveTrend"> Drives getting worse: lost sectors, wearing out, running hot</label>
           <label><input type="checkbox" name="alertSecurity"> Sign-in trouble: repeated failures, new devices, password changes</label>
         </div>
         <div class="field alert-level">
@@ -670,6 +685,10 @@
           <label class="field"><span>Server name</span><input type="text" name="serverName" maxlength="40"></label>
           <div class="field"><span>Default storage limit</span><div id="default-picker"></div></div>
           <label class="field"><span>Public address (for invite links)</span><input type="text" name="publicUrl" maxlength="200" placeholder="https://roostos.network" autocapitalize="none" spellcheck="false" inputmode="url"></label>
+        </div>
+        <div class="form-grid">
+          <label class="field"><span>Electricity price per kWh (pence or cents)</span><input type="number" name="energyPrice" min="0" max="1000" step="0.01" inputmode="decimal"></label>
+          <label class="field"><span>Currency symbol</span><input type="text" name="energyCurrency" maxlength="3" placeholder="£"></label>
         </div>
         <label class="check-line" style="margin-top:18px"><input type="checkbox" name="adminsNeedTwoStep"> Admins must use two-step sign-in</label>
         <label class="check-line"><input type="checkbox" name="publicLinks"> Allow public file links (Nest)</label>

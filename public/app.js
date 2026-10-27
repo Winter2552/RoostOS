@@ -964,6 +964,7 @@ function renderAlertSettings(s) {
   alertForm.alertApps.checked = s.alertApps;
   alertForm.alertDisks.checked = s.alertDisks;
   alertForm.alertSecurity.checked = s.alertSecurity;
+  alertForm.alertDriveTrend.checked = s.alertDriveTrend;
   alertForm.alertDiskPct.value = s.alertDiskPct;
   paintAlertPct();
 }
@@ -975,6 +976,7 @@ alertForm.addEventListener('submit', async (e) => {
       alertApps: alertForm.alertApps.checked,
       alertDisks: alertForm.alertDisks.checked,
       alertSecurity: alertForm.alertSecurity.checked,
+      alertDriveTrend: alertForm.alertDriveTrend.checked,
       alertDiskPct: Number(alertForm.alertDiskPct.value),
     });
     flash(alertForm, 'Saved');
@@ -1760,13 +1762,16 @@ function hoursOn(h) {
   return h >= 48 ? `${Math.round(h / 24)} days` : `${h} hours`;
 }
 
-function healthLines(d) {
+function healthLines(d, outlook) {
   const x = d.details || {};
+  const o = outlook || {};
   const n = (v) => Number(v).toLocaleString();
   return [
     x.temp !== null && x.temp !== undefined ? `Temperature ${x.temp}°C` : null,
     x.hours !== null && x.hours !== undefined ? `Powered on ${hoursOn(x.hours)} (${n(x.hours)} h)` : null,
     x.wear !== null && x.wear !== undefined ? `Life used ${x.wear}%` : null,
+    o.yearsLeft !== null && o.yearsLeft !== undefined ? `About ${o.yearsLeft} years left at this rate` : o.wearTracked ? 'Wear is barely moving' : null,
+    o.sectorsWeek ? `${o.sectorsWeek} more replaced sectors this week` : null,
     x.written ? `Written ${bytes(x.written)}` : null,
     x.reallocated !== null && x.reallocated !== undefined ? `Replaced sectors ${n(x.reallocated)}` : null,
     x.pending !== null && x.pending !== undefined ? `Unreadable sectors ${n(x.pending)}` : null,
@@ -1780,7 +1785,7 @@ function healthLines(d) {
 
 // One card per drive: a verdict in plain words, the reason that matters, and
 // the numbers behind it when you tap it.
-function healthCard(d, open) {
+function healthCard(d, open, outlook) {
   const x = d.details || {};
   const name = [d.kind, driveSize(d.capacity)].filter(Boolean).join(' · ') || `/dev/${d.device}`;
   const fine = [x.temp !== null && x.temp !== undefined ? `${x.temp}°C` : null, x.hours ? `${hoursOn(x.hours)} on` : null].filter(Boolean).join(' · ');
@@ -1792,7 +1797,7 @@ function healthCard(d, open) {
       el('div', { class: 'mono stat-state' }, el('span', { class: `dot ${HEALTH_DOT[d.verdict]}` }), why)),
     el('div', { class: 'stat-lines mono muted' },
       (d.reasons || []).slice(1).map((t) => el('div', { class: 'health-reason', text: t })),
-      healthLines(d).map((t) => el('div', { text: t }))));
+      healthLines(d, outlook).map((t) => el('div', { text: t }))));
   return card;
 }
 
@@ -1812,12 +1817,121 @@ function renderOutside(list) {
   }));
 }
 
-function renderHealth(h) {
+// Power and heat (admins). Power is the CPU's reading plus an allowance, so it
+// is labelled an estimate; a tile the server can't read is left out.
+function renderPower(p) {
+  $('#status-power-wrap').classList.toggle('hidden', !p);
+  if (!p) return;
+  const tiles = [];
+  if (p.power) {
+    tiles.push(
+      statCard('Power (estimate)', `${Math.round(p.power.watts)} W`, `CPU ${p.power.cpuWatts} W`),
+      statCard('Cost at this rate', `${p.power.perHour} an hour`, `${p.power.perDay} a day · ${p.power.perMonth} a month`));
+  }
+  if (p.cpuTemp !== null && p.cpuTemp !== undefined) tiles.push(statCard('CPU heat', `${p.cpuTemp}°C`, p.fanRpm ? `Fan ${p.fanRpm.toLocaleString()} rpm` : 'No fan reading'));
+  if (p.hottestDrive) tiles.push(statCard('Hottest drive', `${p.hottestDrive.temp}°C`, p.hottestDrive.name));
+  $('#status-power').replaceChildren(...tiles);
+  const charts = !p.missing && !p.stale && tiles.length > 0;
+  $('#status-power-charts').classList.toggle('hidden', !charts);
+  if (charts) loadPowerCharts(false);
+  const note = $('#status-power-note');
+  let text = '';
+  if (p.missing) text = 'Waiting for the roost-smart helper. Power and heat appear once it is running with the /sys line from the compose file.';
+  else if (p.stale) text = `Power and heat readings have stopped; the last was ${ago(p.at)}. Is roost-smart running?`;
+  else if (!tiles.length) text = 'This server doesn\'t report power or heat to Roost.';
+  else if (p.power) text = 'Power is the CPU\'s own reading plus about 6 W for the board and 4 W per spinning hard drive, so the wall figure is usually a few watts higher. The cost uses your price under Admin → Server.';
+  else text = 'This server doesn\'t report CPU power, so there is no power estimate.';
+  note.textContent = text;
+  note.classList.toggle('hidden', !text);
+}
+
+// ---------- power and heat charts (admins) ----------
+
+// Fetched when the section first shows, when the range changes, and at most
+// every 5 minutes after that: the history only gains a point every 5 minutes.
+const powerChart = { range: 'day', at: 0, busy: false };
+
+// One line from points, broken where the history has a gap.
+function chartPath(points, key, x, y, gap) {
+  let d = '';
+  let prev = null;
+  for (const p of points) {
+    const v = p[key];
+    if (typeof v !== 'number') { prev = null; continue; }
+    d += `${prev === null || p.t - prev > gap ? 'M' : 'L'}${x(p.t).toFixed(1)},${y(v).toFixed(1)}`;
+    prev = p.t;
+  }
+  return d;
+}
+
+function chartSvg(h, keys, unit) {
+  const W = 480;
+  const H = 90;
+  const end = Date.now();
+  const spans = { day: 864e5, week: 6048e5, month: 2592e6 };
+  const start = end - spans[h.range];
+  const values = h.points.flatMap((p) => keys.map((k) => p[k])).filter((v) => typeof v === 'number');
+  if (!values.length) return null;
+  let lo = Math.min(...values);
+  let hi = Math.max(...values);
+  if (hi - lo < 4) { hi += 2; lo -= 2; }
+  lo = Math.max(0, Math.floor(lo));
+  hi = Math.ceil(hi);
+  const x = (t) => 36 + ((t - start) / (end - start)) * (W - 36);
+  const y = (v) => H - 4 - ((v - lo) / (hi - lo)) * (H - 12);
+  const gap = h.step * 2.5;
+  const lines = keys.map((k, i) => `<path class="line${i ? ' alt' : ''}" d="${chartPath(h.points, k, x, y, gap)}"/>`).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${unit} over the last ${h.range}">
+    <line class="grid" x1="36" x2="${W}" y1="${y(hi).toFixed(1)}" y2="${y(hi).toFixed(1)}"/>
+    <line class="grid" x1="36" x2="${W}" y1="${y(lo).toFixed(1)}" y2="${y(lo).toFixed(1)}"/>
+    <text x="30" y="${(y(hi) + 3).toFixed(1)}" text-anchor="end">${hi}</text>
+    <text x="30" y="${(y(lo) + 3).toFixed(1)}" text-anchor="end">${lo}</text>${lines}</svg>`;
+}
+
+function renderPowerCharts(h) {
+  const body = $('#power-chart-body');
+  const range = { day: 'last 24 hours', week: 'last 7 days', month: 'last 30 days' }[h.range];
+  const blocks = [];
+  const power = chartSvg(h, ['w'], 'Watts');
+  if (power) {
+    blocks.push(`<div class="power-chart"><div class="power-chart-head"><b>Power</b><span class="mono muted">${h.peaks.w !== null ? `peak ${Math.round(h.peaks.w)} W · ` : ''}${h.kwh} kWh${h.cost ? ` · ${h.cost}` : ''}</span></div>${power}</div>`);
+  }
+  const heat = chartSvg(h, ['c', 'd'], '°C');
+  if (heat) {
+    const bits = [h.peaks.c !== null ? `CPU peak ${h.peaks.c}°C` : null, h.peaks.d !== null ? `drive peak ${h.peaks.d}°C` : null].filter(Boolean).join(' · ');
+    blocks.push(`<div class="power-chart"><div class="power-chart-head"><b>Heat</b><span class="mono muted">${bits}</span></div>${heat}<div class="power-chart-foot mono muted"><span>Solid: CPU</span><span>Dashed: hottest drive</span></div></div>`);
+  }
+  body.innerHTML = blocks.length ? blocks.join('') : '<p class="mono muted status-note">History starts filling in a few minutes after the helper begins reading. One point every 5 minutes.</p>';
+  if (blocks.length) body.insertAdjacentHTML('beforeend', `<p class="mono muted status-note" style="margin-top:12px">${range}, since ${h.since ? when(new Date(h.since).toISOString()) : 'now'}.</p>`);
+}
+
+async function loadPowerCharts(force) {
+  if (powerChart.busy || (!force && Date.now() - powerChart.at < 5 * 60 * 1000)) return;
+  powerChart.busy = true;
+  try {
+    renderPowerCharts(await api('GET', `/api/admin/health-history?range=${powerChart.range}`));
+    powerChart.at = Date.now();
+  } catch {
+    // Leave the last chart up; it asks again on the next refresh.
+  } finally {
+    powerChart.busy = false;
+  }
+}
+
+$('#status-power-charts').addEventListener('click', (e) => {
+  const chip = e.target.closest('[data-range]');
+  if (!chip || chip.dataset.range === powerChart.range) return;
+  powerChart.range = chip.dataset.range;
+  for (const c of $('#status-power-charts').querySelectorAll('[data-range]')) c.setAttribute('aria-pressed', String(c === chip));
+  loadPowerCharts(true);
+});
+
+function renderHealth(h, outlook) {
   $('#status-health-wrap').classList.toggle('hidden', !h);
   if (!h) return;
   // The page refreshes every few seconds; keep any card you opened open.
   const open = new Set([...document.querySelectorAll('#status-health details[open]')].map((n) => n.dataset.device));
-  $('#status-health').replaceChildren(...h.drives.map((d) => healthCard(d, open.has(d.device))));
+  $('#status-health').replaceChildren(...h.drives.map((d) => healthCard(d, open.has(d.device), outlook && outlook[d.device])));
   const note = $('#status-health-note');
   const text = h.missing || (!h.drives.length && !h.checkedAt)
     ? 'Waiting for the first health check from the roost-smart helper.'
@@ -1870,7 +1984,8 @@ function renderStatus(s) {
     return statCard(d.label, `${bytes(d.free)} free`, `${bytes(used)} of ${bytes(d.total)} used`, pct(used, d.total));
   }));
 
-  renderHealth(s.driveHealth);
+  renderPower(s.sensors);
+  renderHealth(s.driveHealth, s.driveOutlook);
   renderOutside(s.outside);
 
   $('#status-apps').replaceChildren(...s.apps.map((a) => appStatusCard(a, s.docker.ok, s.history)));
@@ -2476,6 +2591,8 @@ const adminLoaders = {
     const form = $('#settings-form');
     form.adminsNeedTwoStep.checked = settings.adminsNeedTwoStep;
     form.publicLinks.checked = settings.publicLinks;
+    form.energyPrice.value = settings.energyPrice;
+    form.energyCurrency.value = settings.energyCurrency;
     form.serverName.value = state.serverName;
     form.publicUrl.value = settings.publicUrl;
     state.publicUrl = settings.publicUrl;
@@ -2935,6 +3052,8 @@ $('#settings-form').addEventListener('submit', async (e) => {
       defaultLimitGb: pickers.default.getValue(),
       adminsNeedTwoStep: e.target.adminsNeedTwoStep.checked,
       publicLinks: e.target.publicLinks.checked,
+      energyPrice: e.target.energyPrice.value,
+      energyCurrency: e.target.energyCurrency.value,
       publicUrl: e.target.publicUrl.value,
     });
     setServerName(settings.serverName);

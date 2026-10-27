@@ -7,7 +7,7 @@
 
 const { containersFor } = require('./docker');
 
-const DEFAULTS = { alertApps: true, alertDisks: true, alertDiskPct: 90, alertSecurity: true };
+const DEFAULTS = { alertApps: true, alertDisks: true, alertDiskPct: 90, alertSecurity: true, alertDriveTrend: true };
 const GRACE_MS = 2 * 60 * 1000;
 // A full drive clears a little below the threshold, so it can't flap on and off.
 const CLEAR_MARGIN = 3;
@@ -21,6 +21,7 @@ function alertSettings(db) {
     alertDisks: s.alertDisks ?? DEFAULTS.alertDisks,
     alertDiskPct: s.alertDiskPct ?? DEFAULTS.alertDiskPct,
     alertSecurity: s.alertSecurity ?? DEFAULTS.alertSecurity,
+    alertDriveTrend: s.alertDriveTrend ?? DEFAULTS.alertDriveTrend,
   };
 }
 
@@ -49,7 +50,7 @@ function containerProblem(c) {
 
 // What is wrong right now, as key → { title, detail }. `open` is the set of
 // keys that already have an alert, for the drive threshold's clear margin.
-function findProblems({ apps, docker, disks, settings, open }) {
+function findProblems({ apps, docker, disks, settings, open, trends = null }) {
   const found = new Map();
   if (settings.alertApps && docker) {
     if (docker.error) {
@@ -89,6 +90,10 @@ function findProblems({ apps, docker, disks, settings, open }) {
       }
     }
   }
+  // Drives getting worse over days (see drive-trends.js), already worked out.
+  if (settings.alertDriveTrend && trends) {
+    for (const [key, p] of trends) found.set(key, p);
+  }
   return found;
 }
 
@@ -96,7 +101,7 @@ class Watcher {
   // readContainers: async () => { containers } | { error }
   // readDisks: () => [{ label, path, total, free } | { label, path, missing }]
   // onChange(event, alert): 'raised' | 'resolved' | 'event', for phone push later.
-  constructor({ store, readContainers, readDisks, onChange = () => {}, now = Date.now, newId, tidy = null }) {
+  constructor({ store, readContainers, readDisks, onChange = () => {}, now = Date.now, newId, tidy = null, sample = null, readTrends = null }) {
     this.store = store;
     this.readContainers = readContainers;
     this.readDisks = readDisks;
@@ -104,6 +109,8 @@ class Watcher {
     this.now = now;
     this.newId = newId;
     this.tidy = tidy; // (time) => true when it changed an alert
+    this.readTrends = readTrends; // (openKeys) => Map of drive-trend problems
+    this.sample = sample; // (time) => void, called every check; keeps the health history
     this.pending = new Map(); // key → when it was first seen
     this.restarts = new Map(); // container name → restart count last time
     this.checkedAt = null;
@@ -125,11 +132,20 @@ class Watcher {
       settings.alertDisks ? this.readDisks() : [],
     ]);
     const t = this.now();
+    if (this.sample) {
+      try {
+        this.sample(t);
+      } catch (err) {
+        console.error('Health history failed:', err);
+      }
+    }
     const iso = new Date(t).toISOString();
     // Sign-in alerts (src/security.js) are not this watcher's to open or clear.
     const openList = alerts.filter((a) => !a.resolvedAt && !a.security);
     const open = new Map(openList.map((a) => [a.key, a]));
-    const found = findProblems({ apps: db.apps, docker, disks, settings, open: new Set(open.keys()) });
+    const keys = new Set(open.keys());
+    const trends = settings.alertDriveTrend && this.readTrends ? this.readTrends(keys, t) : null;
+    const found = findProblems({ apps: db.apps, docker, disks, settings, open: keys, trends });
     let changed = false;
 
     for (const [key, p] of found) {
