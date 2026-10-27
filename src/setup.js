@@ -87,6 +87,25 @@ const STEPS = [
     },
   },
   {
+    id: 'power-heat',
+    section: 'storage',
+    group: 'Server',
+    title: 'Show power use and heat',
+    covers: ['energyPrice', 'energyCurrency'],
+    why: 'See roughly how many watts the server draws and what that costs, plus CPU and drive heat, on the status page.',
+    how: [
+      'Keep the /sys line under roost-smart in the compose file in the README (it is read-only). Redeploy Roost.',
+      'Under Admin → Server, check your electricity price per kWh (it starts at 26.84p).',
+      'Power is the CPU\'s own reading plus an allowance for the board and drives, so it is an estimate, a few watts under the wall. A reading this server can\'t give is left off the page.',
+    ],
+    action: { label: 'Open Admin', view: 'admin', focus: 'settings-form', field: 'energyPrice' },
+    optional: true,
+    check: (ctx) => {
+      const s = ctx.sensors;
+      return !!s && !s.missing && (s.power !== null || s.cpuTemp !== null);
+    },
+  },
+  {
     id: 'docker',
     section: 'server',
     group: 'Server',
@@ -566,6 +585,7 @@ const NO_STEP = {
   alertDisks: 'on by default, switched under Admin → Alerts',
   alertDiskPct: 'starts at 90%, changed under Admin → Alerts',
   alertSecurity: 'on by default, switched under Admin → Alerts',
+  alertDriveTrend: 'on by default, switched under Admin → Alerts',
   portCheck: 'a button in Admin → Security, run when you want it',
   lockdown: 'a panic button in Admin → Security, off until pressed',
   PORT: 'fixed by the compose file',

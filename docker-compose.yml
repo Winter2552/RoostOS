@@ -122,6 +122,7 @@ services:
 
   # Drive health: once an hour, reads each drive's SMART data (temperature,
   # errors, wear) with smartctl and leaves it in the smart volume for Roost.
+  # Every minute it also leaves CPU power and heat there for the status page.
   # It has no network at all. Drives that are asleep are left asleep.
   roost-smart:
     build: ./smart
@@ -139,6 +140,8 @@ services:
       # - /dev/sdb:/dev/sdb
     volumes:
       - smart:/out
+      # The host's sensors (CPU power and heat), read-only.
+      - /sys:/hostsys:ro
 
   # Updating Roost from Admin → Updates. It looks at GitHub for new versions
   # and, when an admin presses Update, rebuilds and restarts Roost and its backup

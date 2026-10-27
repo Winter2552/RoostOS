@@ -1,13 +1,14 @@
 {
   "version": "0.1.17",
   "date": "2026-10-26",
-  "title": "Glint memories",
-  "summary": "On this day, trips and years, made from your own photos.",
+  "title": "Power and heat",
+  "summary": "Watts, cost and heat on the status page",
   "items": [
     {
-      "title": "Glint memories",
-      "text": "On this day, trips, years and recent highlights appear above your photos. Tap one to play it, save it as an album, or hide it.",
-      "image": "glint-memories.png"
+      "title": "Power and heat on the status page",
+      "text": "See roughly how many watts the server draws, what that costs at your electricity price, and how hot the CPU and drives are. Set your price under Admin → Server.",
+      "image": "power-heat.png",
+      "admin": true
     }
   ]
 }
