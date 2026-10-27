@@ -1876,3 +1876,10 @@ a.app-card:active { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--shad
 .bh-tab { white-space: nowrap; }
 .bh-cost td:nth-child(3) { white-space: nowrap; }
 @media (max-width: 600px) { .bh-tab { padding: 4px 11px; } .bh-cost input { width: 4.6em; } }
+.bh-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 14px; }
+.bh-foot .bh-say { margin: 0; flex: 1; min-width: 12em; }
+.bh-btn:disabled { opacity: 0.6; cursor: default; }
+.bh-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.bh-plan { display: flex; justify-content: space-between; gap: 10px; text-align: left; background: none; color: var(--bp-ink); border: 1.5px solid var(--bp-line); border-radius: 6px; padding: 6px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+.bh-plan:hover, .bh-plan:focus-visible { border-color: var(--bp-ink); outline: none; background: rgba(242, 246, 254, 0.12); }
+.bh-plan small { color: var(--bp-soft); white-space: nowrap; }

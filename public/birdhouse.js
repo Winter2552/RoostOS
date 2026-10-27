@@ -11,7 +11,7 @@
   const KEY = 'roost-birdhouse';
   const NS = 'http://www.w3.org/2000/svg';
   // d is the plan on show; by remembers the sizes last used for each project.
-  const S = { d: model.defaults('bookshelf'), by: {}, built: false, card: null, fields: {}, view: 'front', yaw: 0.6, pitch: 0.35 };
+  const S = { d: model.defaults('bookshelf'), by: {}, built: false, card: null, cardButton: null, fields: {}, view: 'front', yaw: 0.6, pitch: 0.35 };
 
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) || 'null');
@@ -258,35 +258,127 @@
     return [projects, ...rows];
   }
 
-  const fill = () => { if (S.card) S.card.querySelector('.bh-body').replaceChildren(...cardBody()); };
+  const fill = () => { const body = S.card && S.card.querySelector('.bh-body'); if (body) body.replaceChildren(...cardBody()); };
+
+  // One small floating card at a time (Adjust, or My plans), only as big as it
+  // needs; it closes on Done, Escape or a tap outside it.
+  function popup(label, button, ...content) {
+    const card = h('div', { class: 'bh-card', role: 'dialog', 'aria-label': label },
+      h('div', { class: 'bh-card-head' }, h('b', { class: 'mono', text: label }), h('button', { type: 'button', class: 'bh-x', 'aria-label': 'Close', text: '✕', onclick: closeCard })),
+      ...content);
+    S.card = card;
+    S.cardButton = button;
+    $('#view-birdhouse').append(card);
+    button.setAttribute('aria-expanded', 'true');
+    setTimeout(() => document.addEventListener('pointerdown', outside), 0);
+    document.addEventListener('keydown', escape);
+    return card;
+  }
 
   function openCard() {
-    if (S.card) return closeCard();
-    const card = h('div', { class: 'bh-card', role: 'dialog', 'aria-label': 'Adjust' },
-      h('div', { class: 'bh-card-head' }, h('b', { class: 'mono', text: 'Adjust' }), h('button', { type: 'button', class: 'bh-x', 'aria-label': 'Close', text: '✕', onclick: closeCard })),
+    if (S.card) { const same = S.cardButton === $('#bh-adjust'); closeCard(); if (same) return; }
+    const card = popup('Adjust', $('#bh-adjust'),
       h('div', { class: 'bh-body' }),
       h('div', { class: 'bh-actions' },
         h('button', { type: 'button', class: 'bh-btn solid', text: 'Done', onclick: closeCard }),
         h('button', { type: 'button', class: 'bh-btn', text: 'Reset', onclick: () => { S.d = model.defaults(S.d.template); fill(); paint(); } })));
-    S.card = card;
     fill();
-    $('#view-birdhouse').append(card);
-    $('#bh-adjust').setAttribute('aria-expanded', 'true');
-    setTimeout(() => document.addEventListener('pointerdown', outside), 0);
-    document.addEventListener('keydown', escape);
     card.querySelector('.bh-pick.on').focus({ preventScroll: true });
   }
-  const outside = (e) => { if (S.card && !S.card.contains(e.target) && !$('#bh-adjust').contains(e.target)) closeCard(); };
-  const escape = (e) => { if (e.key === 'Escape') { closeCard(); $('#bh-adjust').focus(); } };
+  const outside = (e) => { if (S.card && !S.card.contains(e.target) && !S.cardButton.contains(e.target)) closeCard(); };
+  const escape = (e) => { if (e.key === 'Escape') { const b = S.cardButton; closeCard(); b.focus(); } };
 
   function closeCard() {
     if (!S.card) return;
     S.card.remove();
     S.card = null;
     S.fields = {};
-    $('#bh-adjust').setAttribute('aria-expanded', 'false');
+    S.cardButton.setAttribute('aria-expanded', 'false');
     document.removeEventListener('pointerdown', outside);
     document.removeEventListener('keydown', escape);
+  }
+
+  // ---------- Nest: saving and reopening plans ----------
+  // A plan is a few hundred bytes of JSON in Nest's Birdhouse folder, so it is
+  // backed up and shared like any other file. Nothing is read or written until
+  // Save or My plans is pressed.
+
+  const FOLDER = 'Birdhouse';
+  const EXT = '.birdhouse';
+  const hasNest = () => typeof state !== 'undefined' && state.apps.some((a) => a.id === 'nest');
+
+  async function save() {
+    const say = $('#bh-saved');
+    const btn = $('#bh-save');
+    btn.disabled = true;
+    say.textContent = 'Saving…';
+    try {
+      const folder = await api('POST', '/api/nest/folders', { parent: '', path: FOLDER });
+      const sz = model.size(S.d);
+      const name = `${info().name} ${sz.width}x${sz.depth}x${sz.height}${EXT}`;
+      const bytes = new TextEncoder().encode(JSON.stringify({ app: 'birdhouse', version: 1, plan: S.d }));
+      const up = await api('POST', '/api/nest/uploads', { parent: folder.id, name, size: bytes.length, type: 'application/json' });
+      if (!up.done) {
+        const res = await fetch(`/api/nest/uploads/${up.id}?offset=0`, { method: 'PUT', body: bytes, credentials: 'same-origin' });
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok || !out.done) throw new Error(out.error || 'Could not save');
+      }
+      say.textContent = `Saved in Nest, in the ${FOLDER} folder.`;
+    } catch (err) {
+      say.textContent = `Not saved: ${err.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // The Birdhouse folder, found by name in the top of My Drive (null if none yet).
+  async function findFolder() {
+    for (let offset = 0, page = 0; page < 10; page++) {
+      const d = await api('GET', `/api/nest/folders/root?folders=1&offset=${offset}`);
+      const hit = d.items.find((i) => i.kind === 'folder' && i.name === FOLDER);
+      if (hit) return hit;
+      if (!d.more) return null;
+      offset += d.items.length;
+    }
+    return null;
+  }
+
+  async function openPlans() {
+    if (S.card) { const same = S.cardButton === $('#bh-plans'); closeCard(); if (same) return; }
+    const list = h('div', { class: 'bh-list' }, h('p', { class: 'bh-note', text: 'Looking in Nest…' }));
+    popup('My plans', $('#bh-plans'), list);
+    const failed = (text) => list.replaceChildren(h('p', { class: 'bh-note', text }));
+    try {
+      const folder = await findFolder();
+      if (!S.card) return;
+      if (!folder) return failed('Nothing saved yet. Press Save to Nest to keep this plan.');
+      const d = await api('GET', `/api/nest/folders/${folder.id}?sort=modified&dir=desc`);
+      const files = d.items.filter((i) => i.kind === 'file' && i.name.endsWith(EXT));
+      if (!S.card) return;
+      if (!files.length) return failed('Nothing saved yet. Press Save to Nest to keep this plan.');
+      list.replaceChildren(...files.map((f) => h('button', { type: 'button', class: 'bh-plan', onclick: () => openPlan(f) },
+        h('span', { text: f.name.slice(0, -EXT.length) }), h('small', { text: new Date(f.modified).toLocaleDateString() }))));
+    } catch (err) {
+      failed(`Couldn't open Nest: ${err.message}`);
+    }
+  }
+
+  async function openPlan(f) {
+    const say = $('#bh-saved');
+    try {
+      if (f.size > 20000) throw new Error('that file is too big to be a plan');
+      const res = await fetch(`/api/nest/files/${f.id}`, { credentials: 'same-origin' });
+      if (!res.ok) throw new Error(`Nest said ${res.status}`);
+      const data = JSON.parse(await res.text());
+      if (!data || data.app !== 'birdhouse' || !data.plan) throw new Error("that isn't a Birdhouse plan");
+      S.d = model.clean(data.plan);
+      closeCard();
+      paint();
+      say.textContent = `Opened ${f.name.slice(0, -EXT.length)}.`;
+    } catch (err) {
+      say.textContent = `Couldn't open it: ${err.message}`;
+      closeCard();
+    }
   }
 
   // The sentence box: reads what was typed, redraws, and says what it did, so a
@@ -315,9 +407,12 @@
     if (!S.built) {
       S.built = true;
       $('#bh-adjust').addEventListener('click', openCard);
+      $('#bh-save').addEventListener('click', save);
+      $('#bh-plans').addEventListener('click', openPlans);
       $('#bh-ask').addEventListener('submit', (e) => { e.preventDefault(); draft($('#bh-text').value); });
     }
     closeCard();
+    $('#bh-foot').classList.toggle('hidden', !hasNest());
     paint();
   };
 })();
