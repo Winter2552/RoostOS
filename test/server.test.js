@@ -630,6 +630,44 @@ test('Fetch price is off until an admin switches it on, then only reads listed s
   assert.equal((await call('GET', '/api/birdhouse', null, adminCookie)).body.fetch, false);
 });
 
+test('Birdhouse keeps each person\'s plans, workshop wood and prices on their account', async () => {
+  assert.equal((await call('GET', '/api/birdhouse/data')).status, 401);
+  const first = await call('GET', '/api/birdhouse/data', null, adminCookie);
+  assert.deepEqual(first.body, { plans: [], stock: [], prices: {}, prefs: { units: 'mm', sheet: [2440, 1220], timber: 2400 } });
+
+  // A plan is cleaned to what its template allows, and saving again updates it.
+  const made = await call('POST', '/api/birdhouse/plans', { name: '  Hall shelves ', plan: { template: 'bookshelf', width: 99999, height: 1800 } }, adminCookie);
+  assert.equal(made.status, 200);
+  assert.equal(made.body.name, 'Hall shelves');
+  assert.ok(made.body.plan.width < 99999);
+  const again = await call('POST', '/api/birdhouse/plans', { id: made.body.id, name: 'Hall shelves 2', plan: made.body.plan }, adminCookie);
+  assert.equal(again.body.id, made.body.id);
+  assert.equal((await call('GET', '/api/birdhouse/data', null, adminCookie)).body.plans.length, 1);
+
+  // Workshop wood: bad rows are dropped, good ones kept.
+  const stock = await call('PUT', '/api/birdhouse/stock', { stock: [
+    { kind: 'sheet', thick: 18, w: 600, l: 1200, qty: 2, note: 'offcut' },
+    { kind: 'timber', w: 44, thick: 94, l: 2400, qty: 3 },
+    { kind: 'plank', w: 1, l: 1, thick: 1, qty: 1 },
+    { kind: 'sheet', thick: 18, w: -5, l: 100, qty: 1 },
+  ] }, adminCookie);
+  assert.equal(stock.body.stock.length, 2);
+  assert.match(stock.body.stock[0].id, /^[a-f0-9]+$/);
+
+  const prices = await call('PUT', '/api/birdhouse/prices', { prices: { 'sheet-18': { p: '24.5', at: '2026-10-20' }, 'sheet-18@wickes': { p: 23, at: 'yesterday', url: 'https://www.wickes.co.uk/p/1' }, 'sheet-18@bq': { url: 'http://evil.example/' }, 'bad key!': { p: 3 }, glue: { p: -1 }, screws: 4 } }, adminCookie);
+  assert.deepEqual(Object.keys(prices.body.prices), ['sheet-18', 'sheet-18@wickes']);
+  assert.deepEqual(prices.body.prices['sheet-18'], { p: 24.5, at: '2026-10-20' });
+  assert.match(prices.body.prices['sheet-18@wickes'].at, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(prices.body.prices['sheet-18@wickes'].url, 'https://www.wickes.co.uk/p/1');
+
+  const prefs = await call('PUT', '/api/birdhouse/prefs', { units: 'in', sheet: [1220, 2500], timber: 99999 }, adminCookie);
+  assert.deepEqual(prefs.body, { units: 'in', sheet: [2500, 1220], timber: 2400 });
+
+  const del = await call('DELETE', `/api/birdhouse/plans/${made.body.id}`, null, adminCookie); assert.equal(del.status, 200, JSON.stringify(del.body));
+  assert.equal((await call('DELETE', `/api/birdhouse/plans/${made.body.id}`, null, adminCookie)).status, 404);
+  assert.equal((await call('GET', '/api/birdhouse/data', null, adminCookie)).body.stock.length, 2);
+});
+
 test('logout ends the session', async () => {
   await call('POST', '/api/logout', null, adminCookie);
   assert.equal((await call('GET', '/api/apps', null, adminCookie)).status, 401);

@@ -116,4 +116,72 @@ async function fetchPrice(raw, fetchImpl = fetch) {
   return { price: found.price, shop: url.hostname.replace(/^www\./, '') };
 }
 
-module.exports = { allowedUrl, extractPrice, fetchPrice, FetchError, SHOPS };
+// ---- What each person keeps: plans, workshop wood and their price book ------
+// Stored on the person's own Roost account (user.birdhouse), so it follows them
+// to any device and nobody else sees it. Everything is cleaned on the way in.
+
+const model = require('../public/birdhouse-model.js');
+
+const MAX_PLANS = 200;
+const MAX_STOCK = 200;
+const MAX_PRICES = 200;
+
+const text = (v, n) => String(v === undefined || v === null ? '' : v).replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, n);
+const mmValue = (v) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n >= 1 && n <= 10000 ? n : null; };
+
+function cleanPlan(input, id, now) {
+  const name = text(input && input.name, 60) || 'Untitled plan';
+  return { id, name, plan: model.clean(input && input.plan), updated: now };
+}
+
+function cleanStock(list, newId) {
+  const out = [];
+  for (const it of Array.isArray(list) ? list.slice(0, MAX_STOCK) : []) {
+    if (!it || (it.kind !== 'sheet' && it.kind !== 'timber')) continue;
+    const w = mmValue(it.w); const l = mmValue(it.l); const thick = mmValue(it.thick);
+    const qty = Math.round(Number(it.qty));
+    if (!w || !l || !thick || !(qty >= 1 && qty <= 50)) continue;
+    const id = /^[a-f0-9]{8,32}$/.test(String(it.id)) ? String(it.id) : newId();
+    out.push({ id, kind: it.kind, w, l, thick, qty, note: text(it.note, 60) });
+  }
+  return out;
+}
+
+// A price is { p, at, src?, url? }: pounds, the day it was set, and where it was
+// fetched from. Keys are a material ("sheet-18") or a material at one shop
+// ("sheet-18@wickes").
+function cleanPrices(map) {
+  const out = {};
+  for (const [k, v] of Object.entries(map && typeof map === 'object' ? map : {}).slice(0, MAX_PRICES)) {
+    if (!/^[a-z0-9-]{1,40}(@[a-z]{1,10})?$/.test(k) || !v || typeof v !== 'object') continue;
+    const entry = {};
+    const n = Number(v.p);
+    if (v.p !== undefined && v.p !== null && v.p !== '') {
+      if (!(Number.isFinite(n) && n >= 0 && n <= 100000)) continue;
+      entry.p = Math.round(n * 100) / 100;
+      entry.at = /^\d{4}-\d{2}-\d{2}$/.test(String(v.at)) ? String(v.at) : new Date().toISOString().slice(0, 10);
+      if (v.src) entry.src = text(v.src, 30);
+    }
+    if (typeof v.url === 'string' && allowedUrl(v.url)) entry.url = v.url.trim().slice(0, 500);
+    if (Object.keys(entry).length) out[k] = entry;
+  }
+  return out;
+}
+
+// Units to show, and the size of stock the shops sell that plans are laid out on.
+function cleanPrefs(input) {
+  const i = input && typeof input === 'object' ? input : {};
+  const dim = (v, fallback) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n >= 300 && n <= 6000 ? n : fallback; };
+  const a = dim(i.sheet && i.sheet[0], 2440);
+  const b = dim(i.sheet && i.sheet[1], 1220);
+  return { units: i.units === 'in' ? 'in' : 'mm', sheet: [Math.max(a, b), Math.min(a, b)], timber: dim(i.timber, 2400) };
+}
+
+// The person's record, made on first use.
+function mine(user) {
+  if (!user.birdhouse) user.birdhouse = { plans: [], stock: [], prices: {}, prefs: cleanPrefs() };
+  if (!user.birdhouse.prefs) user.birdhouse.prefs = cleanPrefs();
+  return user.birdhouse;
+}
+
+module.exports = { allowedUrl, extractPrice, fetchPrice, FetchError, SHOPS, cleanPlan, cleanStock, cleanPrices, cleanPrefs, mine, MAX_PLANS };

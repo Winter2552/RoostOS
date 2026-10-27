@@ -1794,6 +1794,8 @@ a.app-card:active { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--shad
 }
 .bh-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .bh-name { margin: 0; font-size: 22px; letter-spacing: 0.04em; text-transform: uppercase; }
+input.bh-name { background: transparent; border: 0; border-bottom: 1.5px dashed transparent; color: var(--bp-ink); font: inherit; font-size: 22px; font-weight: 700; padding: 0 2px; min-width: 0; width: 100%; }
+input.bh-name:hover, input.bh-name:focus { border-bottom-color: var(--bp-ink); outline: none; }
 .bh-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
 .bh-chip { border: 1.5px solid var(--bp-ink); border-radius: 4px; padding: 1px 9px; font-size: 13px; }
 .bh-btn { background: transparent; color: var(--bp-ink); border: 1.5px solid var(--bp-ink); border-radius: 6px; padding: 5px 14px; font-weight: 700; cursor: pointer; }
@@ -1917,3 +1919,54 @@ a.app-card:active { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--shad
   #bh-sheet-print .bh-table td { border-top-color: #b9cde8; }
   #bh-sheet-print * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+
+/* Birdhouse: projects home, workshop, shop comparison */
+.bh-head { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.bh-kind { margin: 2px 0 0; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--bp-soft); }
+.bh-barbtns { display: inline-flex; gap: 8px; }
+a.bh-btn { text-decoration: none; display: inline-block; }
+.bh-grid, .bh-starters { list-style: none; margin: 0 0 18px; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.bh-starter, .bh-open {
+  display: flex; flex-direction: column; align-items: center; gap: 6px; width: 100%; text-align: center; text-decoration: none;
+  background: rgba(0, 0, 0, 0.1); color: var(--bp-ink); border: 1.5px solid var(--bp-line); border-radius: 12px; padding: 10px 8px; font: inherit; font-size: 13px; cursor: pointer;
+}
+.bh-starter:hover, .bh-starter:focus-visible, .bh-open:hover, .bh-open:focus-visible { border-color: var(--bp-ink); background: rgba(242, 246, 254, 0.14); outline: none; }
+.bh-thumb { width: 100%; max-width: 110px; aspect-ratio: 1; }
+.bh-open b { word-break: break-word; }
+.bh-open small { color: var(--bp-soft); font-size: 11px; }
+.bh-plancard { position: relative; display: flex; flex-direction: column; gap: 4px; }
+.bh-cardbtns { display: flex; justify-content: center; gap: 14px; }
+.bh-link-btn { background: none; border: 0; color: var(--bp-soft); font: inherit; font-size: 12px; text-decoration: underline; cursor: pointer; padding: 2px; }
+.bh-link-btn:hover, .bh-link-btn:focus-visible { color: var(--bp-ink); }
+.bh-confirm { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; background: rgba(49, 53, 91, 0.94); border-radius: 12px; font-size: 13px; }
+.bh-confirm.hidden { display: none; }
+.bh-field { display: block; margin: 12px 0 6px; font-size: 12px; color: var(--bp-soft); }
+.bh-field.inline { display: flex; flex-direction: column; gap: 4px; margin: 0; }
+.bh-field textarea, .bh-addrow input, .bh-addrow select, .bh-sizes input, .bh-compare input {
+  width: 100%; box-sizing: border-box; background: rgba(0, 0, 0, 0.14); color: var(--bp-ink); border: 1px solid var(--bp-line); border-radius: 6px; padding: 5px 8px; font: inherit; font-size: 13px;
+}
+.bh-field textarea { margin-top: 4px; resize: vertical; }
+.bh-card .bh-btn.bh-small { margin: 6px 0 4px; }
+.bh-addrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
+.bh-addrow select { width: auto; }
+.bh-addrow input[type=number] { width: 7.6em; }
+.bh-addrow input[type=text] { flex: 1; min-width: 8em; width: auto; }
+.bh-times { color: var(--bp-soft); }
+.bh-stocklist { list-style: none; margin: 0; padding: 0; }
+.bh-stockrow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 7px 0; border-top: 1px dashed var(--bp-line); font-size: 13px; }
+.bh-stockrow .bh-what { flex: 1; min-width: 12em; }
+.bh-stockrow small { color: var(--bp-soft); }
+.bh-qty { display: inline-flex; align-items: center; gap: 8px; }
+.bh-step { width: 26px; height: 26px; border-radius: 50%; background: none; color: var(--bp-ink); border: 1.5px solid var(--bp-ink); font: inherit; cursor: pointer; line-height: 1; }
+.bh-seg { display: inline-flex; gap: 6px; margin: 4px 0 12px; }
+.bh-sizes { display: grid; grid-template-columns: repeat(auto-fit, minmax(9em, 1fr)); gap: 10px; }
+.bh-compare { margin-top: 18px; }
+.bh-compare td { vertical-align: middle; }
+.bh-compare input { width: 6.2em; }
+.bh-compare input.low { font-weight: 700; border-color: var(--bp-ink); background: rgba(242, 246, 254, 0.2); }
+.bh-go { color: var(--bp-ink); margin-left: 6px; text-decoration: none; }
+.bh-compare .bh-num { white-space: nowrap; }
+@media print { #bh-sheet-print .bh-compare { display: none; } }
+#bh-home .bh-bar, #bh-shop .bh-bar { margin-bottom: 12px; }
+.bh-starters { grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); }
+.bh-starter .bh-thumb { max-width: 80px; }

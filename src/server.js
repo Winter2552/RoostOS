@@ -610,6 +610,13 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     return user;
   }
 
+  // Signed in, and Birdhouse is one of their apps.
+  function requireBirdhouse(req) {
+    const user = requireUser(req);
+    if (!visibleApps(db(), user).some((a) => a.id === 'birdhouse')) throw new HttpError(403, 'Birdhouse is not on for you');
+    return user;
+  }
+
   function requireUser(req) {
     const user = currentUser(req);
     if (!user) throw new HttpError(401, 'Sign in first');
@@ -1346,6 +1353,54 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         if (err instanceof birdhouse.FetchError) throw new HttpError(422, err.message);
         throw err;
       }
+    },
+
+    // Birdhouse: each person's plans, workshop wood and price book, kept on
+    // their own Roost account so they follow them to any device.
+    'GET /api/birdhouse/data': (req, res) => {
+      const user = requireBirdhouse(req);
+      send(res, 200, birdhouse.mine(user));
+    },
+    'POST /api/birdhouse/plans': async (req, res) => {
+      const user = requireBirdhouse(req);
+      const body = await readJson(req, 20000);
+      const mineNow = birdhouse.mine(user);
+      const old = mineNow.plans.find((p) => p.id === body.id);
+      if (!old && mineNow.plans.length >= birdhouse.MAX_PLANS) throw new HttpError(400, `That is ${birdhouse.MAX_PLANS} plans; delete one first`);
+      const plan = birdhouse.cleanPlan(body, old ? old.id : store.newId(), new Date().toISOString());
+      if (old) Object.assign(old, plan); else mineNow.plans.push(plan);
+      store.save();
+      send(res, 200, plan);
+    },
+    'DELETE /api/birdhouse/plans/:id': (req, res, id) => {
+      const user = requireBirdhouse(req);
+      const mineNow = birdhouse.mine(user);
+      const at = mineNow.plans.findIndex((p) => p.id === id);
+      if (at < 0) throw new HttpError(404, 'That plan is already gone');
+      mineNow.plans.splice(at, 1);
+      store.save();
+      send(res, 200, { ok: true });
+    },
+    'PUT /api/birdhouse/stock': async (req, res) => {
+      const user = requireBirdhouse(req);
+      const body = await readJson(req, 60000);
+      birdhouse.mine(user).stock = birdhouse.cleanStock(body.stock, () => store.newId());
+      store.save();
+      send(res, 200, { stock: user.birdhouse.stock });
+    },
+    'PUT /api/birdhouse/prefs': async (req, res) => {
+      const user = requireBirdhouse(req);
+      const body = await readJson(req, 2000);
+      birdhouse.mine(user).prefs = birdhouse.cleanPrefs(body);
+      store.save();
+      send(res, 200, user.birdhouse.prefs);
+    },
+    'PUT /api/birdhouse/prices': async (req, res) => {
+      const user = requireBirdhouse(req);
+      const body = await readJson(req, 10000);
+      birdhouse.mine(user).prices = birdhouse.cleanPrices(body.prices);
+      store.save();
+      send(res, 200, { prices: user.birdhouse.prices });
     },
 
     // One search box: asks every app this user can search, results grouped by app.
@@ -2954,7 +3009,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/movie-requests|admin\/setup|admin\/galaxies|storage\/users|links|me\/devices|alerts|push\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart|\/secret|\/compose|\/check|\/dismiss)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/movie-requests|admin\/setup|admin\/galaxies|storage\/users|links|me\/devices|birdhouse\/plans|alerts|push\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart|\/secret|\/compose|\/check|\/dismiss)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }

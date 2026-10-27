@@ -20,7 +20,7 @@
       words: { height: ['tall', 'high', 'height'], width: ['wide', 'width', 'across'], depth: ['deep', 'depth'], shelves: ['shelves', 'shelf', 'boards'], thickness: ['thick', 'thickness'] },
       order: ['height', 'width', 'depth'],
       fit(d) { d.thickness = Math.min(d.thickness, Math.floor((d.width - 20) / 2), Math.floor(d.height / (d.shelves * 2))); },
-      chips: (d) => [`H ${d.height}`, `W ${d.width}`, `D ${d.depth}`, `${d.shelves} shelves`, `Pine ${d.thickness}`],
+      chips: (d, f = String) => [`H ${f(d.height)}`, `W ${f(d.width)}`, `D ${f(d.depth)}`, `${d.shelves} shelves`, `Pine ${f(d.thickness)}`],
       solids(d) {
         const t = d.thickness;
         const out = [
@@ -43,7 +43,7 @@
       words: { width: ['long', 'length'], depth: ['wide', 'width', 'deep', 'depth'], height: ['tall', 'high', 'height'], thickness: ['thick', 'thickness'], leg: ['leg', 'legs'] },
       order: ['width', 'depth', 'height'],
       fit(d) { d.leg = Math.min(d.leg, Math.floor((Math.min(d.width, d.depth) - 20) / 4)); d.thickness = Math.min(d.thickness, Math.floor(d.height / 4)); },
-      chips: (d) => [`L ${d.width}`, `W ${d.depth}`, `H ${d.height}`, `Top ${d.thickness}`, `Legs ${d.leg}`],
+      chips: (d, f = String) => [`L ${f(d.width)}`, `W ${f(d.depth)}`, `H ${f(d.height)}`, `Top ${f(d.thickness)}`, `Legs ${f(d.leg)}`],
       solids(d) {
         const ov = Math.min(30, Math.floor(d.width / 10)); // the top overhangs the legs a little
         const lg = d.leg;
@@ -68,7 +68,7 @@
       words: { width: ['wide', 'width', 'long', 'length'], depth: ['deep', 'depth'], height: ['tall', 'high', 'height'], thickness: ['thick', 'thickness'] },
       order: ['width', 'depth', 'height'],
       fit(d) { d.thickness = Math.min(d.thickness, Math.floor((Math.min(d.width, d.depth) - 20) / 2), Math.floor(d.height / 2)); },
-      chips: (d) => [`W ${d.width}`, `D ${d.depth}`, `H ${d.height}`, `Board ${d.thickness}`],
+      chips: (d, f = String) => [`W ${f(d.width)}`, `D ${f(d.depth)}`, `H ${f(d.height)}`, `Board ${f(d.thickness)}`],
       solids(d) {
         const t = d.thickness;
         const wall = d.height - t;
@@ -89,7 +89,7 @@
       words: { width: ['long', 'length'], depth: ['wide', 'width', 'deep', 'depth'], height: ['tall', 'high', 'height'], thickness: ['thick', 'thickness', 'seat'] },
       order: ['width', 'depth', 'height'],
       fit(d) { d.thickness = Math.min(d.thickness, Math.floor(d.height / 3)); },
-      chips: (d) => [`L ${d.width}`, `W ${d.depth}`, `H ${d.height}`, `Seat ${d.thickness}`],
+      chips: (d, f = String) => [`L ${f(d.width)}`, `W ${f(d.depth)}`, `H ${f(d.height)}`, `Seat ${f(d.thickness)}`],
       solids(d) {
         const inset = Math.min(60, Math.floor(d.width / 8));
         const pt = 25;
@@ -100,6 +100,59 @@
           { name: 'End panel', x: inset, y: 30, z: 0, w: pt, d: d.depth - 60, h: lh },
           { name: 'End panel', x: d.width - inset - pt, y: 30, z: 0, w: pt, d: d.depth - 60, h: lh },
           { name: 'Stretcher', x: inset + pt, y: Math.round((d.depth - 20) / 2), z: lh - strap, w: d.width - 2 * inset - 2 * pt, d: 20, h: strap },
+        ];
+      },
+    },
+
+    cabinet: {
+      name: 'Cabinet',
+      limits: { height: range(300, 2000, 10, 'Height'), width: range(300, 1200, 10, 'Width'), depth: range(200, 700, 10, 'Depth'), shelves: range(0, 6, 1, 'Shelves inside'), doors: range(0, 2, 1, 'Doors'), thickness: range(12, 25, 1, 'Board thickness') },
+      defaults: { height: 900, width: 600, depth: 350, shelves: 1, doors: 2, thickness: 18 },
+      words: { height: ['tall', 'high', 'height'], width: ['wide', 'width'], depth: ['deep', 'depth'], shelves: ['shelves', 'shelf'], doors: ['doors', 'door'], thickness: ['thick', 'thickness'] },
+      order: ['height', 'width', 'depth'],
+      fit(d) { d.thickness = Math.min(d.thickness, Math.floor((d.width - 20) / 4), Math.floor(d.height / 6)); },
+      chips: (d, f = String) => [`H ${f(d.height)}`, `W ${f(d.width)}`, `D ${f(d.depth)}`, `${d.shelves === 1 ? '1 shelf' : `${d.shelves} shelves`}`, `${d.doors} door${d.doors === 1 ? '' : 's'}`, `Pine ${f(d.thickness)}`],
+      solids(d) {
+        const t = d.thickness;
+        const back = 6; // hardboard back
+        const front = d.doors ? t : 0; // doors sit on the front
+        const cd = d.depth - front; // the box behind the doors
+        const inner = d.width - 2 * t;
+        const out = [
+          { name: 'Side', x: 0, y: front, z: 0, w: t, d: cd, h: d.height },
+          { name: 'Side', x: d.width - t, y: front, z: 0, w: t, d: cd, h: d.height },
+          { name: 'Top', x: t, y: front, z: d.height - t, w: inner, d: cd, h: t },
+          { name: 'Bottom', x: t, y: front, z: 0, w: inner, d: cd, h: t },
+          { name: 'Back', x: t, y: d.depth - back, z: t, w: inner, d: back, h: d.height - 2 * t },
+        ];
+        const room = d.height - 2 * t;
+        for (let i = 1; i <= d.shelves; i++) out.push({ name: 'Shelf', x: t, y: front, z: t + Math.round((room * i) / (d.shelves + 1)) - Math.round(t / 2), w: inner, d: cd - back, h: t });
+        if (d.doors) {
+          const dw = d.doors === 2 ? Math.floor((d.width - 6) / 2) : d.width - 4;
+          for (let i = 0; i < d.doors; i++) out.push({ name: 'Door', x: 2 + i * (dw + 2), y: 0, z: 2, w: dw, d: t, h: d.height - 4 });
+        }
+        return out;
+      },
+    },
+
+    desk: {
+      name: 'Desk',
+      limits: { width: range(800, 2000, 10, 'Length'), depth: range(400, 900, 10, 'Width'), height: range(600, 900, 10, 'Height'), thickness: range(18, 40, 1, 'Top thickness'), panel: range(15, 30, 1, 'Side panel thickness') },
+      defaults: { width: 1400, depth: 700, height: 740, thickness: 25, panel: 18 },
+      words: { width: ['long', 'length'], depth: ['wide', 'width', 'deep', 'depth'], height: ['tall', 'high', 'height'], thickness: ['thick', 'thickness', 'top'], panel: ['panel', 'panels'] },
+      order: ['width', 'depth', 'height'],
+      fit(d) { d.panel = Math.min(d.panel, Math.floor(d.width / 10)); },
+      chips: (d, f = String) => [`L ${f(d.width)}`, `W ${f(d.depth)}`, `H ${f(d.height)}`, `Top ${f(d.thickness)}`, `Panels ${f(d.panel)}`],
+      solids(d) {
+        const inset = Math.min(60, Math.floor(d.width / 10));
+        const lh = d.height - d.thickness;
+        const modesty = Math.min(300, Math.floor(lh / 3));
+        const p = d.panel;
+        return [
+          { name: 'Top', x: 0, y: 0, z: lh, w: d.width, d: d.depth, h: d.thickness },
+          { name: 'Side panel', x: inset, y: 30, z: 0, w: p, d: d.depth - 60, h: lh },
+          { name: 'Side panel', x: d.width - inset - p, y: 30, z: 0, w: p, d: d.depth - 60, h: lh },
+          { name: 'Back panel', x: inset + p, y: d.depth - 30 - p, z: lh - modesty, w: d.width - 2 * inset - 2 * p, d: p, h: modesty },
         ];
       },
     },
@@ -182,30 +235,34 @@
     const strips = pieces.filter((p) => p.w <= STRIP);
     const flats = pieces.filter((p) => p.w > STRIP);
     flats.sort((a, b) => b.t - a.t || b.l - a.l || b.w - a.w);
-    const sheets = [];
+    const have = ownedStock(opts && opts.stock);
+    // Wood already in the workshop goes in first, biggest pieces first.
+    const sheets = have.sheets.map((s) => ({ thickness: s.thick, W: s.w, H: s.l, owned: true, rows: [], pieces: [] }));
     const tooBig = [];
     const timber = [];
     const stock = (opts && opts.timber) || TIMBER;
     strips.sort((a, b) => b.l - a.l);
     for (const p of strips) {
-      if (p.l > stock) { tooBig.push({ part: p.part, w: p.l, h: p.w }); continue; }
       let group = timber.find((g) => g.width === p.w && g.thickness === p.t);
-      if (!group) timber.push(group = { width: p.w, thickness: p.t, stock, bars: [] });
+      if (!group) {
+        group = { width: p.w, thickness: p.t, stock, bars: have.timber.filter((o) => o.w === p.w && o.thick === p.t).map((o) => ({ len: o.l, owned: true, pieces: [], left: o.l })) };
+        timber.push(group);
+      }
       // First bar with room left (a saw cut goes between boards).
       const bar = group.bars.find((b) => b.left >= p.l + kerf);
-      if (bar) { bar.pieces.push({ part: p.part, x: stock - bar.left, len: p.l }); bar.left -= p.l + kerf; }
-      else group.bars.push({ pieces: [{ part: p.part, x: 0, len: p.l }], left: stock - p.l - kerf });
+      if (bar) { bar.pieces.push({ part: p.part, x: bar.len - bar.left, len: p.l }); bar.left -= p.l + kerf; continue; }
+      if (p.l > stock) { tooBig.push({ part: p.part, w: p.l, h: p.w }); continue; }
+      group.bars.push({ len: stock, owned: false, pieces: [{ part: p.part, x: 0, len: p.l }], left: stock - p.l - kerf });
     }
+    const waysFor = (p, W, H) => [[p.l, p.w], [p.w, p.l]].filter(([w, h]) => w <= W && h <= H);
     for (const p of flats) {
-      // Long way along the sheet first, then turned a quarter if that does not fit.
-      const ways = [[p.l, p.w], [p.w, p.l]].filter(([w, h]) => w <= SW && h <= SH);
-      if (!ways.length) { tooBig.push({ part: p.part, w: p.l, h: p.w }); continue; }
       let done = false;
       for (const sheet of sheets) {
         if (sheet.thickness !== p.t) continue;
-        for (const [w, h] of ways) {
+        // Long way along the sheet first, then turned a quarter if that does not fit.
+        for (const [w, h] of waysFor(p, sheet.W, sheet.H)) {
           // Into a row with room beside it and height to spare ...
-          const row = sheet.rows.find((r) => r.h >= h && SW - r.x >= w);
+          const row = sheet.rows.find((r) => r.h >= h && sheet.W - r.x >= w);
           if (row) {
             sheet.pieces.push({ part: p.part, x: row.x, y: row.y, w, h });
             row.x += w + kerf;
@@ -214,7 +271,7 @@
           }
           // ... or a new row under the last one.
           const y = sheet.rows.length ? sheet.rows[sheet.rows.length - 1].y + sheet.rows[sheet.rows.length - 1].h + kerf : 0;
-          if (y + h <= SH && w <= SW) {
+          if (y + h <= sheet.H) {
             sheet.rows.push({ y, h, x: w + kerf });
             sheet.pieces.push({ part: p.part, x: 0, y, w, h });
             done = true;
@@ -223,33 +280,67 @@
         }
         if (done) break;
       }
-      if (!done) {
-        const [w, h] = ways[0];
-        sheets.push({ thickness: p.t, rows: [{ y: 0, h, x: w + kerf }], pieces: [{ part: p.part, x: 0, y: 0, w, h }] });
+      if (done) continue;
+      const ways = waysFor(p, SW, SH);
+      if (!ways.length) { tooBig.push({ part: p.part, w: p.l, h: p.w }); continue; }
+      const [w, h] = ways[0];
+      sheets.push({ thickness: p.t, W: SW, H: SH, owned: false, rows: [{ y: 0, h, x: w + kerf }], pieces: [{ part: p.part, x: 0, y: 0, w, h }] });
+    }
+    // Owned wood nothing was cut from is left on the shelf.
+    const cut = sheets.filter((sh) => sh.pieces.length);
+    const area = cut.reduce((a, sh) => a + sh.W * sh.H, 0);
+    const used = cut.reduce((a, sh) => a + sh.pieces.reduce((b, q) => b + q.w * q.h, 0), 0);
+    return {
+      width: SW, height: SH,
+      sheets: cut.map((sh) => ({ thickness: sh.thickness, width: sh.W, height: sh.H, owned: sh.owned, pieces: sh.pieces })),
+      tooBig, area, used,
+      timber: timber.map((g) => ({ width: g.width, thickness: g.thickness, stock: g.stock, bars: g.bars.filter((b) => b.pieces.length).map((b) => ({ len: b.len, owned: b.owned, pieces: b.pieces })) })).filter((g) => g.bars.length),
+    };
+  }
+
+  // Workshop stock cleaned for the layout: sheets (thickness, width, length)
+  // and timber (width, thickness, length), each repeated by its quantity,
+  // biggest first so the best pieces are used before the offcuts.
+  //   item: { kind: 'sheet', thick, w, l, qty } | { kind: 'timber', w, thick, l, qty }
+  function ownedStock(list) {
+    const sheets = [];
+    const timber = [];
+    for (const it of Array.isArray(list) ? list : []) {
+      if (!it || (it.kind !== 'sheet' && it.kind !== 'timber')) continue;
+      const n = Math.min(50, Math.max(0, Math.round(Number(it.qty))));
+      const [a, b, c] = [Number(it.w), Number(it.l), Number(it.thick)];
+      if (![a, b, c].every((v) => Number.isFinite(v) && v > 0 && v <= 10000) || !n) continue;
+      for (let i = 0; i < n; i++) {
+        if (it.kind === 'sheet') sheets.push({ thick: Math.round(c), w: Math.max(a, b), l: Math.min(a, b) });
+        else timber.push({ w: Math.round(Math.max(a, c)), thick: Math.round(Math.min(a, c)), l: b });
       }
     }
-    const area = sheets.length * SW * SH;
-    const used = sheets.reduce((a, sh) => a + sh.pieces.reduce((b, q) => b + q.w * q.h, 0), 0);
-    return { width: SW, height: SH, sheets: sheets.map((sh) => ({ thickness: sh.thickness, pieces: sh.pieces })), tooBig, area, used, timber: timber.map((g) => ({ width: g.width, thickness: g.thickness, stock: g.stock, bars: g.bars.map((b) => ({ pieces: b.pieces })) })) };
+    sheets.sort((x, y) => y.w * y.l - x.w * x.l);
+    timber.sort((x, y) => y.l - x.l);
+    return { sheets, timber };
   }
 
   // What to buy: sheets and timber lengths from the layout, plus fixings. The
   // price on each line is a rough starter guess (pounds), only there until the
   // person sets their own; `search` is what to type into a shop's search box.
   //   -> [{ key, label, qty, search, estimate }]
-  function materials(d) {
-    const l = layout(d);
+  function materials(d, opts) {
+    const l = layout(d, opts);
     const out = [];
-    const byThickness = {};
-    for (const sh of l.sheets) byThickness[sh.thickness] = (byThickness[sh.thickness] || 0) + 1;
-    for (const [t, qty] of Object.entries(byThickness).sort((a, b) => a[0] - b[0])) {
-      out.push({ key: `sheet-${t}`, label: `${t} mm sheet, ${l.width} × ${l.height}`, qty, search: `${t}mm sheet board ${l.width}x${l.height}`, estimate: Math.round((l.width * l.height) / 1e6 * (4 + 0.7 * t) * 100) / 100 });
+    const sheetsBy = {};
+    for (const sh of l.sheets) {
+      const e = sheetsBy[sh.thickness] || (sheetsBy[sh.thickness] = { buy: 0, have: 0 });
+      if (sh.owned) e.have++; else e.buy++;
+    }
+    for (const [t, e] of Object.entries(sheetsBy).sort((a, b) => a[0] - b[0])) {
+      out.push({ key: `sheet-${t}`, label: `${t} mm sheet, ${l.width} × ${l.height}`, qty: e.buy, have: e.have, search: `${t}mm sheet board ${l.width}x${l.height}`, estimate: Math.round((l.width * l.height) / 1e6 * (4 + 0.7 * t) * 100) / 100 });
     }
     for (const g of l.timber) {
-      out.push({ key: `timber-${g.width}x${g.thickness}`, label: `${g.width} × ${g.thickness} timber, ${g.stock} mm length`, qty: g.bars.length, search: `${g.width}x${g.thickness} timber ${g.stock / 1000}m`, estimate: Math.round(0.00264 * g.width * g.thickness * 100) / 100 });
+      const have = g.bars.filter((b) => b.owned).length;
+      out.push({ key: `timber-${g.width}x${g.thickness}`, label: `${g.width} × ${g.thickness} timber, ${g.stock} mm length`, qty: g.bars.length - have, have, search: `${g.width}x${g.thickness} timber ${g.stock / 1000}m`, estimate: Math.round(0.00264 * g.width * g.thickness * 100) / 100 });
     }
-    out.push({ key: 'screws', label: 'Wood screws, box', qty: 1, search: 'wood screws box', estimate: 5 });
-    out.push({ key: 'glue', label: 'Wood glue, 250 ml', qty: 1, search: 'wood glue 250ml', estimate: 5 });
+    out.push({ key: 'screws', label: 'Wood screws, box', qty: 1, have: 0, search: 'wood screws box', estimate: 5 });
+    out.push({ key: 'glue', label: 'Wood glue, 250 ml', qty: 1, have: 0, search: 'wood glue 250ml', estimate: 5 });
     return out;
   }
 
@@ -302,7 +393,9 @@
   //   -> { template: id | null, set: { key: value }, unused: [text] }
   const KINDS = {
     bookshelf: ['bookshelf', 'bookcase', 'shelf', 'shelves', 'shelving'],
-    table: ['table', 'desk'],
+    table: ['table'],
+    desk: ['desk', 'workstation'],
+    cabinet: ['cabinet', 'cupboard', 'sideboard', 'unit'],
     box: ['box', 'crate', 'chest'],
     bench: ['bench', 'seat'],
   };
@@ -343,12 +436,12 @@
       const key = keyFor(after) || keyFor(before);
       if (!key) { unused.push(m[0].trim()); continue; }
       // "5 shelves" is a count, not a length.
-      set[key] = key === 'shelves' ? Math.round(Number(m[1])) : mm(m[1], m[2]);
+      set[key] = key === 'shelves' || key === 'doors' ? Math.round(Number(m[1])) : mm(m[1], m[2]);
     }
     return { template, set, unused };
   }
 
-  const exported = { TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, layout, materials, project, parse };
+  const exported = { TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, layout, materials, project, parse, ownedStock };
   if (typeof module !== 'undefined' && module.exports) module.exports = exported;
   else window.birdhouseModel = exported;
 })();

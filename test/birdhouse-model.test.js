@@ -180,3 +180,63 @@ test('the shopping list has the sheets and timber from the layout plus fixings, 
   }
   assert.ok(new Set(tableList.map((m) => m.key)).size === tableList.length, 'one line per material');
 });
+
+test('wood already in the workshop is used before buying, and offcuts that are too small are left alone', () => {
+  const d = model.defaults('bookshelf');
+  const bought = model.materials(d).filter((m) => m.key.startsWith('sheet-') || m.key.startsWith('timber-'));
+  assert.ok(bought.every((m) => m.have === 0));
+
+  // Plenty of full sheets and long timber of every size the plan needs.
+  const l = model.layout(d);
+  const stock = [
+    ...l.sheets.map((s) => ({ kind: 'sheet', thick: s.thickness, w: 2440, l: 1220, qty: 5 })),
+    ...l.timber.map((g) => ({ kind: 'timber', w: g.width, thick: g.thickness, l: 2400, qty: 5 })),
+  ];
+  const rich = model.materials(d, { stock });
+  for (const m of rich.filter((x) => x.key !== 'screws' && x.key !== 'glue')) {
+    assert.equal(m.qty, 0, `${m.key} needs nothing bought`);
+    assert.ok(m.have > 0);
+  }
+  const rl = model.layout(d, { stock });
+  assert.ok(rl.sheets.every((s) => s.owned));
+  assert.ok(rl.timber.every((g) => g.bars.every((b) => b.owned)));
+
+  // An offcut too small for any board is ignored; a half sheet takes some boards.
+  const tiny = model.layout(d, { stock: [{ kind: 'sheet', thick: l.sheets[0].thickness, w: 50, l: 50, qty: 1 }] });
+  assert.equal(tiny.sheets.filter((s) => s.owned).length, 0);
+  const half = model.layout(d, { stock: [{ kind: 'sheet', thick: l.sheets[0].thickness, w: 1220, l: 1220, qty: 1 }] });
+  assert.ok(half.sheets.some((s) => s.owned && s.pieces.length));
+  assert.ok(half.sheets.filter((s) => !s.owned).length <= l.sheets.length);
+  // Nothing is cut past the edge of the owned piece.
+  for (const s of half.sheets) for (const p of s.pieces) assert.ok(p.x + p.w <= s.width && p.y + p.h <= s.height);
+});
+
+test('stock rows are cleaned', () => {
+  const o = model.ownedStock([{ kind: 'sheet', thick: 18, w: 600, l: 1200, qty: 2 }, { kind: 'timber', w: 94, thick: 44, l: 2400, qty: 1 }, { kind: 'x' }, null, { kind: 'sheet', thick: 0, w: 1, l: 1, qty: 1 }]);
+  assert.equal(o.sheets.length, 2);
+  assert.deepEqual(o.sheets[0], { thick: 18, w: 1200, l: 600 });
+  assert.deepEqual(o.timber, [{ w: 94, thick: 44, l: 2400 }]);
+  assert.deepEqual(model.ownedStock('nope'), { sheets: [], timber: [] });
+});
+
+test('every project makes real boards at its smallest, default and biggest sizes', () => {
+  for (const id of model.IDS) {
+    const t = model.TEMPLATES[id];
+    for (const pick of ['min', null, 'max']) {
+      const d = model.clean({ template: id, ...Object.fromEntries(Object.entries(t.limits).map(([k, lim]) => [k, pick ? lim[pick] : t.defaults[k]])) });
+      for (const b of model.solids(d)) assert.ok(b.w > 0 && b.d > 0 && b.h > 0 && b.x >= 0 && b.y >= 0 && b.z >= 0, `${id} ${pick} ${b.name}`);
+      assert.ok(model.parts(d).length > 0);
+      assert.equal(typeof t.chips(d, (v) => `${v}!`)[0], 'string');
+    }
+  }
+});
+
+test('a cabinet has doors in front of its box, a desk has a back panel, and "2 doors" is a count', () => {
+  const c = model.defaults('cabinet');
+  assert.equal(model.solids(c).filter((b) => b.name === 'Door').length, 2);
+  assert.equal(model.solids({ ...c, doors: 0 }).filter((b) => b.name === 'Door').length, 0);
+  assert.equal(model.size(c).depth, c.depth);
+  assert.equal(model.parse('cabinet 900 tall 3 shelves 1 door', null).set.doors, 1);
+  assert.ok(model.solids(model.defaults('desk')).some((b) => b.name === 'Back panel'));
+  assert.equal(model.parse('desk 1500 x 750 x 740', null).template, 'desk');
+});

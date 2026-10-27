@@ -759,7 +759,7 @@ function route() {
   if (view === 'galaxies') renderGalaxyPage();
   if (view === 'nest') window.nestOpen(rest);
   if (view === 'glint') window.glintOpen(rest);
-  if (view === 'birdhouse') window.birdhouseOpen();
+  if (view === 'birdhouse') window.birdhouseOpen(rest);
   else if (view !== 'nest' && view !== 'glint') document.title = state.serverName;
 }
 

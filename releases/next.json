@@ -2,8 +2,8 @@
   "items": [
     {
       "title": "Birdhouse: plan a build",
-      "text": "A new app for woodworking plans. Type what you want, like a table 1200 long and 700 wide, or pick a bookshelf, table, box or bench, and a to-scale plan appears on blueprint paper: front, side and top views, a 3D model you can drag to turn, a cut list of every board, how to lay the boards out on sheets and timber lengths, and what it will cost to buy. Save a plan to Nest and open it again later, or print it as a one-page PDF.",
-      "image": "birdhouse.png"
+      "text": "A new app for woodworking plans. Open it to a projects home with a small picture of every plan, saved under your Roost login so it is there on any device. Type what you want, like a table 1200 long and 700 wide, or pick a bookshelf, table, box, bench, cabinet or desk, and a to-scale plan appears on blueprint paper: front, side and top views, a 3D model you can drag to turn, a cut list, how to lay the boards out on sheets and timber, and what it will cost. List the wood already in your workshop and plans use it before anything goes on the shopping list. Compare Wickes and B&Q prices side by side, switch to inches, set the sheet sizes your shop sells, or ask your own Claude chat to turn an idea into a plan with no key needed. Print any plan as a one-page PDF.",
+      "image": "birdhouse-home.png"
     }
   ]
 }
