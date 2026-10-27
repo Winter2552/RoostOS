@@ -230,8 +230,9 @@ function securityChecks({ db, now = Date.now(), entries = [], cert = null, updat
   if (ports) {
     const extra = ports.open.filter((p) => p.port !== 443);
     const when = new Date(ports.at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-    if (extra.length) add('ports', 'bad', `${extra.length === 1 ? 'A door is' : `${extra.length} doors are`} open to the internet besides 443`, `${extra.map((p) => `${p.port} (${p.name})`).join(', ')}. Close ${extra.length === 1 ? 'it' : 'them'} in your router's port forwarding unless you meant it. Checked ${when}.`);
-    else add('ports', 'ok', 'No unexpected doors open to the internet', `Tried ${ports.tried} common ports on ${ports.ip} from inside your network, ${when}.`);
+    const said = (p) => `${p.port} (${p.name}${p.banner ? `, answered "${p.banner}"` : ''})`;
+    if (extra.length) add('ports', 'warn', `${extra.length === 1 ? 'A port answered' : `${extra.length} ports answered`} when Roost tried ${ports.ip} from inside your network`, `${extra.map(said).join('; ')}. Many routers answer on their own public address like this (their admin page, usually on 80) even when nothing is forwarded, so this may not be reachable from outside. To be sure, open http://${ports.ip}:${extra[0].port} on your phone with Wi-Fi off. If it loads there, close it in your router's port forwarding. Checked ${when}.`);
+    else add('ports', 'ok', 'No unexpected doors open to the internet', `Tried ${ports.tried} common ports on ${ports.ip} from inside your network (the way Roost can check), ${when}. Nothing but 443 answered.`);
   } else {
     add('ports', 'info', 'Open doors not checked yet', 'Press Check open ports to try the common ones.');
   }
