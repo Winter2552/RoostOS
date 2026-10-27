@@ -35,7 +35,8 @@ function historyWith(key, kind, days, name = 'WDC 3TB') {
 
 test('one snapshot a day per drive, updated only when the helper reads the drive again', () => {
   const dir = fs.mkdtempSync(path.join(tmp, 'rec-'));
-  const h = new HealthHistory(dir);
+  // The history's own clock is pinned to the test's, or "within the hour" depends on today's date.
+  const h = new HealthHistory(dir, { now: () => NOW });
   h.recordDrives([drive({ details: { temp: 38, hours: 100, reallocated: 0, pending: 0, uncorrectable: 0, wear: null } })], NOW);
   h.recordDrives([drive({ details: { temp: 38, hours: 999 } })], NOW + MIN); // same readAt: ignored
   assert.equal(h.drives.WD123.days.length, 1);
