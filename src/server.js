@@ -2954,22 +2954,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     return Boolean(user && jellyfin.enabled() && canUseJellyfin(user));
   }
 
-  // AirPlay hands the video's address to the Apple TV, which fetches it
-  // itself with no Roost cookie, only the Jellyfin token in the address. Let
-  // that one kind of request through: reading a stream, with a token Roost
-  // issued to someone still allowed to use Jellyfin.
-  function jellyfinStreamAllowed(req, pathname) {
-    if (req.method !== 'GET' && req.method !== 'HEAD') return false;
-    if (!/^\/jellyfin\/(?:Videos|Audio)\//i.test(pathname)) return false;
-    const q = new URL(req.url, 'http://roost').searchParams;
-    const token = q.get('api_key') || q.get('ApiKey') || q.get('apikey') || req.headers['x-emby-token'];
-    const s = sessions.byJellyfinToken(token);
-    const user = s && db().users.find((u) => u.id === s.userId);
-    return Boolean(user && !guestEnded(user) && jellyfin.enabled() && canUseJellyfin(user));
-  }
-
   function serveJellyfin(req, res, pathname) {
-    if (!jellyfinAllowed(req) && !jellyfinStreamAllowed(req, pathname)) {
+    if (!jellyfinAllowed(req)) {
       if (req.method === 'GET') {
         res.writeHead(302, { Location: '/', 'Cache-Control': 'no-store' });
         return res.end();

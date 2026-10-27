@@ -351,66 +351,6 @@
       openRequest();
     });
     host.append(a);
-    host.append(tvSwitch());
-    return true;
-  }
-
-  // "Play for TV": a cookie Roost reads (see src/roostflix.js). On, films are
-  // sent as H.264, which TVs with built-in AirPlay can show.
-  const tvOn = () => /(?:^|;\s*)roost_h264=1(?:;|$)/.test(document.cookie);
-  const setTv = (on) => {
-    document.cookie = on ? 'roost_h264=1; path=/jellyfin; max-age=31536000; samesite=lax' : 'roost_h264=; path=/jellyfin; max-age=0';
-    document.querySelectorAll('.rf-tv').forEach((n) => n.dispatchEvent(new Event('rf-paint')));
-  };
-
-  // A film already playing keeps its old format, so it is started again at the
-  // same place through Jellyfin's own play command for this device.
-  async function restartPlayback() {
-    const s = session();
-    const c = window.ApiClient;
-    const video = document.querySelector('video');
-    if (!s || !c || !c.deviceId) return;
-    try {
-      const list = await get(s, `/Sessions?DeviceId=${encodeURIComponent(c.deviceId())}`);
-      const now = list.find((x) => x.NowPlayingItem);
-      if (!now || !safe(now.NowPlayingItem.Id)) return;
-      const ticks = Math.floor(((video && video.currentTime) || 0) * 1e7);
-      await fetch(`${s.base}/Sessions/${encodeURIComponent(now.Id)}/Playing?playCommand=PlayNow&itemIds=${now.NowPlayingItem.Id}&startPositionTicks=${ticks}`, {
-        method: 'POST', headers: { Authorization: `MediaBrowser Client="Roostflix", Device="Browser", DeviceId="roostflix", Version="1", Token="${s.token}"` },
-      });
-    } catch { /* it keeps playing as it was */ }
-  }
-
-  function tvSwitch() {
-    const a = el('a', 'navMenuOption rf-tv');
-    a.href = '#';
-    a.setAttribute('role', 'switch');
-    const icon = el('span', 'material-icons navMenuOptionIcon', 'tv');
-    icon.setAttribute('aria-hidden', 'true');
-    const state = el('span', 'rf-tvstate');
-    const paint = () => { a.setAttribute('aria-checked', tvOn() ? 'true' : 'false'); state.textContent = tvOn() ? 'On' : 'Off'; };
-    a.append(icon, el('span', 'navMenuOptionText', 'Play for TV (AirPlay)'), state);
-    a.addEventListener('rf-paint', paint);
-    a.addEventListener('click', (e) => { e.preventDefault(); setTv(!tvOn()); });
-    paint();
-    return a;
-  }
-
-  // The same switch inside the video player, for when the menu isn't there.
-  function mountPlayerButton() {
-    const bar = document.querySelector('.videoOsdBottom .buttons');
-    if (!bar || bar.querySelector('.rf-tv-btn')) return Boolean(bar);
-    const b = el('button', 'rf-tv rf-tv-btn paper-icon-button-light');
-    b.type = 'button';
-    b.title = 'Play for TV (AirPlay)';
-    const icon = el('span', 'material-icons', 'tv');
-    icon.setAttribute('aria-hidden', 'true');
-    b.append(icon);
-    const paint = () => { b.classList.toggle('rf-tv-on', tvOn()); b.setAttribute('aria-pressed', tvOn() ? 'true' : 'false'); };
-    b.addEventListener('rf-paint', paint);
-    b.addEventListener('click', async () => { setTv(!tvOn()); await restartPlayback(); });
-    paint();
-    bar.append(b);
     return true;
   }
 
@@ -434,18 +374,16 @@
   }
 
   const later = (fn) => { let n = 0; const t = () => { if (!fn() && n++ < 20) setTimeout(t, 250); }; t(); };
-  const refreshExtras = () => { later(mountRequestButton); later(mountPlayerButton); mountSave(); };
+  const refreshExtras = () => { later(mountRequestButton); mountSave(); };
   document.addEventListener('viewshow', refreshExtras);
   refreshExtras();
-  // Jellyfin builds the menu and the player controls when it likes, so they are
+  // Jellyfin builds the menu when it likes, so the button is
   // added whenever they turn up (a cheap check, at most a few times a second).
   let queued = false;
   new MutationObserver(() => {
     if (queued) return;
     queued = true;
-    setTimeout(() => { queued = false; mountRequestButton(); mountPlayerButton(); }, 300);
+    setTimeout(() => { queued = false; mountRequestButton(); }, 300);
   }).observe(document.body, { childList: true, subtree: true });
-  // Controls appear when the screen is tapped, so check then too.
-  document.addEventListener('pointerdown', () => { mountPlayerButton(); }, true);
 
 })();

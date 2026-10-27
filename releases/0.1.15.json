@@ -2,7 +2,7 @@
   "version": "0.1.15",
   "date": "2026-10-26",
   "title": "Roostflix extras",
-  "summary": "Request a movie and Save to Files, plus an AirPlay fix",
+  "summary": "Request a movie and Save to Files",
   "items": [
     {
       "title": "Request a movie",
