@@ -7,7 +7,7 @@ const net = require('net');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { Store } = require('./store');
+const { Store, DEFAULT_APPS } = require('./store');
 const { hashPassword, verifyPassword, Sessions, RateLimiter, deviceName, SESSION_TTL_MS } = require('./auth');
 const storage = require('./storage');
 const links = require('./links');
@@ -300,6 +300,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       app.url = url;
       linked = true;
     }
+  }
+  // Birdhouse arrives as a built-in app once; an admin can remove it after.
+  if (!store.db.settings.birdhouseAdded) {
+    store.db.settings.birdhouseAdded = true;
+    if (!store.db.apps.some((a) => a.id === 'birdhouse')) store.db.apps.push({ ...DEFAULT_APPS.find((a) => a.id === 'birdhouse') });
+    linked = true;
   }
   if (linked) store.save();
   // Roostflix, the look Roost gives Jellyfin's page, is on unless switched off.

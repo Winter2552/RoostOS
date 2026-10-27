@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { createServer } = require('../src/server');
+const { Store } = require('../src/store');
 const twoStep = require('../src/twostep');
 const { setUpTwoStep, freshCode } = require('./helpers');
 
@@ -160,9 +161,9 @@ test('too many wrong codes ends the sign-in', async () => {
   assert.equal((await call('POST', '/api/login/code', { ticket: first.body.ticket, code: freshCode(adminSecret) })).status, 401);
 });
 
-test('admin sees the four default apps', async () => {
+test('admin sees the five default apps', async () => {
   const { body } = await call('GET', '/api/apps', null, adminCookie);
-  assert.deepEqual(body.apps.map((a) => a.name), ['Jellyfin', 'Nova', 'Nest', 'Glint']);
+  assert.deepEqual(body.apps.map((a) => a.name), ['Jellyfin', 'Nova', 'Nest', 'Glint', 'Birdhouse']);
 });
 
 test('admin can add a user limited to some apps', async () => {
@@ -680,4 +681,23 @@ test('Roost can be installed as an app', async () => {
     assert.equal(r.status, 200, file);
     assert.equal(r.headers.get('cache-control'), 'no-cache');
   }
+});
+
+test('an install made before Birdhouse gets the app once, and removing it sticks', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'roost-bh-'));
+  const first = new Store(dir);
+  first.db.apps = first.db.apps.filter((a) => a.id !== 'birdhouse');
+  delete first.db.settings.birdhouseAdded;
+  first.save();
+  const boot = async () => {
+    const srv = createServer({ dataDir: dir });
+    const apps = new Store(dir).db.apps.map((a) => a.id);
+    srv.closeAllConnections();
+    return apps;
+  };
+  assert.ok((await boot()).includes('birdhouse'));
+  const again = new Store(dir);
+  again.db.apps = again.db.apps.filter((a) => a.id !== 'birdhouse');
+  again.save();
+  assert.ok(!(await boot()).includes('birdhouse'));
 });

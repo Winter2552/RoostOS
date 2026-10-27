@@ -42,6 +42,15 @@ const DEFAULT_APPS = [
     url: '#/glint',
     icon: 'spark',
   },
+  {
+    id: 'birdhouse',
+    name: 'Birdhouse',
+    tagline: 'Plans',
+    description: 'Plan a woodworking build: sizes in, drawing out.',
+    // Built into Roost: the link opens the Plans page.
+    url: '#/birdhouse',
+    icon: 'house',
+  },
 ];
 
 function emptyDb() {
