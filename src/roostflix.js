@@ -77,4 +77,26 @@ function tvBody(buffer) {
   }
 }
 
-module.exports = { NAME, isPage, skinPage, TV_COOKIE, wantsTv, isPlaybackInfo, plainProfile, tvBody };
+// Jellyfin's answer holds the stream's address with how it will be cut up
+// and which H.264 level to use. For a TV: MPEG-TS pieces, and level 4.1 at
+// most (a TV that took the sound but not the picture was sent level 5.1).
+function tvResponse(buffer) {
+  try {
+    const answer = JSON.parse(buffer.toString('utf8'));
+    for (const source of (answer && answer.MediaSources) || []) {
+      if (typeof source.TranscodingUrl === 'string') {
+        source.TranscodingUrl = source.TranscodingUrl
+          .replace(/([?&])SegmentContainer=mp4(?=&|$)/i, '$1SegmentContainer=ts')
+          .replace(/([?&]h264-level=)\d+/i, '$141')
+          .replace(/([?&]h264-profile=)[^&]*/i, '$1high,main,baseline')
+          .replace(/([?&]TranscodingContainer=)mp4(?=&|$)/i, '$1ts');
+      }
+      if (/^mp4$/i.test(source.TranscodingContainer || '')) source.TranscodingContainer = 'ts';
+    }
+    return Buffer.from(JSON.stringify(answer));
+  } catch {
+    return buffer;
+  }
+}
+
+module.exports = { NAME, isPage, skinPage, TV_COOKIE, wantsTv, isPlaybackInfo, plainProfile, tvBody, tvResponse };

@@ -63,6 +63,9 @@ function fakeJellyfin() {
       const items = jf.resume[m[1] || m[2]] || [];
       return items === 'fail' ? json(500) : json(200, { Items: items });
     }
+    if (req.method === 'POST' && /^\/Items\/abc123\/PlaybackInfo$/.test(req.url)) {
+      return json(200, { MediaSources: [{ TranscodingContainer: 'mp4', TranscodingUrl: '/videos/abc123/master.m3u8?VideoCodec=h264&SegmentContainer=mp4&MinSegments=1&h264-profile=high&h264-level=51&TranscodeReasons=x' }] });
+    }
     if (req.url === '/redirect-me') {
       res.writeHead(302, { Location: '/web/' });
       return res.end();
@@ -499,4 +502,10 @@ test('Play for TV: with the switch on, the playback request leaves HEVC out; off
   await post(`${tv}; roost_h264=1`);
   assert.deepEqual(info().body.DeviceProfile, { DirectPlayProfiles: [], TranscodingProfiles: [{ Type: 'Video', VideoCodec: 'h264', Container: 'ts', Protocol: 'hls' }] });
   assert.equal(info().cookie, undefined);
+  const answer = async (cookie) => (await (await post(cookie)).json()).MediaSources[0];
+  const off = await answer(tv);
+  assert.match(off.TranscodingUrl, /SegmentContainer=mp4.*h264-level=51/);
+  const on = await answer(`${tv}; roost_h264=1`);
+  assert.match(on.TranscodingUrl, /SegmentContainer=ts&MinSegments=1&h264-profile=high,main,baseline&h264-level=41&TranscodeReasons=x/);
+  assert.equal(on.TranscodingContainer, 'ts');
 });
