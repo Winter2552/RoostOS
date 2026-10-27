@@ -267,7 +267,24 @@ class Jellyfin {
   }
 
   proxy(req, res) {
+    // "Play for TV" is on: the player's playback request is changed on its way.
+    if (roostflix.wantsTv(req) && roostflix.isPlaybackInfo(req.method, req.url.slice(PREFIX.length))) {
+      const chunks = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => this.forward(req, res, roostflix.tvBody(Buffer.concat(chunks))));
+      req.on('error', () => res.destroy());
+      return;
+    }
+    this.forward(req, res);
+  }
+
+  // body: a replacement request body, when the proxy has changed it.
+  forward(req, res, body) {
     const { mod, options } = this.target(req);
+    if (body) {
+      options.headers = { ...options.headers, 'content-length': body.length };
+      delete options.headers['transfer-encoding'];
+    }
     const skin = roostflix.isPage(req.method, req.url.slice(PREFIX.length)) ? this.skin() : null;
     // Roostflix needs the page as plain text to add to it.
     if (skin) options.headers = { ...options.headers, 'accept-encoding': 'identity' };
@@ -302,7 +319,8 @@ class Jellyfin {
         res.destroy();
       }
     });
-    req.pipe(out);
+    if (body) out.end(body);
+    else req.pipe(out);
   }
 
   // Live updates (what's playing, remote control) use a WebSocket.
