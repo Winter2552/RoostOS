@@ -2,7 +2,7 @@
   "items": [
     {
       "title": "Birdhouse: plan a build",
-      "text": "A new app for woodworking plans. Set the height, width, depth and shelves and a to-scale drawing of your bookshelf appears on blueprint paper, with its sizes marked. Tap Adjust to change them; your last plan is kept on this device.",
+      "text": "A new app for woodworking plans. Set the height, width, depth and shelves and a to-scale bookshelf appears on blueprint paper: front, side and top views, a 3D model you can drag to turn, and a cut list of every board. Tap Adjust to change the sizes; your last plan is kept on this device.",
       "image": "birdhouse.png"
     }
   ]

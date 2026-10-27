@@ -46,3 +46,26 @@ test('in the browser it adds one name to the page and nothing else', () => {
   assert.deepEqual(Object.keys(window), ['birdhouseModel']);
   assert.equal(Object.keys(ctx).filter((k) => k !== 'window').length, 0, 'no stray globals that could clash with app.js');
 });
+
+test('the side view shows each board as a line, the top view the footprint', () => {
+  const s = model.side(model.DEFAULTS);
+  assert.deepEqual([s.width, s.height, s.lines.length], [300, 1800, 5]);
+  assert.deepEqual(model.top(model.DEFAULTS), { width: 800, height: 300, thickness: 18 });
+});
+
+test('every board becomes a solid, and 3D draws the near faces furthest-first', () => {
+  assert.equal(model.solids(model.DEFAULTS).length, 7);
+  const faces = model.project(model.DEFAULTS, 0.6, 0.35);
+  assert.ok(faces.length > 0 && faces.every((f) => f.pts.length === 4 && f.light > 0 && f.light < 1));
+  // Straight on from the front and level, a bookshelf shows only front faces.
+  const flat = model.project(model.DEFAULTS, 0, 0);
+  assert.equal(flat.length, 7);
+  const xs = flat.flatMap((f) => f.pts.map((p) => p[0]));
+  assert.ok(Math.abs(Math.min(...xs) + 400) < 1 && Math.abs(Math.max(...xs) - 400) < 1, 'width 800 centred');
+});
+
+test('looking from above shows the top board and turning the model changes the picture', () => {
+  const from = (yaw) => JSON.stringify(model.project(model.DEFAULTS, yaw, 0.5));
+  assert.notEqual(from(0), from(1));
+  assert.ok(model.project(model.DEFAULTS, 0, 0.5).length > model.project(model.DEFAULTS, 0, 0).length);
+});
