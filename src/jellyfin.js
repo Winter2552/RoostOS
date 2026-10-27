@@ -281,13 +281,16 @@ class Jellyfin {
   // body: a replacement request body, when the proxy has changed it.
   forward(req, res, body) {
     const { mod, options } = this.target(req);
+    // Jellyfin's answer to that request has the stream address in it; that is
+    // changed on the way back too (see roostflix.tvResponse).
+    const tvAnswer = body !== undefined;
     if (body) {
       options.headers = { ...options.headers, 'content-length': body.length };
       delete options.headers['transfer-encoding'];
     }
     const skin = roostflix.isPage(req.method, req.url.slice(PREFIX.length)) ? this.skin() : null;
-    // Roostflix needs the page as plain text to add to it.
-    if (skin) options.headers = { ...options.headers, 'accept-encoding': 'identity' };
+    // Roostflix needs the page, or the playback answer, as plain text to change it.
+    if (skin || tvAnswer) options.headers = { ...options.headers, 'accept-encoding': 'identity' };
     const out = mod.request(options, (up) => {
       const headers = { ...up.headers };
       // Jellyfin's redirects point at its own root; keep them under /jellyfin.
@@ -304,6 +307,19 @@ class Jellyfin {
           headers['cache-control'] = 'no-cache';
           res.writeHead(200, headers);
           res.end(body);
+        });
+        up.on('error', () => res.destroy());
+        return;
+      }
+      if (tvAnswer && up.statusCode === 200 && /json/.test(headers['content-type'] || '')) {
+        const chunks = [];
+        up.on('data', (c) => chunks.push(c));
+        up.on('end', () => {
+          const answer = roostflix.tvResponse(Buffer.concat(chunks));
+          delete headers['transfer-encoding'];
+          headers['content-length'] = answer.length;
+          res.writeHead(200, headers);
+          res.end(answer);
         });
         up.on('error', () => res.destroy());
         return;
