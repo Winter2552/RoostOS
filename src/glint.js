@@ -21,6 +21,8 @@ const fsp = fs.promises;
 const path = require('path');
 const crypto = require('crypto');
 const { HttpError, send, readJson, str } = require('./http');
+const { Memories } = require('./glint-memories');
+const { People } = require('./glint-people');
 
 const PAGE = 240; // photos per timeline page
 const THUMB_MAX = 512 * 1024; // previews are about 30 KB; this is a ceiling
@@ -194,6 +196,8 @@ class Glint {
       removeFromAlbum: q('DELETE FROM album_photos WHERE album = ? AND photo = ?'),
     };
     this.pages = new Map();
+    this.memories = new Memories({ db: this.db, count: (owner) => this.q.count.get(owner).n });
+    this.people = new People({ db: this.db, glint: this, memories: this.memories });
     this.repairDates();
   }
 
@@ -214,13 +218,13 @@ class Glint {
 
   // A page of photos, newest first. `before` is the last photo of the
   // previous page ("<taken>.<id>"); album and favourites narrow the list.
-  timeline(user, { before = '', album = '', favourites = false, own = false, undated = false } = {}) {
+  timeline(user, { before = '', album = '', favourites = false, own = false, undated = false, person = 0 } = {}) {
     if (!before) {
       if (this.q.index.run(user.id).changes) this.dirty.add(user.id);
       this.pair(user);
     }
     if (album && !this.q.album.get(album, user.id)) throw new HttpError(404, 'That album no longer exists');
-    const key = `${Boolean(before)}|${Boolean(album)}|${favourites}|${own}|${undated}`;
+    const key = `${Boolean(before)}|${Boolean(album)}|${favourites}|${own}|${undated}|${Boolean(person)}`;
     // "Own" shows only what Glint put in Photos/ (and Photos/<year>), not photos that live elsewhere in Nest.
     const ownSql = own ? `AND n.parent IN (SELECT f.id FROM nodes f WHERE f.owner = :owner AND f.kind = 'folder'
           AND f.trash_root IS NULL AND (f.id = :photos OR f.parent = :photos))` : '';
@@ -228,6 +232,7 @@ class Glint {
       this.pages.set(key, this.db.prepare(`SELECT p.*, n.name, n.mime, n.size FROM photos p
         JOIN nodes n ON n.id = p.id
         ${album ? 'JOIN album_photos ap ON ap.photo = p.id AND ap.album = :album' : ''}
+        ${person ? 'JOIN (SELECT DISTINCT photo FROM faces WHERE person = :person) pf ON pf.photo = p.id' : ''}
         WHERE p.owner = :owner AND n.trash_root IS NULL AND p.hide = 0
         ${favourites ? 'AND p.fav = 1' : ''}
         ${undated ? UNDATED : ''}
@@ -238,6 +243,7 @@ class Glint {
     const params = { owner: user.id, limit: PAGE + 1 };
     if (own) params.photos = (this.nest.q.findFolder.get(user.id, '', 'Photos') || { id: '-' }).id;
     if (album) params.album = album;
+    if (person) params.person = person;
     if (before) {
       const dot = before.indexOf('.');
       const taken = Number(before.slice(0, dot));
@@ -251,8 +257,13 @@ class Glint {
     return {
       items,
       next: rows.length > PAGE ? `${last.taken}.${last.id}` : null,
-      total: before ? undefined : own || undated ? this.countWhere(user, params.photos, own ? ownSql : '', undated) : this.q.count.get(user.id).n,
+      total: before ? undefined : person ? this.countPerson(user, person) : own || undated ? this.countWhere(user, params.photos, own ? ownSql : '', undated) : this.q.count.get(user.id).n,
     };
+  }
+
+  countPerson(user, person) {
+    return this.db.prepare(`SELECT COUNT(DISTINCT p.id) AS n FROM photos p JOIN nodes n ON n.id = p.id JOIN faces f ON f.photo = p.id
+      WHERE p.owner = ? AND f.person = ? AND n.trash_root IS NULL AND p.hide = 0`).get(user.id, person).n;
   }
 
   countWhere(user, photos, ownSql, undated) {
@@ -260,6 +271,14 @@ class Glint {
     if (ownSql) params.photos = photos;
     return this.db.prepare(`SELECT COUNT(*) AS n FROM photos p JOIN nodes n ON n.id = p.id
       WHERE p.owner = :owner AND n.trash_root IS NULL AND p.hide = 0 ${ownSql} ${undated ? UNDATED : ''}`).get(params).n;
+  }
+
+  // A person to narrow the timeline to; 0 for none. Only the owner's own people count.
+  person(user, v) {
+    if (!v) return 0;
+    const n = Number(v);
+    if (!Number.isInteger(n) || !this.people.q.person.get(n, user.id)) throw new HttpError(404, 'That person is gone');
+    return n;
   }
 
   // Set the date on photos, by hand. The files are never touched; the date lives in Glint's own table, and
@@ -484,6 +503,7 @@ class Glint {
   async sweep() {
     for (;;) {
       const gone = this.q.orphans.all();
+      this.people.forget(gone.map((g) => g.id));
       for (const { id, owner } of gone) {
         const user = this.nest.users(owner);
         if (user) await fsp.rm(this.thumbPath(user, id), { force: true });
@@ -504,7 +524,7 @@ class Glint {
 
     if (method === 'GET' && pathname === '/api/glint/photos') {
       return send(res, 200, {
-        ...this.timeline(user, { before: str(params.get('before'), 80), album: str(params.get('album'), 40), favourites: params.get('fav') === '1', own: params.get('own') === '1', undated: params.get('undated') === '1' }),
+        ...this.timeline(user, { before: str(params.get('before'), 80), album: str(params.get('album'), 40), person: this.person(user, params.get('person')), favourites: params.get('fav') === '1', own: params.get('own') === '1', undated: params.get('undated') === '1' }),
         storage: nest.storage(user),
       });
     }
@@ -609,6 +629,35 @@ class Glint {
       return send(res, 200, { deleted, storage: nest.storage(user) });
     }
 
+    if (method === 'GET' && pathname === '/api/glint/prefs') {
+      return send(res, 200, { memories: this.memories.enabled(user.id), people: this.people.enabled(user.id) });
+    }
+    if (method === 'POST' && pathname === '/api/glint/prefs') {
+      const body = await readJson(req);
+      if (typeof body.memories !== 'boolean' && typeof body.people !== 'boolean') throw new HttpError(400, 'Say what to turn on or off');
+      if (typeof body.memories === 'boolean') this.memories.setEnabled(user.id, body.memories);
+      if (typeof body.people === 'boolean') this.people.setEnabled(user.id, body.people);
+      return send(res, 200, { memories: this.memories.enabled(user.id), people: this.people.enabled(user.id) });
+    }
+    if ((pathname === '/api/glint/people' || pathname.startsWith('/api/glint/people/') || pathname === '/api/glint/faces' || pathname === '/api/glint/faces/todo')
+        && await this.people.handle(req, res, user, pathname, params)) return;
+    if (method === 'GET' && pathname === '/api/glint/memories') {
+      // New photos are indexed first, as for the timeline, so a fresh upload can appear in a memory.
+      if (this.q.index.run(user.id).changes) this.dirty.add(user.id);
+      const cards = this.memories.cards(user.id, tzParam(params));
+      return send(res, 200, { memories: cards.map(({ ids, ...c }) => c) });
+    }
+    if (method === 'GET' && (r = m(/^\/api\/glint\/memories\/([\w-]+)$/))) {
+      const mem = this.memories.find(user.id, r[1], tzParam(params));
+      if (!mem) throw new HttpError(404, 'That memory is gone');
+      const items = mem.ids.map((id) => this.q.photo.get(id, user.id)).filter(Boolean).map(photoItem);
+      const { ids, ...card } = mem;
+      return send(res, 200, { memory: card, items });
+    }
+    if (method === 'POST' && (r = m(/^\/api\/glint\/memories\/([\w-]+)\/hide$/))) {
+      this.memories.hide(user.id, r[1].slice(0, 40));
+      return send(res, 200, { ok: true });
+    }
     if (method === 'GET' && pathname === '/api/glint/albums') {
       return send(res, 200, { albums: this.albums(user) });
     }
@@ -641,6 +690,11 @@ class Glint {
     }
     throw new HttpError(404, 'Not found');
   }
+}
+
+// The viewer's offset from UTC in minutes, as Date#getTimezoneOffset gives it.
+function tzParam(params) {
+  return num(params.get('tz'), -840, 840) || 0;
 }
 
 function photoItem(p) {

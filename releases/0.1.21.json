@@ -1,0 +1,14 @@
+{
+  "version": "0.1.21",
+  "date": "2026-10-27",
+  "title": "Sentinel watches more",
+  "summary": "Stolen sign-ins, unexpected containers, update age",
+  "items": [
+    {
+      "title": "Sentinel watches more",
+      "text": "Sentinel now flags a sign-in cookie that turns up in a different browser (with a Sign out button, or automatic in Auto), and any container that appears or changes image that you did not install. The Security card also shows how long updates have been waiting, and Setup gained router, Cloudflare and ZimaOS update checklist steps.",
+      "image": "sentinel-watch.png",
+      "admin": true
+    }
+  ]
+}

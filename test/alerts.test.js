@@ -189,7 +189,7 @@ test('alerts: admins read, ignore and tune them; users cannot', async () => {
     await server.watcher.check();
     let view = (await call('GET', '/api/alerts', null, admin)).body;
     assert.deepEqual(view.active.map((a) => a.title), ['Jellyfin has stopped']);
-    assert.deepEqual(view.settings, { alertApps: true, alertDisks: true, alertDiskPct: 90, alertSecurity: true });
+    assert.deepEqual(view.settings, { alertApps: true, alertDisks: true, alertDiskPct: 90, alertSecurity: true, alertDriveTrend: true });
     assert.ok(view.checkedAt);
 
     assert.equal((await call('POST', `/api/alerts/${view.active[0].id}/dismiss`, null, sam)).status, 403);
@@ -201,7 +201,7 @@ test('alerts: admins read, ignore and tune them; users cannot', async () => {
     assert.equal(saved.status, 200);
     // Turning the checks off re-checks at once, so the app alert clears.
     view = (await call('GET', '/api/alerts', null, admin)).body;
-    assert.deepEqual(view.settings, { alertApps: false, alertDisks: false, alertDiskPct: 80, alertSecurity: true });
+    assert.deepEqual(view.settings, { alertApps: false, alertDisks: false, alertDiskPct: 80, alertSecurity: true, alertDriveTrend: true });
     assert.deepEqual(view.active, []);
     assert.deepEqual(view.recent.map((a) => a.title), ['Jellyfin has stopped']);
     assert.equal((await call('POST', `/api/alerts/${view.recent[0].id}/dismiss`, null, admin)).status, 404);

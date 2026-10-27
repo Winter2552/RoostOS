@@ -21,7 +21,9 @@ const { parseDisks, readDisks, CpuMeter, serverHealth } = require('./status');
 const { listContainers, containersFor, restartContainer } = require('./docker');
 const { UpdateChecker } = require('./updates');
 const { DriveHealth } = require('./smart');
-const { Sensors, priceOf } = require('./sensors');
+const { Sensors, priceOf, money } = require('./sensors');
+const { HealthHistory } = require('./health-history');
+const driveTrends = require('./drive-trends');
 const { OutsideServices } = require('./outside');
 const remoteAccess = require('./remote');
 const { Coffee, validSecret, newSecret } = require('./coffee');
@@ -490,8 +492,25 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     // Never ban the home network, or Cloudflare's own addresses.
     skip: (ip) => isPrivateIp(ip) || remoteAccess.isCloudflare(ip),
   });
+  // Power and heat history for the charts, fed by the watcher's minute check.
+  const healthHistory = new HealthHistory(dataDir);
   const watcher = new Watcher({
     store,
+    sample: (t) => {
+      const drives = driveHealth.read();
+      healthHistory.recordDrives(drives && drives.drives, t);
+      const view = sensors.view({ driveHealth: drives, settings: db().settings });
+      const live = view && !view.missing && !view.stale ? view : null;
+      const checked = drives && !drives.missing && !drives.stale ? drives.drives : [];
+      const hot = driveTrends.hottest(checked);
+      healthHistory.sample({
+        watts: live && live.power ? live.power.watts : null,
+        cpuTemp: live ? live.cpuTemp : null,
+        driveTemp: hot ? hot.details.temp : null,
+        driveHeat: driveTrends.heatMargin(checked),
+      }, t);
+    },
+    readTrends: (open, t) => driveTrends.trendProblems({ history: healthHistory, driveHealth: driveHealth.read(), now: t, open }),
     tidy: (t) => secWatch.tidy(t),
     onChange: (kind, alert) => push.alert(kind, alert),
     readContainers: async () => {
@@ -875,6 +894,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       ...certs.status(),
       connection: { secure: isSecure(req, trustProxy), viaCloudflare: !!req.headers['cf-connecting-ip'], host: requestHost(req) },
     };
+  }
+
+  function helperSummary() {
+    const updater = selfUpdate.summarize(selfUpdate.readStatus(dataDir));
+    return selfUpdate.summarizeHelper(selfUpdate.readHelperStatus(dataDir), updater.state, selfUpdate.hasRequest(dataDir));
   }
 
   // The electricity price for the power cost, per kWh in pence (or cents).
@@ -1394,6 +1418,13 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 200, { status });
     },
 
+    // Power and heat over the last day, week or month, for the status charts.
+    'GET /api/admin/health-history': (req, res) => {
+      requireAdmin(req);
+      const out = healthHistory.series(new URL(req.url, 'http://roost').searchParams.get('range') || 'day');
+      const { price, currency } = priceOf(db().settings);
+      send(res, 200, { ...out, cost: money(out.kwh * price, currency) });
+    },
     'GET /api/system': (req, res) => {
       requireMember(req);
       // The dashboard shows every drive Roost uses added together; `nest` is the drive
@@ -1485,6 +1516,10 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         driveHealth: driveHealth.read(),
         // Power, CPU heat and the hottest drive, for admins only.
         sensors: user.role === 'admin' ? sensors.view({ driveHealth: driveHealth.read(), settings: db().settings }) : null,
+        // Whether the roost-smart helper can be built from here, for admins only.
+        helper: user.role === 'admin' ? helperSummary() : null,
+        // Wear and sector trends per drive, for admins only.
+        driveOutlook: user.role === 'admin' ? driveTrends.outlooks(healthHistory, (driveHealth.read() || {}).drives, Date.now()) : null,
         apps,
         // Everything else Docker runs, for admins only.
         otherContainers: user.role === 'admin' ? all.filter((c) => !claimed.has(c.id)) : [],
@@ -1867,6 +1902,17 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 202, { ok: true });
     },
 
+    // Builds the roost-smart helper once, for the Power and heat section.
+    'POST /api/admin/helper/rebuild': (req, res) => {
+      const admin = requireAdmin(req);
+      const helper = helperSummary();
+      if (helper.building || selfUpdate.summarize(selfUpdate.readStatus(dataDir)).state === 'applying') throw new HttpError(409, 'The updater is busy. Try again in a minute.');
+      if (!helper.capable) throw new HttpError(409, 'The updater can’t do this yet. Run once in the server terminal: cd /DATA/AppData/roost-src && sudo docker compose up -d --build roost-updater roost-smart');
+      selfUpdate.writeRequest(dataDir, 'helper');
+      record(req, 'settings-changed', { actor: admin.username, detail: 'Power and heat helper rebuild started' });
+      send(res, 202, { ok: true });
+    },
+
     // ---------- which drive Nest keeps its files on ----------
     // Admin → Storage. Roost leaves a request for the roost-updater service,
     // which lists the plugged-in drives and switches Nest's folder over.
@@ -2242,6 +2288,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (body.alertDisks !== undefined) db().settings.alertDisks = body.alertDisks === true;
       if (body.alertDiskPct !== undefined) db().settings.alertDiskPct = cleanDiskPct(body.alertDiskPct);
       if (body.alertSecurity !== undefined) db().settings.alertSecurity = body.alertSecurity === true;
+      if (body.alertDriveTrend !== undefined) db().settings.alertDriveTrend = body.alertDriveTrend === true;
       const alertsChanged = JSON.stringify(alertsBefore) !== JSON.stringify(alertSettings(db()));
       if (alertsChanged) changes.push('alert settings');
       let tellBackups = false;
@@ -3242,6 +3289,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     clearTimeout(uptimeSoon);
     events.stop();
     uptime.save();
+    healthHistory.flush();
     store.flush();
     activity.flush();
     traffic.flush();
@@ -3253,11 +3301,13 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   server.glint = glint;
   server.photoBackup = photoBackup;
   server.watcher = watcher;
+  server.healthHistory = healthHistory;
   server.sentinel = sentinel;
   server.push = push;
   // Save anything still waiting, e.g. when the container is stopped.
   server.flushAll = () => {
     uptime.save();
+    healthHistory.flush();
     store.flush();
     activity.flush();
     traffic.flush();

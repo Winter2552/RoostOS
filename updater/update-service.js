@@ -29,7 +29,8 @@ const { mergeOverride } = require('./override');
 
 const REQUEST_FILE = 'update-request.json';
 const STATUS_FILE = 'update-status.json';
-const ACTIONS = new Set(['check', 'apply']);
+const ACTIONS = new Set(['check', 'apply', 'helper']);
+const HELPER_STATUS_FILE = 'helper-status.json';
 const DRIVE_REQUEST_FILE = 'nest-drive-request.json';
 const DRIVE_STATUS_FILE = 'nest-drive-status.json';
 const OVERRIDE_FILE = 'docker-compose.override.yml';
@@ -502,6 +503,53 @@ function create({ dataDir, srcDir, exec = run, now = () => Date.now(), wait = sl
     saveDrive();
   }
 
+  // ----- the roost-smart helper: build it once, from Status -----
+
+  // Rebuilds and starts only the roost-smart service (drive health, power and
+  // heat readings), for a helper that is out of date or was never built.
+  // Roost is not touched. The status file's existence tells Roost this updater
+  // knows how to do it.
+  const helperFile = path.join(dataDir, HELPER_STATUS_FILE);
+  let helperStatus = { state: 'idle', last: null };
+  try {
+    helperStatus = { ...helperStatus, ...JSON.parse(fs.readFileSync(helperFile, 'utf8')), state: 'idle' };
+  } catch {
+    // First run.
+  }
+  const saveHelper = () => {
+    helperStatus.updatedAt = new Date(now()).toISOString();
+    try {
+      writeJson(helperFile, helperStatus);
+    } catch (err) {
+      console.error('Roost updater: could not write the helper status:', err.message);
+    }
+  };
+
+  async function rebuildHelper() {
+    const result = { at: new Date(now()).toISOString() };
+    helperStatus.state = 'building';
+    saveHelper();
+    try {
+      const cfg = await compose(['config', '-q']);
+      if (cfg.code !== 0) throw new Stop("Docker didn't accept this folder's compose file.", tail(cfg.out));
+      const up = await compose(['up', '-d', '--build', '--no-deps', 'roost-smart'], { timeoutMs: BUILD_TIMEOUT_MS });
+      if (up.code !== 0) throw new Stop("The helper couldn't be built or started.", tail(up.out));
+      const ok = await waitHealthy('roost-smart');
+      if (!ok.ok) throw new Stop(`The helper was built but didn't stay running (${ok.seen || 'no answer'}).`, tail((await docker(['logs', '--tail', '15', 'roost-smart'])).out));
+      result.ok = true;
+    } catch (err) {
+      const stop = err instanceof Stop ? err : new Stop(`Something went wrong: ${err.message}`);
+      result.ok = false;
+      result.error = stop.message;
+      result.detail = stop.detail;
+    } finally {
+      result.finishedAt = new Date(now()).toISOString();
+      helperStatus.last = result;
+      helperStatus.state = 'idle';
+      saveHelper();
+    }
+  }
+
   // ----- the loop -----
 
   let nextAuto = now() + START_CHECK_MS;
@@ -519,6 +567,8 @@ function create({ dataDir, srcDir, exec = run, now = () => Date.now(), wait = sl
       if (request === 'apply') {
         await apply();
         nextAuto = now() + AUTO_CHECK_MS;
+      } else if (request === 'helper') {
+        await rebuildHelper();
       } else if (request === 'check' || now() >= nextAuto) {
         await check();
         nextAuto = now() + AUTO_CHECK_MS;
@@ -532,8 +582,9 @@ function create({ dataDir, srcDir, exec = run, now = () => Date.now(), wait = sl
   }
 
   save();
+  saveHelper();
   refreshDrives().catch(() => {});
-  return { tick, check, apply, status: () => status };
+  return { tick, check, apply, rebuildHelper, status: () => status, helperStatus: () => helperStatus };
 }
 
 if (require.main === module) {
@@ -545,4 +596,4 @@ if (require.main === module) {
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => process.exit(0));
 }
 
-module.exports = { create, run, repoOf, takeRequest, takeDriveRequest, listDrives, DRIVE_REQUEST_FILE, DRIVE_STATUS_FILE, REQUEST_FILE, STATUS_FILE, SERVICES };
+module.exports = { create, run, repoOf, takeRequest, takeDriveRequest, listDrives, DRIVE_REQUEST_FILE, DRIVE_STATUS_FILE, HELPER_STATUS_FILE, REQUEST_FILE, STATUS_FILE, SERVICES };

@@ -195,4 +195,4 @@ class DriveHealth {
   }
 }
 
-module.exports = { DriveHealth, judge, STALE_MS };
+module.exports = { DriveHealth, judge, STALE_MS, HOT };

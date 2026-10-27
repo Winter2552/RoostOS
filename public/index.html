@@ -258,6 +258,7 @@
           <a href="#/glint/favourites" data-place="favourites">Favourites</a>
           <a href="#/glint/undated" data-place="undated">Undated</a>
           <a href="#/glint/albums" data-place="albums">Albums</a>
+          <a href="#/glint/people" data-place="people" id="glint-people-link" class="hidden">People</a>
           <a href="#/glint/trash" data-place="trash">Trash</a>
           <a href="#/glint/move" data-place="move">Move to Glint</a>
         </nav>
@@ -332,6 +333,17 @@
         <h3 class="status-group mono muted">Power and heat</h3>
         <div class="status-grid" id="status-power"></div>
         <p class="mono muted status-note hidden" id="status-power-note"></p>
+        <div class="row hidden" id="status-power-setup">
+          <button class="btn small" type="button" id="power-setup-btn">Set up power and heat</button>
+        </div>
+        <div class="card power-charts hidden" id="status-power-charts">
+          <div class="chips" role="group" aria-label="Chart range">
+            <button class="chip" type="button" data-range="day" aria-pressed="true">Day</button>
+            <button class="chip" type="button" data-range="week" aria-pressed="false">Week</button>
+            <button class="chip" type="button" data-range="month" aria-pressed="false">Month</button>
+          </div>
+          <div id="power-chart-body"></div>
+        </div>
       </div>
 
       <h3 class="status-group mono muted">Drives</h3>
@@ -389,6 +401,15 @@
         </form>
         <p class="mono muted hidden" id="storage-admin-note" style="margin:16px 0 0">You're an admin: change your limit under Admin → Users</p>
         <div id="storage-requests"></div>
+      </div>
+      <div class="card panel member-only hidden" id="glint-prefs-panel">
+        <h3>Glint</h3><span class="mono muted">What Glint shows you</span>
+        <label class="glint-toggle mono"><input type="checkbox" id="pref-memories"><span>Show memories</span></label>
+        <p class="muted" style="margin:6px 0 0">On this day, trips and years above your photos. Made from your photo dates; nothing leaves Roost.</p>
+        <label class="glint-toggle mono" style="margin-top:14px"><input type="checkbox" id="pref-people"><span>Find people in photos</span></label>
+        <p class="muted" style="margin:6px 0 0">Groups photos by who is in them, like Google Photos. Faces are found in your own browser while the People page is open, and only a short numeric fingerprint of each face is kept on your Roost. Only you can see it.</p>
+        <div class="row hidden" id="people-delete-row"><button class="btn ghost small" type="button" id="people-delete">Delete face data</button></div>
+        <div class="msg" role="status"></div>
       </div>
       <div class="card panel" id="two-step-panel">
         <h3>Two-step sign-in</h3><span class="mono muted">A code from your phone as well as your password</span>
@@ -635,6 +656,7 @@
         <div class="checks alert-checks">
           <label><input type="checkbox" name="alertApps"> Apps that stop, crash or turn unhealthy</label>
           <label><input type="checkbox" name="alertDisks"> Drives that fill up or go missing</label>
+          <label><input type="checkbox" name="alertDriveTrend"> Drives getting worse: lost sectors, wearing out, running hot</label>
           <label><input type="checkbox" name="alertSecurity"> Sign-in trouble: repeated failures, new devices, password changes</label>
         </div>
         <div class="field alert-level">
@@ -826,6 +848,7 @@
   <script src="/fileinfo.js"></script>
   <script src="/move.js"></script>
   <script src="/nest.js"></script>
+  <script src="/faces.js"></script>
   <script src="/glint.js"></script>
   <script src="/whatsnew.js"></script>
   <script src="/search.js"></script>
