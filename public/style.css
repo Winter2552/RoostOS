@@ -1842,3 +1842,9 @@ a.app-card:active { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--shad
 .bh-table td { padding: 5px 6px 5px 0; border-top: 1px dashed var(--bp-line); }
 .bh-note { margin: 8px 0 0; font-size: 12px; color: var(--bp-soft); }
 .bh-3d:focus:not(:focus-visible) { outline: none; }
+.bh-projects { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 4px; }
+.bh-pick { background: none; color: var(--bp-ink); border: 1.5px solid var(--bp-line); border-radius: 4px; padding: 3px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+.bh-pick.on { border-color: var(--bp-ink); background: rgba(242, 246, 254, 0.18); font-weight: 700; }
+.bh-pick:focus-visible { outline: 2px solid var(--bp-ink); outline-offset: 2px; }
+.bh-card { max-height: calc(100vh - 230px); overflow: auto; }
+@media (max-width: 600px) { .bh-card { max-height: 62vh; } }
