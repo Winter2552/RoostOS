@@ -84,14 +84,6 @@ class Sessions {
     return s;
   }
 
-  // The sign-in a Jellyfin token was issued for, if it is still live.
-  byJellyfinToken(token) {
-    if (!token) return null;
-    const now = Date.now();
-    for (const s of this.map.values()) if (s.jf && s.jf.token === token && s.expires > now) return s;
-    return null;
-  }
-
   // Newest activity first.
   list(userId) {
     return [...this.map.values()].filter((s) => s.userId === userId).sort((a, b) => b.lastSeen - a.lastSeen);

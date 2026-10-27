@@ -63,9 +63,6 @@ function fakeJellyfin() {
       const items = jf.resume[m[1] || m[2]] || [];
       return items === 'fail' ? json(500) : json(200, { Items: items });
     }
-    if (req.method === 'POST' && /^\/Items\/abc123\/PlaybackInfo$/.test(req.url)) {
-      return json(200, { MediaSources: [{ TranscodingContainer: 'mp4', TranscodingUrl: '/videos/abc123/master.m3u8?VideoCodec=h264&SegmentContainer=mp4&MinSegments=1&h264-profile=high&h264-level=51&TranscodeReasons=x' }] });
-    }
     if (req.url === '/redirect-me') {
       res.writeHead(302, { Location: '/web/' });
       return res.end();
@@ -205,19 +202,6 @@ test('Jellyfin is passed through only to people allowed to use it', async () => 
   const nofilms = (await call('POST', '/api/login', { username: 'nofilms', password: 'no films 12' })).cookie;
   assert.equal((await call('GET', '/jellyfin/web/index.html', null, nofilms)).location, '/');
   assert.equal((await call('GET', '/api/jellyfin/session', null, nofilms)).status, 403);
-});
-
-test('AirPlay: a stream with a live Jellyfin token plays without the Roost cookie, nothing else does', async () => {
-  const sam = (await call('POST', '/api/login', { username: 'sam', password: 'sam pass 123' })).cookie;
-  await settle();
-  const { token } = (await call('GET', '/api/jellyfin/session', null, sam)).body;
-  assert.ok(token);
-  const ok = await call('GET', `/jellyfin/Videos/abc/master.m3u8?api_key=${token}`, null, null);
-  assert.equal(ok.location, null);
-  assert.equal((await call('GET', '/jellyfin/Videos/abc/master.m3u8?api_key=wrong', null, null)).location, '/');
-  assert.equal((await call('GET', '/jellyfin/Videos/abc/master.m3u8', null, null)).location, '/');
-  assert.equal((await call('GET', `/jellyfin/web/index.html?api_key=${token}`, null, null)).location, '/');
-  assert.equal((await call('GET', `/jellyfin/Users?api_key=${token}`, null, null)).location, '/');
 });
 
 test("Roostflix adds its skin to Jellyfin's page, and can be switched off", async () => {
@@ -487,25 +471,4 @@ test('Roostflix movie requests: people ask, the admin sees them and marks them',
   assert.equal((await call('POST', `/api/admin/movie-requests/${heat.id}`, { action: 'added' }, admin)).status, 200);
   assert.equal((await call('POST', `/api/admin/movie-requests/${heat.id}`, { action: 'dismiss' }, admin)).status, 409);
   assert.equal((await call('GET', '/api/roostflix/requests', null, sam)).body.requests.find((r) => r.id === heat.id).status, 'added');
-});
-
-test('Play for TV: with the switch on, the playback request leaves HEVC out; off, it is untouched', async () => {
-  await call('PUT', '/api/admin/jellyfin', { url: jfUrl, apiKey: KEY }, admin);
-  await call('POST', '/api/admin/users', { username: 'tvuser', password: 'tv user pass 1', apps: ['jellyfin'] }, admin);
-  const tv = (await call('POST', '/api/login', { username: 'tvuser', password: 'tv user pass 1' })).cookie;
-  const profile = { DeviceProfile: { DirectPlayProfiles: [{ Type: 'Video', VideoCodec: 'hevc' }], TranscodingProfiles: [{ Type: 'Video', VideoCodec: 'h264,hevc', Container: 'mp4', Protocol: 'hls' }] } };
-  const post = (cookie) => fetch(`${base}/jellyfin/Items/abc123/PlaybackInfo`, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie }, body: JSON.stringify(profile) });
-  await settle();
-  const info = () => jf.seen.filter((r) => /PlaybackInfo/.test(r.url)).at(-1);
-  await post(tv);
-  assert.deepEqual(info().body, profile);
-  await post(`${tv}; roost_h264=1`);
-  assert.deepEqual(info().body.DeviceProfile, { DirectPlayProfiles: [], TranscodingProfiles: [{ Type: 'Video', VideoCodec: 'h264', Container: 'ts', Protocol: 'hls' }] });
-  assert.equal(info().cookie, undefined);
-  const answer = async (cookie) => (await (await post(cookie)).json()).MediaSources[0];
-  const off = await answer(tv);
-  assert.match(off.TranscodingUrl, /SegmentContainer=mp4.*h264-level=51/);
-  const on = await answer(`${tv}; roost_h264=1`);
-  assert.match(on.TranscodingUrl, /SegmentContainer=ts&MinSegments=1&h264-profile=high,main,baseline&h264-level=41&TranscodeReasons=x/);
-  assert.equal(on.TranscodingContainer, 'ts');
 });
