@@ -31,7 +31,7 @@ function make(mode, db = { users: [{ id: 'u1', username: 'raven', role: 'admin',
 test('manual mode alerts and waits; auto mode bans at once', () => {
   const m = make('manual');
   for (let i = 0; i < 3; i++) m.s.request('87.1.1.1', '/.env');
-  assert.equal(m.raised.length, 1);
+  assert.equal(m.raised.length, 0, 'mild probing is listed, not announced');
   assert.equal(m.s.isBanned('87.1.1.1'), false);
   assert.equal(m.s.view().incidents[0].handled, null);
   m.s.ban('87.1.1.1', 'scanner'); // the Ban button
@@ -41,8 +41,34 @@ test('manual mode alerts and waits; auto mode bans at once', () => {
   const a = make('auto');
   for (let i = 0; i < 3; i++) a.s.request('87.2.2.2', '/wp-login.php');
   assert.equal(a.s.isBanned('87.2.2.2'), true);
-  assert.match(a.raised[0].detail, /banned that address for 24 hours/);
+  assert.equal(a.s.view().incidents[0].handled, 'banned');
+  assert.equal(a.raised.length, 0);
   assert.deepEqual(a.locked, []);
+});
+
+test('several addresses at once is an attack: one alert, and auto mode locks down', () => {
+  const probe = (m) => {
+    for (let n = 1; n <= 4; n++) for (let i = 0; i < 3; i++) m.s.request(`87.9.9.${n}`, '/.env');
+    assert.equal(m.raised.length, 0, 'four addresses is still background noise');
+    for (let i = 0; i < 3; i++) m.s.request('87.9.9.5', '/.env');
+  };
+  const man = make('manual');
+  probe(man);
+  assert.equal(man.raised.length, 1);
+  assert.equal(man.raised[0].title, 'Many addresses are attacking Roost');
+  assert.match(man.raised[0].detail, /5 different addresses/);
+  assert.deepEqual(man.locked, []);
+  for (let i = 0; i < 3; i++) man.s.request('87.9.9.6', '/.env');
+  assert.equal(man.raised.length, 1, 'one alert per wave');
+
+  const auto = make('auto');
+  probe(auto);
+  assert.deepEqual(auto.locked, ['Sentinel']);
+  assert.match(auto.raised[0].detail, /Sentinel locked Roost down/);
+
+  const slow = make('manual'); // five addresses spread over an hour is not a wave
+  for (let n = 1; n <= 5; n++) { for (let i = 0; i < 3; i++) slow.s.request(`87.8.8.${n}`, '/.env'); slow.tick(15 * 60 * 1000); }
+  assert.equal(slow.raised.length, 0);
 });
 
 test('two probes are noise, ten minutes apart they never add up', () => {
@@ -60,7 +86,9 @@ test('guessing many usernames is spotted', () => {
   assert.equal(m.raised.length, 0);
   m.s.failedSignIn('87.3.3.3', 'raven');
   m.s.failedSignIn('87.3.3.3', 'dana');
-  assert.equal(m.raised.length, 1);
+  assert.equal(m.s.incidents.length, 1);
+  assert.equal(m.s.incidents[0].kind, 'spray');
+  assert.equal(m.raised.length, 0);
   assert.equal(m.s.isBanned('87.3.3.3'), true);
 });
 
@@ -70,9 +98,8 @@ test('home addresses are never banned, and off means off', () => {
   for (let i = 0; i < 5; i++) m.s.request('192.168.4.20', '/.env');
   assert.equal(m.s.isBanned('192.168.4.20'), false);
   // Still noticed (outside traffic can look like a home address behind a second router).
-  assert.equal(m.raised.length, 1);
-  assert.match(m.raised[0].detail, /not banned/);
-  m.raised.length = 0;
+  assert.equal(m.s.incidents.length, 1);
+  assert.match(m.s.incidents[0].detail, /places that don't exist/);
   m.s.ban('87.4.4.4', 'x');
   m.s.setMode('off');
   assert.equal(m.s.isBanned('87.4.4.4'), false);
@@ -244,7 +271,7 @@ test('outside (HTTPS) scanners are banned in auto mode, and the admin can see an
     assert.equal(await get('/api/state', '87.7.7.7'), 403);
     const checks = (await call('GET', '/api/admin/security', null, cookie)).body.checks;
     assert.equal(checks.find((c) => c.id === 'sentinel').title, 'Sentinel is on and acts on its own');
-    assert.ok((await call('GET', '/api/alerts', null, cookie)).body.active.some((a) => /scanner is probing Roost: 87.7.7.7/i.test(a.title)));
+    assert.equal((await call('GET', '/api/alerts', null, cookie)).body.active.some((a) => /87.7.7.7/.test(a.title)), false, 'one scanner stays quiet');
 
     // The report for that incident: admins only, a download, evidence from the outside requests.
     const inc = (await call('GET', '/api/admin/sentinel', null, cookie)).body.incidents.find((i) => i.ip === '87.7.7.7');
