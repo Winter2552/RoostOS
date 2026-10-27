@@ -434,7 +434,7 @@
   }
 
   const later = (fn) => { let n = 0; const t = () => { if (!fn() && n++ < 20) setTimeout(t, 250); }; t(); };
-  const refreshExtras = () => { later(mountRequestButton); mountSave(); };
+  const refreshExtras = () => { later(mountRequestButton); later(mountPlayerButton); mountSave(); };
   document.addEventListener('viewshow', refreshExtras);
   refreshExtras();
   // Jellyfin builds the menu and the player controls when it likes, so they are
@@ -445,5 +445,7 @@
     queued = true;
     setTimeout(() => { queued = false; mountRequestButton(); mountPlayerButton(); }, 300);
   }).observe(document.body, { childList: true, subtree: true });
+  // Controls appear when the screen is tapped, so check then too.
+  document.addEventListener('pointerdown', () => { mountPlayerButton(); }, true);
 
 })();
