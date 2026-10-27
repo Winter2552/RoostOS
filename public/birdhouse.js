@@ -412,6 +412,39 @@
     }
   }
 
+  // ---------- printing ----------
+  // The whole plan on paper: drawings, cut list, layouts and cost. It is built
+  // only for the moment of printing (the print style hides the rest of the page),
+  // so "Print" in the browser, or Share > PDF on a phone, gives the plan sheet.
+
+  function printSheet() {
+    const s = model.size(S.d);
+    const cell = (label, value) => h('div', {}, h('small', { text: label }), value);
+    const items = model.materials(S.d);
+    const total = items.reduce((a, m) => a + m.qty * priceOf(m), 0);
+    const costTable = h('table', { class: 'bh-table' },
+      h('thead', {}, h('tr', {}, ...['Material', 'Qty', 'Each', 'Total'].map((t) => h('th', { text: t })))),
+      h('tbody', {}, ...items.map((m) => h('tr', {}, h('td', { text: m.label }), h('td', { text: String(m.qty) }), h('td', { text: money(priceOf(m)) }), h('td', { text: money(m.qty * priceOf(m)) })))),
+      h('tfoot', {}, h('tr', {}, h('td', { text: 'Estimate' }), h('td'), h('td'), h('td', { text: money(total) }))));
+    const when = new Date().toLocaleDateString();
+    return h('div', { id: 'bh-sheet-print' },
+      h('div', { class: 'bh-title' }, cell('PROJECT', `${info().name} · pine`), cell('SIZE', `${s.width} × ${s.depth} × ${s.height} mm`), cell('PLANNED', when), cell('MADE WITH', 'Birdhouse · Roost')),
+      h('div', { class: 'bh-chips' }, ...info().chips(S.d).map((t) => h('span', { class: 'bh-chip', text: t }))),
+      h('div', { class: 'bh-pgrid' }, drawFlat('front', 'Front'), drawFlat('side', 'Side'), drawFlat('top', 'Top')),
+      h('div', { class: 'bh-pgrid two' }, draw3d(), h('div', {}, cutList())),
+      h('div', { class: 'bh-pbreak' }, drawSheets()),
+      h('div', { class: 'bh-pbreak' }, h('h3', { class: 'bh-h', text: 'What to buy' }), costTable,
+        h('p', { class: 'bh-note', text: 'Prices are the ones set in Birdhouse (starter prices are rough guesses). Check them at the shop before buying.' })));
+  }
+
+  function printPlan() {
+    document.getElementById('bh-sheet-print')?.remove();
+    document.body.append(printSheet());
+    const done = () => { document.getElementById('bh-sheet-print')?.remove(); window.removeEventListener('afterprint', done); };
+    window.addEventListener('afterprint', done);
+    window.print();
+  }
+
   // The sentence box: reads what was typed, redraws, and says what it did, so a
   // number it could not place is never quietly dropped.
   function draft(text) {
@@ -439,11 +472,12 @@
       S.built = true;
       $('#bh-adjust').addEventListener('click', openCard);
       $('#bh-save').addEventListener('click', save);
+      $('#bh-print').addEventListener('click', printPlan);
       $('#bh-plans').addEventListener('click', openPlans);
       $('#bh-ask').addEventListener('submit', (e) => { e.preventDefault(); draft($('#bh-text').value); });
     }
     closeCard();
-    $('#bh-foot').classList.toggle('hidden', !hasNest());
+    $('#bh-nest').classList.toggle('hidden', !hasNest());
     paint();
   };
 })();

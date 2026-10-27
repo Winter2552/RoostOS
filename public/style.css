@@ -1891,3 +1891,29 @@ a.app-card:active { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--shad
 .bh-cost .bh-fetch { margin-top: 0; }
 .bh-cost input.bh-link { flex: 1; min-width: 10em; max-width: none; width: auto; }
 @media (max-width: 600px) { .bh-cost input[type=number] { width: 5.4em; } }
+.bh-nest { display: inline-flex; gap: 8px; }
+.bh-nest.hidden { display: none; }
+#bh-sheet-print { display: none; }
+@media print {
+  @page { size: A4; margin: 12mm; }
+  body > *:not(#bh-sheet-print) { display: none !important; }
+  html, body { background: #fff !important; }
+  #bh-sheet-print {
+    display: block; color: #12408f; font-family: var(--mono); font-size: 11px;
+    --bp-ink: #12408f; --bp-soft: #5b78a6; --bp-line: #b9cde8;
+  }
+  #bh-sheet-print .bh-title { display: grid; grid-template-columns: 2fr 2fr 1fr 1.4fr; border: 1.5px solid #12408f; margin-bottom: 8px; }
+  #bh-sheet-print .bh-title > div { padding: 4px 8px; border-left: 1.5px solid #12408f; }
+  #bh-sheet-print .bh-title > div:first-child { border-left: 0; }
+  #bh-sheet-print .bh-chip { border-color: #12408f; }
+  #bh-sheet-print .bh-pgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 10px 0; break-inside: avoid; }
+  #bh-sheet-print .bh-pgrid.two { grid-template-columns: 1fr 1.2fr; align-items: start; }
+  #bh-sheet-print .bh-pgrid svg { max-height: 70mm; }
+  #bh-sheet-print .bh-board, #bh-sheet-print .bh-face { fill: rgba(18, 64, 143, 0.08); }
+  #bh-sheet-print .bh-face { fill: #12408f; }
+  #bh-sheet-print .bh-pbreak { break-inside: avoid; margin-top: 10px; }
+  #bh-sheet-print .bh-sheets svg { max-height: 42mm; }
+  #bh-sheet-print .bh-pgrid svg { max-height: 62mm; }
+  #bh-sheet-print .bh-table td { border-top-color: #b9cde8; }
+  #bh-sheet-print * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}

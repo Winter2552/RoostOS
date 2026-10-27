@@ -2,7 +2,7 @@
   "items": [
     {
       "title": "Birdhouse: plan a build",
-      "text": "A new app for woodworking plans. Type what you want, like a table 1200 long and 700 wide, or pick a bookshelf, table, box or bench, and a to-scale plan appears on blueprint paper: front, side and top views, a 3D model you can drag to turn, a cut list of every board, how to lay the boards out on sheets and timber lengths, and what it will cost to buy. Save a plan to Nest and open it again later.",
+      "text": "A new app for woodworking plans. Type what you want, like a table 1200 long and 700 wide, or pick a bookshelf, table, box or bench, and a to-scale plan appears on blueprint paper: front, side and top views, a 3D model you can drag to turn, a cut list of every board, how to lay the boards out on sheets and timber lengths, and what it will cost to buy. Save a plan to Nest and open it again later, or print it as a one-page PDF.",
       "image": "birdhouse.png"
     }
   ]
