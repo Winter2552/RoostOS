@@ -70,7 +70,7 @@
   const G = {
     space: '',
     hideNest: false, // show only photos added through Glint, not ones that live elsewhere in Nest
-    mode: 'photos', // photos | favourites | undated | albums | album | trash | move
+    mode: 'photos', // photos | favourites | undated | albums | album | memory | trash | move
     album: null, // { id, name } when mode is 'album'
     items: [],
     next: null,
@@ -80,6 +80,8 @@
     token: 0,
     loading: false,
     albums: [],
+    memories: [], // the cards above the timeline
+    memory: null, // { id, title, sub } when mode is 'memory'
     storage: null,
     zoom: 0, // 0 is the roomy grid (3 across on a phone); higher is denser
   };
@@ -114,9 +116,11 @@
     const [a, b] = parts;
     if (space !== G.space) G.storage = null;
     G.space = space;
-    const mode = a === 'favourites' ? 'favourites' : a === 'undated' ? 'undated' : a === 'albums' ? 'albums' : a === 'album' && b ? 'album' : a === 'trash' ? 'trash' : a === 'move' ? 'move' : 'photos';
+    const mode = a === 'favourites' ? 'favourites' : a === 'undated' ? 'undated' : a === 'albums' ? 'albums' : a === 'album' && b ? 'album' : a === 'memory' && b ? 'memory' : a === 'trash' ? 'trash' : a === 'move' ? 'move' : 'photos';
     G.mode = mode;
     G.album = mode === 'album' ? { id: b, name: '' } : null;
+    G.memory = mode === 'memory' ? { id: b, title: '', sub: '' } : null;
+    if (mode !== 'photos') G.memories = [];
     G.items = [];
     G.next = null;
     G.total = 0;
@@ -138,6 +142,12 @@
         G.albums = albums;
       } else if (G.mode === 'move') {
         await move.fetchStatus();
+      } else if (G.mode === 'memory') {
+        const d = await gapi('GET', `/api/glint/memories/${G.memory.id}?tz=${tzOffset()}`);
+        if (token !== G.token) return;
+        G.items = d.items;
+        G.total = d.items.length;
+        G.memory = { id: d.memory.id, title: d.memory.title, sub: d.memory.sub };
       } else if (G.mode === 'trash') {
         const d = await gapi('GET', '/api/glint/trash');
         if (token !== G.token) return;
@@ -155,6 +165,7 @@
         G.items = first ? d.items : G.items.concat(d.items);
         G.next = d.next;
         if (first) { G.total = d.total; G.storage = d.storage; }
+        if (first && G.mode === 'photos') loadMemories(token);
         if (G.mode === 'album' && !G.album.name) {
           const { albums } = await gapi('GET', '/api/glint/albums');
           G.albums = albums;
@@ -164,13 +175,24 @@
       G.error = '';
     } catch (err) {
       if (token !== G.token) return;
-      G.error = err.status === 404 && G.mode === 'album' ? 'That album no longer exists.' : err.message;
+      G.error = err.status === 404 && G.mode === 'album' ? 'That album no longer exists.' : err.status === 404 && G.mode === 'memory' ? 'That memory is gone.' : err.message;
     } finally {
       if (token === G.token) G.loading = false;
     }
     render();
     watchEnd();
     pollMove();
+  }
+
+  // Memories come after the photos, so a slow or failed memory never holds the timeline up.
+  const tzOffset = () => new Date().getTimezoneOffset();
+  async function loadMemories(token) {
+    try {
+      const { memories } = await gapi('GET', `/api/glint/memories?tz=${tzOffset()}`);
+      if (token !== G.token || G.mode !== 'photos') return;
+      G.memories = memories;
+      render();
+    } catch { /* no memories is fine */ }
   }
 
   // Loads the next page when the end of the list nears the screen.
@@ -234,7 +256,13 @@
   function renderCrumbs() {
     const names = { photos: 'Photos', favourites: 'Favourites', undated: 'Undated', albums: 'Albums', trash: 'Trash', move: 'Move to Glint' };
     const crumbs = $('#glint-crumbs');
-    if (G.mode === 'album') {
+    if (G.mode === 'memory') {
+      crumbs.replaceChildren(
+        el('a', { class: 'crumb', href: base(), text: 'Photos' }),
+        gi('right', 'crumb-sep'),
+        el('h2', { text: G.memory.title || '…' }));
+      document.title = `${G.memory.title || 'Memory'} · ${state.serverName}`;
+    } else if (G.mode === 'album') {
       crumbs.replaceChildren(
         el('a', { class: 'crumb', href: `${base()}/albums`, text: 'Albums' }),
         gi('right', 'crumb-sep'),
@@ -263,6 +291,11 @@
         zoomButtons(),
         el('button', { type: 'button', class: 'btn ghost small', text: 'Rename', onclick: renameAlbum }),
         el('button', { type: 'button', class: 'btn ghost small', text: 'Delete album', onclick: deleteAlbum }));
+    } else if (G.mode === 'memory') {
+      tools.replaceChildren(...(G.items.length ? [
+        el('button', { type: 'button', class: 'btn ghost small', text: 'Play', onclick: playMemory }),
+        el('button', { type: 'button', class: 'btn ghost small', text: 'Save as album', onclick: saveMemory }),
+        el('button', { type: 'button', class: 'btn ghost small', text: 'Hide', onclick: hideMemory })] : []));
     } else if (G.mode === 'trash') {
       tools.replaceChildren(G.items.length ? el('button', { type: 'button', class: 'btn ghost small', text: 'Empty trash', onclick: emptyTrash }) : '');
     }
@@ -270,6 +303,10 @@
 
   function renderTimeline() {
     if (G.loading && !G.items.length) {
+      body.replaceChildren(el('div', { class: 'muted glint-note', text: 'Loading…' }));
+      return;
+    }
+    if (!G.items.length && G.mode === 'memory') {
       body.replaceChildren(el('div', { class: 'muted glint-note', text: 'Loading…' }));
       return;
     }
@@ -283,8 +320,15 @@
       body.replaceChildren(el('div', { class: 'nest-empty' }, gi('photo'), el('b', { text: head }), el('span', { class: 'muted', text: text })));
       return;
     }
+    if (G.mode === 'memory') {
+      const grid = el('div', { class: 'glint-grid' }, ...G.items.map(tile));
+      body.replaceChildren(el('p', { class: 'muted glint-memsub', text: `${G.memory.sub} · ${plural(G.items.length, 'photo')}` }), grid);
+      for (const t of body.querySelectorAll('.gtile[data-need]')) tileObserver.observe(t);
+      return;
+    }
     // One grid per month, with the month as a heading, so scrolling stays oriented.
     const parts = [];
+    if (G.mode === 'photos' && G.memories.length) parts.push(memoryStrip());
     let grid = null;
     let month = '';
     let year = '';
@@ -303,6 +347,12 @@
     }
     body.replaceChildren(...parts);
     for (const t of body.querySelectorAll('.gtile[data-need]')) tileObserver.observe(t);
+  }
+
+  function memoryStrip() {
+    return el('div', { class: 'glint-memories', role: 'list', 'aria-label': 'Memories' }, ...G.memories.map((m) => el('a', { class: 'gmem', role: 'listitem', href: `${base()}/memory/${m.id}` },
+      el('img', { src: thumbUrl({ id: m.cover }), alt: '', loading: 'lazy', draggable: 'false', onerror: (e) => e.target.remove() }),
+      el('span', { class: 'gmem-text' }, el('b', { text: m.title }), el('small', { text: m.sub })))));
   }
 
   function tile(p) {
@@ -778,14 +828,70 @@
 
   // ---------- albums ----------
 
-  async function newAlbum(items) {
-    const name = await ask({ title: 'New album', value: '', ok: 'Create' });
+  async function newAlbum(items, value = '') {
+    const name = await ask({ title: 'New album', value, ok: 'Create' });
     if (!name) return null;
     try {
       const { album } = await gapi('POST', '/api/glint/albums', { name, ids: items.map((i) => i.id) });
       if (items.length) { toast(`Added to “${album.name}”`); clearSel(); } else await load(true);
       return album;
     } catch (err) { toast(err.message); return null; }
+  }
+
+  // ---------- memories ----------
+
+  async function saveMemory() {
+    const m = G.memory;
+    const album = await newAlbum(G.items, /^(On this day|Recent)/.test(m.title) ? `${m.title}, ${m.sub.toLowerCase()}` : m.title);
+    if (album) location.hash = `${base()}/album/${album.id}`;
+  }
+
+  async function hideMemory() {
+    try { await gapi('POST', `/api/glint/memories/${G.memory.id}/hide`, {}); } catch (err) { toast(err.message); return; }
+    toast('Memory hidden');
+    location.hash = base();
+  }
+
+  // A slow crossfade through the memory's photos: two stacked pictures, one fading over the other.
+  // Esc or a tap closes it; with reduced motion the pictures swap without fading (see the CSS).
+  function playMemory() {
+    const items = G.items.filter((p) => !p.video);
+    if (!items.length) return;
+    const layers = [0, 1].map(() => el('img', { class: 'gshow-img', alt: '', draggable: 'false' }));
+    const title = el('div', { class: 'gshow-title' }, el('b', { text: G.memory.title }), el('small', { text: G.memory.sub }));
+    const root = el('div', { class: 'gshow', role: 'dialog', 'aria-label': `${G.memory.title}, slideshow`, tabindex: '-1' }, ...layers, title,
+      el('button', { type: 'button', class: 'gshow-close', 'aria-label': 'Close', onclick: () => stop() }, gi('close')));
+    let i = 0;
+    let top = 0;
+    let timer = 0;
+    const show = () => {
+      const p = items[i];
+      const next = layers[top ^ 1];
+      next.onerror = () => { next.onerror = null; next.src = mediaUrl(p, true); };
+      next.onload = () => {
+        next.onload = null;
+        next.classList.add('on');
+        layers[top].classList.remove('on');
+        top ^= 1;
+        title.classList.add('away');
+      };
+      next.src = mediaUrl(p);
+      i++;
+      timer = setTimeout(i < items.length ? show : stop, 4500);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') stop(); };
+    function stop() {
+      clearTimeout(timer);
+      document.removeEventListener('keydown', onKey);
+      document.body.classList.remove('gview-open');
+      root.remove();
+    }
+    root.addEventListener('click', (e) => { if (!e.target.closest('button')) stop(); });
+    document.addEventListener('keydown', onKey);
+    document.body.classList.add('gview-open');
+    document.body.append(root);
+    root.focus();
+    show();
   }
 
   async function albumPicker(items) {
