@@ -1859,3 +1859,20 @@ a.app-card:active { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--shad
 .bh-key { color: var(--bp-soft); width: 1.6em; }
 .bh-warn { margin: 8px 0 0; font-size: 12px; border: 1.5px solid var(--bp-ink); border-radius: 4px; padding: 6px 10px; }
 .bh-sheets .bh-bars { max-height: none; margin-bottom: 14px; }
+.bh-cost .bh-table td, .bh-cost .bh-table th { vertical-align: top; }
+.bh-num { text-align: right; white-space: nowrap; }
+.bh-cost th:nth-child(2), .bh-cost th:nth-child(4) { text-align: right; }
+.bh-cost input { width: 5.4em; background: rgba(0, 0, 0, 0.12); color: var(--bp-ink); border: 1px solid var(--bp-line); border-radius: 4px; padding: 3px 6px; font: inherit; font-size: 13px; }
+.bh-cost input:focus-visible { outline: 2px solid var(--bp-ink); outline-offset: 1px; }
+.bh-pound { margin-right: 3px; color: var(--bp-soft); }
+.bh-age { font-size: 11px; color: var(--bp-soft); }
+.bh-age.old { color: var(--bp-ink); text-decoration: underline dotted; }
+.bh-shops { white-space: nowrap; font-size: 12px; }
+.bh-shops a { color: var(--bp-ink); margin-right: 8px; }
+.bh-total { font-size: 16px; }
+@media (max-width: 600px) { .bh-shops a { display: block; margin: 0 0 4px; } .bh-cost .bh-table { font-size: 12px; } }
+.bh-tabs { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.bh-tabs::-webkit-scrollbar { display: none; }
+.bh-tab { white-space: nowrap; }
+.bh-cost td:nth-child(3) { white-space: nowrap; }
+@media (max-width: 600px) { .bh-tab { padding: 4px 11px; } .bh-cost input { width: 4.6em; } }

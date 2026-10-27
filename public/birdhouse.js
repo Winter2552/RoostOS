@@ -21,6 +21,18 @@
     }
   } catch { /* private window or old data: start from the default */ }
 
+  // The price book: the prices the person has set, by material, with the day
+  // each was set. Kept on this device; the same prices serve every plan.
+  const PRICES = 'roost-birdhouse-prices';
+  let prices = {};
+  try { prices = JSON.parse(localStorage.getItem(PRICES) || '{}') || {}; } catch { /* start with the guesses */ }
+  const savePrices = () => { try { localStorage.setItem(PRICES, JSON.stringify(prices)); } catch { /* keep going without saving */ } };
+  const today = () => new Date().toISOString().slice(0, 10);
+  const money = (n) => `£${n.toFixed(2)}`;
+  const priceOf = (m) => (prices[m.key] && Number.isFinite(prices[m.key].p) ? prices[m.key].p : m.estimate);
+  const ageDays = (day) => Math.floor((Date.now() - Date.parse(day)) / 864e5);
+  const shops = [['Wickes', (q) => `https://www.wickes.co.uk/search?text=${encodeURIComponent(q)}`], ['B&Q', (q) => `https://www.diy.com/search?term=${encodeURIComponent(q)}`]];
+
   const remember = () => {
     S.by[S.d.template] = S.d;
     try { localStorage.setItem(KEY, JSON.stringify({ d: S.d, by: S.by })); } catch { /* keep going without saving */ }
@@ -104,6 +116,52 @@
     return root;
   }
 
+  // What to buy and roughly what it costs. Prices start as guesses; typing a
+  // price saves it with today's date, and a price over a month old is flagged.
+  // The shop links are ordinary links to the shop's own search: nothing is
+  // fetched from the shop, so the price is whatever you read there.
+  function drawCost() {
+    const items = model.materials(S.d);
+    const total = h('b', { class: 'bh-total' });
+    const lines = [];
+    const sum = () => { total.textContent = money(items.reduce((a, m) => a + m.qty * priceOf(m), 0)); };
+    const rows = items.map((m) => {
+      const set = prices[m.key];
+      const note = h('span', { class: 'bh-age' });
+      const showAge = () => {
+        const q = prices[m.key];
+        note.textContent = !q ? 'guess' : ageDays(q.at) > 30 ? `set ${q.at}, old` : `set ${q.at}`;
+        note.classList.toggle('old', Boolean(q && ageDays(q.at) > 30));
+      };
+      const line = h('td', { class: 'bh-num' });
+      const showLine = () => { line.textContent = money(m.qty * priceOf(m)); };
+      const input = h('input', { type: 'number', min: '0', max: '10000', step: '0.01', inputmode: 'decimal', value: priceOf(m).toFixed(2), 'aria-label': `Price of ${m.label}` });
+      input.addEventListener('change', () => {
+        const v = Number(input.value);
+        if (input.value === '' || !Number.isFinite(v) || v < 0) delete prices[m.key];
+        else prices[m.key] = { p: Math.min(10000, Math.round(v * 100) / 100), at: today() };
+        input.value = priceOf(m).toFixed(2);
+        savePrices(); showAge(); showLine(); sum();
+      });
+      showAge(); showLine();
+      lines.push(m);
+      return h('tr', {},
+        h('td', {}, m.label, h('br'), note),
+        h('td', { class: 'bh-num', text: String(m.qty) }),
+        h('td', {}, h('span', { class: 'bh-pound', text: '£' }), input),
+        line,
+        h('td', { class: 'bh-shops' }, ...shops.map(([name, url]) => h('a', { href: url(m.search), target: '_blank', rel: 'noopener', text: name, 'aria-label': `Check ${m.label} at ${name}` }))));
+    });
+    sum();
+    return h('div', { class: 'bh-cost' },
+      h('h3', { class: 'bh-h', text: 'What to buy' }),
+      h('table', { class: 'bh-table' },
+        h('thead', {}, h('tr', {}, ...['Material', 'Qty', 'Each', 'Total', 'Check'].map((t) => h('th', { text: t })))),
+        h('tbody', {}, ...rows),
+        h('tfoot', {}, h('tr', {}, h('td', { text: 'Estimate' }), h('td'), h('td'), h('td', { class: 'bh-num' }, total), h('td')))),
+      h('p', { class: 'bh-note', text: 'Starter prices are rough guesses. Tap a shop to see its price, then type it in: it is kept here with the date. Nothing is sent to the shops.' }));
+  }
+
   const letter = (i) => String.fromCharCode(65 + i);
 
   // The boards laid out on sheets of stock: what to cut from where.
@@ -141,7 +199,7 @@
     return box;
   }
 
-  const VIEWS = [['front', 'Front', () => drawFlat('front', 'Front')], ['side', 'Side', () => drawFlat('side', 'Side')], ['top', 'Top', () => drawFlat('top', 'Top')], ['3d', '3D', draw3d], ['sheets', 'Sheets', drawSheets]];
+  const VIEWS = [['front', 'Front', () => drawFlat('front', 'Front')], ['side', 'Side', () => drawFlat('side', 'Side')], ['top', 'Top', () => drawFlat('top', 'Top')], ['3d', '3D', draw3d], ['sheets', 'Sheets', drawSheets], ['cost', 'Cost', drawCost]];
 
   function tabs() {
     return VIEWS.map(([id, name]) => h('button', {

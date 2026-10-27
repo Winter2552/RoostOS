@@ -233,6 +233,26 @@
     return { width: SW, height: SH, sheets: sheets.map((sh) => ({ thickness: sh.thickness, pieces: sh.pieces })), tooBig, area, used, timber: timber.map((g) => ({ width: g.width, thickness: g.thickness, stock: g.stock, bars: g.bars.map((b) => ({ pieces: b.pieces })) })) };
   }
 
+  // What to buy: sheets and timber lengths from the layout, plus fixings. The
+  // price on each line is a rough starter guess (pounds), only there until the
+  // person sets their own; `search` is what to type into a shop's search box.
+  //   -> [{ key, label, qty, search, estimate }]
+  function materials(d) {
+    const l = layout(d);
+    const out = [];
+    const byThickness = {};
+    for (const sh of l.sheets) byThickness[sh.thickness] = (byThickness[sh.thickness] || 0) + 1;
+    for (const [t, qty] of Object.entries(byThickness).sort((a, b) => a[0] - b[0])) {
+      out.push({ key: `sheet-${t}`, label: `${t} mm sheet, ${l.width} × ${l.height}`, qty, search: `${t}mm sheet board ${l.width}x${l.height}`, estimate: Math.round((l.width * l.height) / 1e6 * (4 + 0.7 * t) * 100) / 100 });
+    }
+    for (const g of l.timber) {
+      out.push({ key: `timber-${g.width}x${g.thickness}`, label: `${g.width} × ${g.thickness} timber, ${g.stock} mm length`, qty: g.bars.length, search: `${g.width}x${g.thickness} timber ${g.stock / 1000}m`, estimate: Math.round(0.00264 * g.width * g.thickness * 100) / 100 });
+    }
+    out.push({ key: 'screws', label: 'Wood screws, box', qty: 1, search: 'wood screws box', estimate: 5 });
+    out.push({ key: 'glue', label: 'Wood glue, 250 ml', qty: 1, search: 'wood glue 250ml', estimate: 5 });
+    return out;
+  }
+
   // The faces of those boards as seen from a turned and tilted viewpoint,
   // furthest first, so drawing them in order hides what is behind. yaw turns
   // the model about its upright axis, pitch tilts the view down (both radians).
@@ -328,7 +348,7 @@
     return { template, set, unused };
   }
 
-  const exported = { TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, layout, project, parse };
+  const exported = { TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, layout, materials, project, parse };
   if (typeof module !== 'undefined' && module.exports) module.exports = exported;
   else window.birdhouseModel = exported;
 })();

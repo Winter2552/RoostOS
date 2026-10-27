@@ -168,3 +168,15 @@ test('a board too big for any sheet is reported, and a smaller sheet is respecte
   assert.equal(model.layout(shelf, { kerf: 0 }).sheets.length, 1);
   assert.equal(model.layout(model.defaults('table'), { timber: 600 }).tooBig.length, 6, 'the four legs and two long aprons are longer than 600');
 });
+
+test('the shopping list has the sheets and timber from the layout plus fixings, each with a search and a guess', () => {
+  const shelfList = model.materials(shelf);
+  assert.deepEqual(shelfList.map((m) => [m.key, m.qty]), [['sheet-18', 1], ['screws', 1], ['glue', 1]]);
+  const tableList = model.materials(model.defaults('table'));
+  assert.deepEqual(tableList.map((m) => [m.key, m.qty]), [['sheet-25', 1], ['timber-80x20', 2], ['timber-60x60', 2], ['screws', 1], ['glue', 1]]);
+  for (const m of [...shelfList, ...tableList]) {
+    assert.ok(Number.isFinite(m.estimate) && m.estimate > 0 && m.estimate < 500, m.key);
+    assert.ok(m.search.length > 4 && m.label.length > 4);
+  }
+  assert.ok(new Set(tableList.map((m) => m.key)).size === tableList.length, 'one line per material');
+});
