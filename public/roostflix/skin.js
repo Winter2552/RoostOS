@@ -424,12 +424,20 @@
     } catch { /* it keeps playing as it was */ }
   }
 
+  // One restart per time AirPlay is switched on. Restarting makes the player
+  // reconnect, which fires this event again, so anything inside the cooldown
+  // is ignored rather than restarted, and switching AirPlay off never restarts.
+  let lastRestart = 0;
   document.addEventListener('webkitcurrentplaybacktargetiswirelesschanged', (e) => {
     const video = e.target;
     if (!video || video.tagName !== 'VIDEO') return;
     const now = Boolean(video.webkitCurrentPlaybackTargetIsWireless);
+    if (Date.now() - lastRestart < 30000) { if (now) casting = true; return; }
     if (now === casting) return;
     casting = now;
-    restartForCast(video);
+    if (now) {
+      lastRestart = Date.now();
+      restartForCast(video);
+    }
   }, true);
 })();
