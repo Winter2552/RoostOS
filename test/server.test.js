@@ -607,6 +607,29 @@ test('activity log keeps only the newest entries', () => {
   }
 });
 
+test('Fetch price is off until an admin switches it on, then only reads listed shops, one press at a time', async () => {
+  assert.equal((await call('GET', '/api/birdhouse')).status, 401);
+  assert.equal((await call('GET', '/api/birdhouse', null, adminCookie)).body.fetch, false);
+  const off = await call('POST', '/api/birdhouse/price', { url: 'https://www.wickes.co.uk/p/1' }, adminCookie);
+  assert.equal(off.status, 403);
+
+  const on = await call('PATCH', '/api/admin/settings', { birdhouseFetch: true }, adminCookie);
+  assert.equal(on.body.settings.birdhouseFetch, true);
+  assert.equal((await call('GET', '/api/birdhouse', null, adminCookie)).body.fetch, true);
+
+  const bad = await call('POST', '/api/birdhouse/price', { url: 'http://127.0.0.1:8080/' }, adminCookie);
+  assert.equal(bad.status, 422);
+  assert.match(bad.body.error, /Wickes or B&Q/);
+  const quick = await call('POST', '/api/birdhouse/price', { url: 'https://evil.example/' }, adminCookie);
+  assert.equal(quick.status, 429);
+
+  // The same person can press again after a moment, and switching it off stops it.
+  await new Promise((r) => setTimeout(r, 2100));
+  assert.equal((await call('POST', '/api/birdhouse/price', { url: 'https://evil.example/' }, adminCookie)).status, 422);
+  await call('PATCH', '/api/admin/settings', { birdhouseFetch: false }, adminCookie);
+  assert.equal((await call('GET', '/api/birdhouse', null, adminCookie)).body.fetch, false);
+});
+
 test('logout ends the session', async () => {
   await call('POST', '/api/logout', null, adminCookie);
   assert.equal((await call('GET', '/api/apps', null, adminCookie)).status, 401);

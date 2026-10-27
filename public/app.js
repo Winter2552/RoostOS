@@ -2630,6 +2630,7 @@ const adminLoaders = {
     const form = $('#settings-form');
     form.adminsNeedTwoStep.checked = settings.adminsNeedTwoStep;
     form.publicLinks.checked = settings.publicLinks;
+    form.birdhouseFetch.checked = settings.birdhouseFetch;
     form.energyPrice.value = settings.energyPrice;
     form.energyCurrency.value = settings.energyCurrency;
     form.serverName.value = state.serverName;
@@ -3091,6 +3092,7 @@ $('#settings-form').addEventListener('submit', async (e) => {
       defaultLimitGb: pickers.default.getValue(),
       adminsNeedTwoStep: e.target.adminsNeedTwoStep.checked,
       publicLinks: e.target.publicLinks.checked,
+      birdhouseFetch: e.target.birdhouseFetch.checked,
       energyPrice: e.target.energyPrice.value,
       energyCurrency: e.target.energyCurrency.value,
       publicUrl: e.target.publicUrl.value,

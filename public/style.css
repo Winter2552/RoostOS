@@ -1883,3 +1883,11 @@ a.app-card:active { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--shad
 .bh-plan { display: flex; justify-content: space-between; gap: 10px; text-align: left; background: none; color: var(--bp-ink); border: 1.5px solid var(--bp-line); border-radius: 6px; padding: 6px 10px; font: inherit; font-size: 13px; cursor: pointer; }
 .bh-plan:hover, .bh-plan:focus-visible { border-color: var(--bp-ink); outline: none; background: rgba(242, 246, 254, 0.12); }
 .bh-plan small { color: var(--bp-soft); white-space: nowrap; }
+.bh-fetch { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.bh-cost input.bh-link { width: 100%; max-width: 22em; }
+.bh-small { padding: 2px 10px; font-size: 12px; }
+.bh-cost tr.bh-hasfetch td { border-bottom: 0; }
+.bh-cost .bh-fetchrow td { border-top: 0; padding: 0 0 8px; }
+.bh-cost .bh-fetch { margin-top: 0; }
+.bh-cost input.bh-link { flex: 1; min-width: 10em; max-width: none; width: auto; }
+@media (max-width: 600px) { .bh-cost input[type=number] { width: 5.4em; } }

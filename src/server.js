@@ -8,6 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Store, DEFAULT_APPS } = require('./store');
+const birdhouse = require('./birdhouse');
 const { hashPassword, verifyPassword, Sessions, RateLimiter, deviceName, SESSION_TTL_MS } = require('./auth');
 const storage = require('./storage');
 const links = require('./links');
@@ -308,6 +309,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     linked = true;
   }
   if (linked) store.save();
+  const priceAsked = new Map(); // when each person last pressed Fetch price
   // Roostflix, the look Roost gives Jellyfin's page, is on unless switched off.
   const jellyfin = new Jellyfin(
     () => store.db.settings.jellyfin,
@@ -861,7 +863,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   function settingsView() {
     // The Cloudflare token (in tls) stays on the server.
     const { mail: _mail, jellyfin: _jellyfin, tls: _tls, coffee: _coffee, wireguard: _wireguard, galaxies: _galaxies, ...rest } = db().settings;
-    return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()), publicLinks: rest.publicLinks !== false, ...energyView() };
+    return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()), publicLinks: rest.publicLinks !== false, birdhouseFetch: rest.birdhouseFetch === true, ...energyView() };
   }
 
   // The admin's notice on the dashboard. Expired notices are simply not
@@ -1324,6 +1326,26 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       // already signed in.
       const apps = appsFor(user).map((a) => (a.id === 'jellyfin' && jellyfin.enabled() ? { ...a, openUrl: `${JELLYFIN_PREFIX}/`, ...(db().settings.roostflix === false ? {} : { name: roostflix.NAME }) } : galaxyOpenUrl(a, user)));
       send(res, 200, { apps, searchable: search.apps(user) });
+    },
+
+    // Birdhouse: whether Fetch price is switched on, and the fetch itself. It
+    // reads one shop page, only when asked, and only for people with the app.
+    'GET /api/birdhouse': (req, res) => {
+      const user = requireUser(req);
+      send(res, 200, { fetch: db().settings.birdhouseFetch === true && visibleApps(db(), user).some((a) => a.id === 'birdhouse') });
+    },
+    'POST /api/birdhouse/price': async (req, res) => {
+      const user = requireUser(req);
+      if (db().settings.birdhouseFetch !== true || !visibleApps(db(), user).some((a) => a.id === 'birdhouse')) throw new HttpError(403, 'Fetching prices is switched off');
+      if (Date.now() - (priceAsked.get(user.id) || 0) < 2000) throw new HttpError(429, 'One at a time, give it a moment');
+      priceAsked.set(user.id, Date.now());
+      const body = await readJson(req, 2048);
+      try {
+        send(res, 200, await birdhouse.fetchPrice(str(body.url, 500)));
+      } catch (err) {
+        if (err instanceof birdhouse.FetchError) throw new HttpError(422, err.message);
+        throw err;
+      }
     },
 
     // One search box: asks every app this user can search, results grouped by app.
@@ -2271,6 +2293,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         const on = body.publicLinks !== false;
         if (on !== (db().settings.publicLinks !== false)) changes.push(on ? 'public file links on' : 'public file links off');
         db().settings.publicLinks = on;
+      }
+      if (body.birdhouseFetch !== undefined) {
+        const on = body.birdhouseFetch === true;
+        if (on !== (db().settings.birdhouseFetch === true)) changes.push(on ? 'Birdhouse may fetch prices' : 'Birdhouse fetching prices off');
+        db().settings.birdhouseFetch = on;
       }
       if (body.mail !== undefined) {
         db().settings.mail = cleanMail(body.mail, mailSettings());

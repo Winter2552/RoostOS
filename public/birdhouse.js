@@ -125,32 +125,63 @@
     const total = h('b', { class: 'bh-total' });
     const lines = [];
     const sum = () => { total.textContent = money(items.reduce((a, m) => a + m.qty * priceOf(m), 0)); };
+    // Fetch price only shows when an admin has switched it on; asked about once.
+    if (S.fetchOn === undefined) {
+      S.fetchOn = false;
+      api('GET', '/api/birdhouse').then((r) => { S.fetchOn = r.fetch; if (r.fetch && S.view === 'cost') paint(); }).catch(() => {});
+    }
     const rows = items.map((m) => {
-      const set = prices[m.key];
       const note = h('span', { class: 'bh-age' });
+      const has = () => prices[m.key] && Number.isFinite(prices[m.key].p);
       const showAge = () => {
         const q = prices[m.key];
-        note.textContent = !q ? 'guess' : ageDays(q.at) > 30 ? `set ${q.at}, old` : `set ${q.at}`;
-        note.classList.toggle('old', Boolean(q && ageDays(q.at) > 30));
+        const old = has() && ageDays(q.at) > 30;
+        note.textContent = !has() ? 'guess' : `${q.src ? `fetched from ${q.src}` : 'set'} ${q.at}${old ? ', old' : ''}`;
+        note.classList.toggle('old', Boolean(old));
       };
       const line = h('td', { class: 'bh-num' });
       const showLine = () => { line.textContent = money(m.qty * priceOf(m)); };
       const input = h('input', { type: 'number', min: '0', max: '10000', step: '0.01', inputmode: 'decimal', value: priceOf(m).toFixed(2), 'aria-label': `Price of ${m.label}` });
-      input.addEventListener('change', () => {
-        const v = Number(input.value);
-        if (input.value === '' || !Number.isFinite(v) || v < 0) delete prices[m.key];
-        else prices[m.key] = { p: Math.min(10000, Math.round(v * 100) / 100), at: today() };
+      const record = (entry) => {
+        const keep = prices[m.key] && prices[m.key].url ? { url: prices[m.key].url } : {};
+        if (entry) prices[m.key] = { ...keep, ...entry }; else if (keep.url) prices[m.key] = keep; else delete prices[m.key];
         input.value = priceOf(m).toFixed(2);
         savePrices(); showAge(); showLine(); sum();
+      };
+      input.addEventListener('change', () => {
+        const v = Number(input.value);
+        record(input.value === '' || !Number.isFinite(v) || v < 0 ? null : { p: Math.min(10000, Math.round(v * 100) / 100), at: today() });
       });
       showAge(); showLine();
-      lines.push(m);
-      return h('tr', {},
+      let fetcher = null;
+      if (S.fetchOn) {
+        const link = h('input', { type: 'url', class: 'bh-link', placeholder: 'Product page link (Wickes or B&Q)', maxlength: '500', value: (prices[m.key] && prices[m.key].url) || '', 'aria-label': `Product page for ${m.label}` });
+        const say = h('span', { class: 'bh-age' });
+        const go = h('button', { type: 'button', class: 'bh-btn bh-small', text: 'Fetch price' });
+        link.addEventListener('change', () => { prices[m.key] = { ...(prices[m.key] || {}), url: link.value.trim() }; if (!prices[m.key].url) delete prices[m.key].url; if (!Object.keys(prices[m.key]).length) delete prices[m.key]; savePrices(); });
+        go.addEventListener('click', async () => {
+          const url = link.value.trim();
+          if (!url) { say.textContent = 'Paste the product page link first.'; return; }
+          go.disabled = true;
+          say.textContent = 'Reading the page…';
+          try {
+            const r = await api('POST', '/api/birdhouse/price', { url });
+            record({ p: r.price, at: today(), src: r.shop, url });
+            say.textContent = '';
+          } catch (err) {
+            say.textContent = err.message; // quietly: the price can always be typed in
+          } finally {
+            go.disabled = false;
+          }
+        });
+        fetcher = h('tr', { class: 'bh-fetchrow' }, h('td', { colspan: '5' }, h('div', { class: 'bh-fetch' }, link, go, say)));
+      }
+      return [h('tr', { class: fetcher ? 'bh-hasfetch' : '' },
         h('td', {}, m.label, h('br'), note),
         h('td', { class: 'bh-num', text: String(m.qty) }),
         h('td', {}, h('span', { class: 'bh-pound', text: '£' }), input),
         line,
-        h('td', { class: 'bh-shops' }, ...shops.map(([name, url]) => h('a', { href: url(m.search), target: '_blank', rel: 'noopener', text: name, 'aria-label': `Check ${m.label} at ${name}` }))));
+        h('td', { class: 'bh-shops' }, ...shops.map(([name, url]) => h('a', { href: url(m.search), target: '_blank', rel: 'noopener', text: name, 'aria-label': `Check ${m.label} at ${name}` })))), fetcher];
     });
     sum();
     return h('div', { class: 'bh-cost' },
@@ -159,7 +190,7 @@
         h('thead', {}, h('tr', {}, ...['Material', 'Qty', 'Each', 'Total', 'Check'].map((t) => h('th', { text: t })))),
         h('tbody', {}, ...rows),
         h('tfoot', {}, h('tr', {}, h('td', { text: 'Estimate' }), h('td'), h('td'), h('td', { class: 'bh-num' }, total), h('td')))),
-      h('p', { class: 'bh-note', text: 'Starter prices are rough guesses. Tap a shop to see its price, then type it in: it is kept here with the date. Nothing is sent to the shops.' }));
+      h('p', { class: 'bh-note', text: `Starter prices are rough guesses. Tap a shop to see its price, then type it in: it is kept here with the date.${S.fetchOn ? ' Fetch price reads one product page when you press it.' : ' Nothing is sent to the shops.'}` }));
   }
 
   const letter = (i) => String.fromCharCode(65 + i);
