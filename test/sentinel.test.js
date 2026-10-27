@@ -207,6 +207,12 @@ test('an unnamed one-off container only counts if it stays', () => {
   m.tick(60 * 1000);
   m.s.containers(odd);
   assert.equal(m.raised.length, 0, 'a build step or one-off helper');
+  m.s.busy = () => true; // the updater is building
+  m.s.containers([...base, { name: 'pensive_shamir', imageRef: 'sha256:d9b9' }]);
+  m.tick(30 * 60 * 1000);
+  m.s.containers([...base, { name: 'pensive_shamir', imageRef: 'sha256:d9b9' }]);
+  assert.equal(m.raised.length, 0, 'not while Roost is updating itself');
+  m.s.busy = () => false;
   m.s.containers(base); // it finished
   m.tick(20 * 60 * 1000);
   m.s.containers(odd); // a different run, seen fresh

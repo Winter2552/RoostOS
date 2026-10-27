@@ -99,13 +99,14 @@ function sealFile(dataDir, db) {
 
 class Sentinel {
   // store: { db }; raise(key, title, detail): an alert on the bell and phone;
-  // lockdown(by): shut outside access; skip(ip): true for addresses never banned.
-  constructor({ dataDir, store, raise = () => {}, lockdown = () => {}, endSession = () => {}, skip = () => false, now = Date.now, newId = () => crypto.randomBytes(6).toString('hex') }) {
+  // lockdown(by): shut outside access; busy(): the updater is working; skip(ip): true for addresses never banned.
+  constructor({ dataDir, store, raise = () => {}, lockdown = () => {}, endSession = () => {}, busy = () => false, skip = () => false, now = Date.now, newId = () => crypto.randomBytes(6).toString('hex') }) {
     this.file = path.join(dataDir, 'sentinel.json');
     this.store = store;
     this.raise = raise;
     this.lockdown = lockdown;
     this.endSession = endSession; // (userId, sessionId)
+    this.busy = busy; // true while Roost's own updater is building or applying
     this.skip = skip;
     this.now = now;
     this.newId = newId;
@@ -224,6 +225,8 @@ class Sentinel {
       const was = this.known[name];
       if (was === ref || this.unknown[name] === ref) continue;
       if (was === undefined && RANDOM_NAME.test(name)) {
+        // Docker's build steps are unnamed containers too, and can't be given a name.
+        if (this.busy()) continue;
         const first = this.unnamed.get(name);
         if (first === undefined) {
           this.unnamed.set(name, this.now());

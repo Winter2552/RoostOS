@@ -489,6 +489,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     raise: (key, title, detail) => secWatch.raise(key, title, detail),
     lockdown: (by) => engageLockdown(by),
     endSession: (userId, sessionId) => sessions.destroyId(userId, sessionId),
+    // Docker's build steps for an update show up as unnamed containers.
+    busy: () => {
+      const helper = selfUpdate.readHelperStatus(dataDir);
+      return selfUpdate.summarize(selfUpdate.readStatus(dataDir)).state === 'applying' || Boolean(helper && helper.state === 'building') || selfUpdate.hasRequest(dataDir);
+    },
     // Never ban the home network, or Cloudflare's own addresses.
     skip: (ip) => isPrivateIp(ip) || remoteAccess.isCloudflare(ip),
   });
