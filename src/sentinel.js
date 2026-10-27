@@ -36,6 +36,8 @@ const BAN_MS = 24 * 60 * 60 * 1000;
 const WINDOW_MS = 10 * 60 * 1000;
 const SCAN_HITS = 3;
 const SPRAY_NAMES = 4;
+const WAVE_ADDRESSES = 5; // different addresses probing within the window = an attack, not background noise
+const QUIET = new Set(['scanner', 'spray']); // listed and banned, but only a wave of them reaches the bell
 const KEEP_INCIDENTS = 30;
 const MAX_TRACKED = 1000;
 const SAVE_DELAY_MS = 1000;
@@ -115,6 +117,8 @@ class Sentinel {
     this.recent = []; // the last few outside requests, for the evidence in a report
     this.scans = new Map(); // ip → times
     this.names = new Map(); // ip → Map(name → time)
+    this.probes = new Map(); // ip → time of its latest quiet incident, for spotting a wave
+    this.waveAt = 0;
     this.timer = null;
     this.daily = null;
   }
@@ -261,14 +265,14 @@ class Sentinel {
     this.incidents.push(inc);
     if (this.incidents.length > KEEP_INCIDENTS) this.incidents.shift();
     for (const old of this.incidents.slice(0, -EVIDENCE_KEPT)) delete old.evidence;
-    const what = { scanner: 'A scanner is probing Roost', spray: 'Someone is guessing usernames', tamper: 'Admin accounts were changed behind Roost', session: 'A sign-in looks stolen', container: 'An unexpected container' }[kind];
+    const what = { wave: 'Many addresses are attacking Roost', scanner: 'A scanner is probing Roost', spray: 'Someone is guessing usernames', tamper: 'Admin accounts were changed behind Roost', session: 'A sign-in looks stolen', container: 'An unexpected container' }[kind];
     const auto = this.mode === 'auto';
     let home = false;
     if (auto && ip) {
       if (this.ban(ip, kind, true)) inc.handled = 'banned';
       else home = true;
     }
-    if (auto && kind === 'tamper') {
+    if (auto && (kind === 'tamper' || kind === 'wave')) {
       this.lockdown('Sentinel');
       inc.handled = 'locked down';
     }
@@ -277,10 +281,25 @@ class Sentinel {
       : home ? ' That address is on your home network, so it was not banned.'
       : inc.handled === 'banned' ? ' Sentinel banned that address for 24 hours.'
       : inc.handled === 'locked down' ? ' Sentinel locked Roost down.'
-        : kind === 'tamper' ? ' Open Admin → Security to lock down.' : ' Open Admin → Sentinel to ban it.';
-    this.raise(`sec:sentinel:${kind}:${ip || (target && target.name) || 'accounts'}`, ip ? `${what}: ${ip}` : what, `${detail}${action}`);
+        : kind === 'tamper' || kind === 'wave' ? ' Open Admin → Security to lock down.' : ' Open Admin → Sentinel to ban it.';
+    if (QUIET.has(kind)) {
+      this.noteProbe(ip, kind);
+    } else {
+      this.raise(`sec:sentinel:${kind}:${ip || (target && target.name) || 'accounts'}`, ip ? `${what}: ${ip}` : what, `${detail}${action}`);
+    }
     this.saveSoon();
     return inc;
+  }
+
+  // Mild probing is only listed. Several different addresses within ten
+  // minutes is an attack: one alert, and in auto mode, lockdown.
+  noteProbe(ip, kind) {
+    const t = this.now();
+    this.probes.set(ip, t);
+    for (const [addr, at] of this.probes) if (t - at >= WINDOW_MS) this.probes.delete(addr);
+    if (this.probes.size < WAVE_ADDRESSES || t - this.waveAt < WINDOW_MS) return;
+    this.waveAt = t;
+    this.incident('wave', null, `${this.probes.size} different addresses probed or guessed at Roost within ten minutes (latest: ${kind} from ${ip}).`, true);
   }
 
   ban(ip, reason, auto = false) {

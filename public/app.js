@@ -3118,10 +3118,10 @@ async function loadSecurity() {
 // ---------- sentinel ----------
 const SENTINEL_TEXT = {
   off: 'Not watching. Nothing is banned.',
-  manual: 'Watches and alerts you, then waits for you to press Ban.',
-  auto: 'Watches and acts on its own: bans offenders for 24 hours, signs out a stolen sign-in, and locks Roost down if the admin accounts are changed behind its back. Home access is never banned. It only tells you about new containers.',
+  manual: 'Lists mild probing quietly. Alerts you when something serious happens or many addresses attack at once, then waits for you.',
+  auto: 'Watches and acts on its own: bans offenders for 24 hours, signs out a stolen sign-in, and locks Roost down if the admin accounts are changed behind its back or five or more addresses attack within ten minutes. Mild probing is only listed. Home access is never banned. It only tells you about new containers.',
 };
-const SENTINEL_WHAT = { scanner: 'Scanner probing', spray: 'Guessing usernames', tamper: 'Admin accounts changed', session: 'Sign-in looks stolen', container: 'Unexpected container' };
+const SENTINEL_WHAT = { wave: 'Many addresses attacking', scanner: 'Scanner probing', spray: 'Guessing usernames', tamper: 'Admin accounts changed', session: 'Sign-in looks stolen', container: 'Unexpected container' };
 
 function sentinelRow(inc) {
   const button = (text, action) => el('button', { class: 'btn ghost small', type: 'button', text, onclick: () => sentinelPost(action, { incident: inc.id }) });
