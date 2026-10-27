@@ -11,6 +11,7 @@ const ICONS = {
   cloud: '<path d="M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 9.5 4.3 4.3 0 0 0 7 18z"/>',
   music: '<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>',
   home: '<path d="M3 11l9-7 9 7v9h-6v-6H9v6H3z"/>',
+  house: '<path d="M4 20V10.5L12 4l8 6.5V20z"/><circle cx="12" cy="12" r="2.4"/><path d="M12 14.4V17"/>',
 };
 
 const state = { serverName: 'Roost', publicUrl: '', mailEnabled: false, user: null, apps: [], status: {}, arranging: null, users: [], defaultLimitGb: null, diskGb: null, notice: null };
@@ -730,18 +731,19 @@ function renderUser() {
   $('#profile-form').email.value = u.email || '';
 }
 
-const VIEWS = ['apps', 'galaxies', 'nest', 'glint', 'status', 'whatsnew', 'profile', 'admin'];
+const VIEWS = ['apps', 'galaxies', 'nest', 'glint', 'birdhouse', 'status', 'whatsnew', 'profile', 'admin'];
 
 const hasNest = () => state.apps.some((a) => a.id === 'nest' && a.url === '#/nest');
 const hasGalaxies = () => state.apps.some((a) => a.id === 'nova' && a.url === '#/galaxies');
 const hasGlint = () => state.apps.some((a) => a.id === 'glint' && a.url === '#/glint');
+const hasBirdhouse = () => state.apps.some((a) => a.id === 'birdhouse' && a.url === '#/birdhouse');
 
 function route() {
   // Nothing opens behind the two-step screen; enter() routes once it is done.
   if (!state.user || needsSecureStep(state.user)) return;
   const [first, ...rest] = location.hash.replace(/^#\/?/, '').split('/');
   let view = first || 'apps';
-  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'status' && isGuest(state.user)) || (view === 'whatsnew' && isGuest(state.user)) || (view === 'galaxies' && !hasGalaxies()) || (view === 'nest' && !hasNest()) || (view === 'glint' && !hasGlint())) view = 'apps';
+  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'status' && isGuest(state.user)) || (view === 'whatsnew' && isGuest(state.user)) || (view === 'galaxies' && !hasGalaxies()) || (view === 'nest' && !hasNest()) || (view === 'glint' && !hasGlint()) || (view === 'birdhouse' && !hasBirdhouse())) view = 'apps';
   for (const v of VIEWS) $(`#view-${v}`).classList.toggle('hidden', v !== view);
   document.querySelectorAll('#account-menu a').forEach((a) => {
     if (a.dataset.view === view) a.setAttribute('aria-current', 'page');
@@ -757,7 +759,8 @@ function route() {
   if (view === 'galaxies') renderGalaxyPage();
   if (view === 'nest') window.nestOpen(rest);
   if (view === 'glint') window.glintOpen(rest);
-  else if (view !== 'nest') document.title = state.serverName;
+  if (view === 'birdhouse') window.birdhouseOpen(rest);
+  else if (view !== 'nest' && view !== 'glint') document.title = state.serverName;
 }
 
 window.addEventListener('hashchange', () => { if (state.user) route(); });
@@ -2627,6 +2630,7 @@ const adminLoaders = {
     const form = $('#settings-form');
     form.adminsNeedTwoStep.checked = settings.adminsNeedTwoStep;
     form.publicLinks.checked = settings.publicLinks;
+    form.birdhouseFetch.checked = settings.birdhouseFetch;
     form.energyPrice.value = settings.energyPrice;
     form.energyCurrency.value = settings.energyCurrency;
     form.serverName.value = state.serverName;
@@ -3088,6 +3092,7 @@ $('#settings-form').addEventListener('submit', async (e) => {
       defaultLimitGb: pickers.default.getValue(),
       adminsNeedTwoStep: e.target.adminsNeedTwoStep.checked,
       publicLinks: e.target.publicLinks.checked,
+      birdhouseFetch: e.target.birdhouseFetch.checked,
       energyPrice: e.target.energyPrice.value,
       energyCurrency: e.target.energyCurrency.value,
       publicUrl: e.target.publicUrl.value,

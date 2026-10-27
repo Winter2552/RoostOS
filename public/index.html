@@ -245,6 +245,40 @@
       <input type="file" id="nest-pick-folder" webkitdirectory multiple hidden>
     </section>
 
+    <!-- Birdhouse: woodworking plans (public/birdhouse.js) -->
+    <section id="view-birdhouse" class="birdhouse hidden">
+      <div class="bh-page">
+        <div class="bh-sheet" id="bh-home"></div>
+        <div class="bh-sheet hidden" id="bh-shop"></div>
+        <div class="bh-sheet hidden" id="bh-editor">
+          <form class="bh-ask" id="bh-ask" autocomplete="off">
+            <label class="sr" for="bh-text">Describe what to build</label>
+            <input type="text" id="bh-text" maxlength="200" placeholder="Change it: make it 2000 tall, 6 shelves" enterkeyhint="go">
+            <button type="submit" class="bh-btn solid">Draft</button>
+          </form>
+          <p class="bh-say" id="bh-say" aria-live="polite"></p>
+          <div class="bh-bar">
+            <span class="bh-head"><a class="bh-btn" href="#/birdhouse" aria-label="Back to projects">‹</a>
+              <input class="bh-name" id="bh-name" type="text" maxlength="60" aria-label="Project name" autocomplete="off"></span>
+            <button type="button" class="bh-btn" id="bh-adjust" aria-expanded="false" aria-haspopup="dialog">⚙ Adjust</button>
+          </div>
+          <p class="bh-kind" id="bh-kind"></p>
+          <div class="bh-chips" id="bh-chips"></div>
+          <div class="bh-tabs" id="bh-tabs" role="tablist" aria-label="View"></div>
+          <div class="bh-view" id="bh-view"></div>
+          <div class="bh-cuts" id="bh-cuts"></div>
+          <div class="bh-foot">
+            <span class="bh-nest hidden" id="bh-nest">
+              <button type="button" class="bh-btn" id="bh-save">Save a copy to Nest</button>
+            </span>
+            <button type="button" class="bh-btn" id="bh-print">Print or save as PDF</button>
+            <span class="bh-say" id="bh-saved" aria-live="polite"></span>
+          </div>
+          <div id="bh-title"></div>
+        </div>
+      </div>
+    </section>
+
     <!-- Glint: photos (public/glint.js) -->
     <section id="view-glint" class="nest glint hidden">
       <aside class="nest-side">
@@ -695,6 +729,7 @@
         </div>
         <label class="check-line" style="margin-top:18px"><input type="checkbox" name="adminsNeedTwoStep"> Admins must use two-step sign-in</label>
         <label class="check-line"><input type="checkbox" name="publicLinks"> Allow public file links (Nest)</label>
+        <label class="check-line"><input type="checkbox" name="birdhouseFetch"> Let Birdhouse read a Wickes or B&amp;Q product page for its price when someone presses Fetch (best effort, off by default)</label>
         <div class="row"><button class="btn" type="submit">Save</button></div>
         <div class="msg" role="status"></div>
       </form>
@@ -850,6 +885,8 @@
   <script src="/nest.js"></script>
   <script src="/faces.js"></script>
   <script src="/glint.js"></script>
+  <script src="/birdhouse-model.js"></script>
+  <script src="/birdhouse.js"></script>
   <script src="/whatsnew.js"></script>
   <script src="/search.js"></script>
   <script src="/motion.js"></script>

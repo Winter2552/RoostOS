@@ -7,7 +7,8 @@ const net = require('net');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { Store } = require('./store');
+const { Store, DEFAULT_APPS } = require('./store');
+const birdhouse = require('./birdhouse');
 const { hashPassword, verifyPassword, Sessions, RateLimiter, deviceName, SESSION_TTL_MS } = require('./auth');
 const storage = require('./storage');
 const links = require('./links');
@@ -207,10 +208,12 @@ function guestEnded(user) {
   return user.role === 'guest' && !(Date.parse(user.guestUntil) > Date.now());
 }
 
+// Admins see every app. Someone with a chosen list sees what is on it. Someone
+// with no list sees everything except apps marked adminOnly (still being tried
+// out), which an admin can switch on for them in their app list.
 function visibleApps(db, user) {
-  return user.role === 'admin' || !Array.isArray(user.apps)
-    ? db.apps
-    : db.apps.filter((a) => user.apps.includes(a.id));
+  if (user.role === 'admin') return db.apps;
+  return Array.isArray(user.apps) ? db.apps.filter((a) => user.apps.includes(a.id)) : db.apps.filter((a) => !a.adminOnly);
 }
 
 // A list of app ids from the client, kept to apps that exist, without repeats.
@@ -301,7 +304,14 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       linked = true;
     }
   }
+  // Birdhouse arrives as a built-in app once; an admin can remove it after.
+  if (!store.db.settings.birdhouseAdded) {
+    store.db.settings.birdhouseAdded = true;
+    if (!store.db.apps.some((a) => a.id === 'birdhouse')) store.db.apps.push({ ...DEFAULT_APPS.find((a) => a.id === 'birdhouse') });
+    linked = true;
+  }
   if (linked) store.save();
+  const priceAsked = new Map(); // when each person last pressed Fetch price
   // Roostflix, the look Roost gives Jellyfin's page, is on unless switched off.
   const jellyfin = new Jellyfin(
     () => store.db.settings.jellyfin,
@@ -607,6 +617,13 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     return user;
   }
 
+  // Signed in, and Birdhouse is one of their apps.
+  function requireBirdhouse(req) {
+    const user = requireUser(req);
+    if (!visibleApps(db(), user).some((a) => a.id === 'birdhouse')) throw new HttpError(403, 'Birdhouse is not on for you');
+    return user;
+  }
+
   function requireUser(req) {
     const user = currentUser(req);
     if (!user) throw new HttpError(401, 'Sign in first');
@@ -805,6 +822,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const schedule = cleanSchedule(a.restartSchedule);
       if (schedule instanceof Error) throw new HttpError(400, `${app.name || 'App'}: ${schedule.message}`);
       if (schedule) app.restartSchedule = schedule;
+      if ((db().apps.find((x) => x.id === app.id) || {}).adminOnly) app.adminOnly = true; // saving the list keeps it
       // The Nova card's link to the Galaxies page is added when apps are listed, not saved.
       if (app.id === 'nova' && app.url === '#/galaxies') app.url = '';
       if (!app.name) throw new HttpError(400, 'Every app needs a name');
@@ -860,7 +878,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   function settingsView() {
     // The Cloudflare token (in tls) stays on the server.
     const { mail: _mail, jellyfin: _jellyfin, tls: _tls, coffee: _coffee, wireguard: _wireguard, galaxies: _galaxies, ...rest } = db().settings;
-    return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()), publicLinks: rest.publicLinks !== false, ...energyView() };
+    return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()), publicLinks: rest.publicLinks !== false, birdhouseFetch: rest.birdhouseFetch === true, ...energyView() };
   }
 
   // The admin's notice on the dashboard. Expired notices are simply not
@@ -1323,6 +1341,74 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       // already signed in.
       const apps = appsFor(user).map((a) => (a.id === 'jellyfin' && jellyfin.enabled() ? { ...a, openUrl: `${JELLYFIN_PREFIX}/`, ...(db().settings.roostflix === false ? {} : { name: roostflix.NAME }) } : galaxyOpenUrl(a, user)));
       send(res, 200, { apps, searchable: search.apps(user) });
+    },
+
+    // Birdhouse: whether Fetch price is switched on, and the fetch itself. It
+    // reads one shop page, only when asked, and only for people with the app.
+    'GET /api/birdhouse': (req, res) => {
+      const user = requireUser(req);
+      send(res, 200, { fetch: db().settings.birdhouseFetch === true && visibleApps(db(), user).some((a) => a.id === 'birdhouse') });
+    },
+    'POST /api/birdhouse/price': async (req, res) => {
+      const user = requireUser(req);
+      if (db().settings.birdhouseFetch !== true || !visibleApps(db(), user).some((a) => a.id === 'birdhouse')) throw new HttpError(403, 'Fetching prices is switched off');
+      if (Date.now() - (priceAsked.get(user.id) || 0) < 2000) throw new HttpError(429, 'One at a time, give it a moment');
+      priceAsked.set(user.id, Date.now());
+      const body = await readJson(req, 2048);
+      try {
+        send(res, 200, await birdhouse.fetchPrice(str(body.url, 500)));
+      } catch (err) {
+        if (err instanceof birdhouse.FetchError) throw new HttpError(422, err.message);
+        throw err;
+      }
+    },
+
+    // Birdhouse: each person's plans, workshop wood and price book, kept on
+    // their own Roost account so they follow them to any device.
+    'GET /api/birdhouse/data': (req, res) => {
+      const user = requireBirdhouse(req);
+      send(res, 200, birdhouse.mine(user));
+    },
+    'POST /api/birdhouse/plans': async (req, res) => {
+      const user = requireBirdhouse(req);
+      const body = await readJson(req, 20000);
+      const mineNow = birdhouse.mine(user);
+      const old = mineNow.plans.find((p) => p.id === body.id);
+      if (!old && mineNow.plans.length >= birdhouse.MAX_PLANS) throw new HttpError(400, `That is ${birdhouse.MAX_PLANS} plans; delete one first`);
+      const plan = birdhouse.cleanPlan(body, old ? old.id : store.newId(), new Date().toISOString());
+      if (old) Object.assign(old, plan); else mineNow.plans.push(plan);
+      store.save();
+      send(res, 200, plan);
+    },
+    'DELETE /api/birdhouse/plans/:id': (req, res, id) => {
+      const user = requireBirdhouse(req);
+      const mineNow = birdhouse.mine(user);
+      const at = mineNow.plans.findIndex((p) => p.id === id);
+      if (at < 0) throw new HttpError(404, 'That plan is already gone');
+      mineNow.plans.splice(at, 1);
+      store.save();
+      send(res, 200, { ok: true });
+    },
+    'PUT /api/birdhouse/stock': async (req, res) => {
+      const user = requireBirdhouse(req);
+      const body = await readJson(req, 60000);
+      birdhouse.mine(user).stock = birdhouse.cleanStock(body.stock, () => store.newId());
+      store.save();
+      send(res, 200, { stock: user.birdhouse.stock });
+    },
+    'PUT /api/birdhouse/prefs': async (req, res) => {
+      const user = requireBirdhouse(req);
+      const body = await readJson(req, 2000);
+      birdhouse.mine(user).prefs = birdhouse.cleanPrefs(body);
+      store.save();
+      send(res, 200, user.birdhouse.prefs);
+    },
+    'PUT /api/birdhouse/prices': async (req, res) => {
+      const user = requireBirdhouse(req);
+      const body = await readJson(req, 10000);
+      birdhouse.mine(user).prices = birdhouse.cleanPrices(body.prices);
+      store.save();
+      send(res, 200, { prices: user.birdhouse.prices });
     },
 
     // One search box: asks every app this user can search, results grouped by app.
@@ -2157,7 +2243,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const wanted = new URL(req.url, 'http://roost').searchParams.get('username');
       if (wanted !== null) return send(res, 200, usernameCheck(wanted.toLowerCase()));
       const inviter = db().users.find((u) => u.id === link.createdBy);
-      const apps = link.role === 'admin' || !Array.isArray(link.apps) ? db().apps : db().apps.filter((a) => link.apps.includes(a.id));
+      const apps = link.role === 'admin' ? db().apps : Array.isArray(link.apps) ? db().apps.filter((a) => link.apps.includes(a.id)) : db().apps.filter((a) => !a.adminOnly);
       send(res, 200, {
         kind: 'invite',
         serverName: db().settings.serverName,
@@ -2270,6 +2356,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         const on = body.publicLinks !== false;
         if (on !== (db().settings.publicLinks !== false)) changes.push(on ? 'public file links on' : 'public file links off');
         db().settings.publicLinks = on;
+      }
+      if (body.birdhouseFetch !== undefined) {
+        const on = body.birdhouseFetch === true;
+        if (on !== (db().settings.birdhouseFetch === true)) changes.push(on ? 'Birdhouse may fetch prices' : 'Birdhouse fetching prices off');
+        db().settings.birdhouseFetch = on;
       }
       if (body.mail !== undefined) {
         db().settings.mail = cleanMail(body.mail, mailSettings());
@@ -2926,7 +3017,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/movie-requests|admin\/setup|admin\/galaxies|storage\/users|links|me\/devices|alerts|push\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart|\/secret|\/compose|\/check|\/dismiss)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/movie-requests|admin\/setup|admin\/galaxies|storage\/users|links|me\/devices|birdhouse\/plans|alerts|push\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart|\/secret|\/compose|\/check|\/dismiss)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }

@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { createServer } = require('../src/server');
+const { Store } = require('../src/store');
 const twoStep = require('../src/twostep');
 const { setUpTwoStep, freshCode } = require('./helpers');
 
@@ -160,9 +161,9 @@ test('too many wrong codes ends the sign-in', async () => {
   assert.equal((await call('POST', '/api/login/code', { ticket: first.body.ticket, code: freshCode(adminSecret) })).status, 401);
 });
 
-test('admin sees the four default apps', async () => {
+test('admin sees the five default apps', async () => {
   const { body } = await call('GET', '/api/apps', null, adminCookie);
-  assert.deepEqual(body.apps.map((a) => a.name), ['Jellyfin', 'Nova', 'Nest', 'Glint']);
+  assert.deepEqual(body.apps.map((a) => a.name), ['Jellyfin', 'Nova', 'Nest', 'Glint', 'Birdhouse']);
 });
 
 test('admin can add a user limited to some apps', async () => {
@@ -606,6 +607,75 @@ test('activity log keeps only the newest entries', () => {
   }
 });
 
+test('Fetch price is off until an admin switches it on, then only reads listed shops, one press at a time', async () => {
+  assert.equal((await call('GET', '/api/birdhouse')).status, 401);
+  assert.equal((await call('GET', '/api/birdhouse', null, adminCookie)).body.fetch, false);
+  const off = await call('POST', '/api/birdhouse/price', { url: 'https://www.wickes.co.uk/p/1' }, adminCookie);
+  assert.equal(off.status, 403);
+
+  const on = await call('PATCH', '/api/admin/settings', { birdhouseFetch: true }, adminCookie);
+  assert.equal(on.body.settings.birdhouseFetch, true);
+  assert.equal((await call('GET', '/api/birdhouse', null, adminCookie)).body.fetch, true);
+
+  const bad = await call('POST', '/api/birdhouse/price', { url: 'http://127.0.0.1:8080/' }, adminCookie);
+  assert.equal(bad.status, 422);
+  assert.match(bad.body.error, /Wickes or B&Q/);
+  const quick = await call('POST', '/api/birdhouse/price', { url: 'https://evil.example/' }, adminCookie);
+  assert.equal(quick.status, 429);
+
+  // The same person can press again after a moment, and switching it off stops it.
+  await new Promise((r) => setTimeout(r, 2100));
+  assert.equal((await call('POST', '/api/birdhouse/price', { url: 'https://evil.example/' }, adminCookie)).status, 422);
+  await call('PATCH', '/api/admin/settings', { birdhouseFetch: false }, adminCookie);
+  assert.equal((await call('GET', '/api/birdhouse', null, adminCookie)).body.fetch, false);
+});
+
+test('Birdhouse keeps each person\'s plans, workshop wood and prices on their account', async () => {
+  assert.equal((await call('GET', '/api/birdhouse/data')).status, 401);
+  // Admins only for now: an ordinary member neither sees the app nor can use it,
+  // until an admin puts it on their list.
+  const joinerMade = await call('POST', '/api/admin/users', { username: 'joiner', password: 'joiner pass 12' }, adminCookie);
+  const joiner = (await call('POST', '/api/login', { username: 'joiner', password: 'joiner pass 12' })).cookie;
+  assert.equal((await call('GET', '/api/birdhouse/data', null, joiner)).status, 403);
+  assert.ok(!(await call('GET', '/api/apps', null, joiner)).body.apps.some((a) => a.id === 'birdhouse'));
+  assert.ok((await call('GET', '/api/apps', null, adminCookie)).body.apps.some((a) => a.id === 'birdhouse'));
+  await call('DELETE', `/api/admin/users/${joinerMade.body.user.id}`, null, adminCookie);
+  const first = await call('GET', '/api/birdhouse/data', null, adminCookie);
+  assert.deepEqual(first.body, { plans: [], stock: [], prices: {}, prefs: { units: 'mm', sheet: [2440, 1220], timber: 2400 } });
+
+  // A plan is cleaned to what its template allows, and saving again updates it.
+  const made = await call('POST', '/api/birdhouse/plans', { name: '  Hall shelves ', plan: { template: 'bookshelf', width: 99999, height: 1800 } }, adminCookie);
+  assert.equal(made.status, 200);
+  assert.equal(made.body.name, 'Hall shelves');
+  assert.ok(made.body.plan.width < 99999);
+  const again = await call('POST', '/api/birdhouse/plans', { id: made.body.id, name: 'Hall shelves 2', plan: made.body.plan }, adminCookie);
+  assert.equal(again.body.id, made.body.id);
+  assert.equal((await call('GET', '/api/birdhouse/data', null, adminCookie)).body.plans.length, 1);
+
+  // Workshop wood: bad rows are dropped, good ones kept.
+  const stock = await call('PUT', '/api/birdhouse/stock', { stock: [
+    { kind: 'sheet', thick: 18, w: 600, l: 1200, qty: 2, note: 'offcut' },
+    { kind: 'timber', w: 44, thick: 94, l: 2400, qty: 3 },
+    { kind: 'plank', w: 1, l: 1, thick: 1, qty: 1 },
+    { kind: 'sheet', thick: 18, w: -5, l: 100, qty: 1 },
+  ] }, adminCookie);
+  assert.equal(stock.body.stock.length, 2);
+  assert.match(stock.body.stock[0].id, /^[a-f0-9]+$/);
+
+  const prices = await call('PUT', '/api/birdhouse/prices', { prices: { 'sheet-18': { p: '24.5', at: '2026-10-20' }, 'sheet-18@wickes': { p: 23, at: 'yesterday', url: 'https://www.wickes.co.uk/p/1' }, 'sheet-18@bq': { url: 'http://evil.example/' }, 'bad key!': { p: 3 }, glue: { p: -1 }, screws: 4 } }, adminCookie);
+  assert.deepEqual(Object.keys(prices.body.prices), ['sheet-18', 'sheet-18@wickes']);
+  assert.deepEqual(prices.body.prices['sheet-18'], { p: 24.5, at: '2026-10-20' });
+  assert.match(prices.body.prices['sheet-18@wickes'].at, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(prices.body.prices['sheet-18@wickes'].url, 'https://www.wickes.co.uk/p/1');
+
+  const prefs = await call('PUT', '/api/birdhouse/prefs', { units: 'in', sheet: [1220, 2500], timber: 99999 }, adminCookie);
+  assert.deepEqual(prefs.body, { units: 'in', sheet: [2500, 1220], timber: 2400 });
+
+  const del = await call('DELETE', `/api/birdhouse/plans/${made.body.id}`, null, adminCookie); assert.equal(del.status, 200, JSON.stringify(del.body));
+  assert.equal((await call('DELETE', `/api/birdhouse/plans/${made.body.id}`, null, adminCookie)).status, 404);
+  assert.equal((await call('GET', '/api/birdhouse/data', null, adminCookie)).body.stock.length, 2);
+});
+
 test('logout ends the session', async () => {
   await call('POST', '/api/logout', null, adminCookie);
   assert.equal((await call('GET', '/api/apps', null, adminCookie)).status, 401);
@@ -680,4 +750,23 @@ test('Roost can be installed as an app', async () => {
     assert.equal(r.status, 200, file);
     assert.equal(r.headers.get('cache-control'), 'no-cache');
   }
+});
+
+test('an install made before Birdhouse gets the app once, and removing it sticks', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'roost-bh-'));
+  const first = new Store(dir);
+  first.db.apps = first.db.apps.filter((a) => a.id !== 'birdhouse');
+  delete first.db.settings.birdhouseAdded;
+  first.save();
+  const boot = async () => {
+    const srv = createServer({ dataDir: dir });
+    const apps = new Store(dir).db.apps.map((a) => a.id);
+    srv.closeAllConnections();
+    return apps;
+  };
+  assert.ok((await boot()).includes('birdhouse'));
+  const again = new Store(dir);
+  again.db.apps = again.db.apps.filter((a) => a.id !== 'birdhouse');
+  again.save();
+  assert.ok(!(await boot()).includes('birdhouse'));
 });

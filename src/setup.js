@@ -647,6 +647,8 @@ const NO_STEP = {
   ROOST_APP_TOKEN: 'only for an outside storage app; Nest is built in',
   serverName: 'works as "Roost" until renamed under Admin → Server',
   defaultLimitGb: 'starts at 50 GB, changed under Admin → Server',
+  birdhouseFetch: 'off by default, switched under Admin → Server (Birdhouse may read a shop page when asked)',
+  birdhouseAdded: 'Roost\'s own record that the Birdhouse app was added once',
   setupTicked: 'this checklist\'s own record',
   notice: 'optional, posted under Admin → Notice',
 };
