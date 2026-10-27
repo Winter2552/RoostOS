@@ -160,6 +160,79 @@
     return [...rows.values()];
   }
 
+  // Lays the boards out on sheets of stock, a sheet per thickness at a time,
+  // largest first. Boards go along the sheet in rows (each row as tall as its
+  // first board), with a saw cut's width between them. A board that will not
+  // fit either way round is listed in tooBig rather than dropped.
+  //   -> { sheets: [{ thickness, pieces: [{ part, x, y, w, h }] }], timber: [{ width,
+  //        thickness, stock, bars: [{ pieces: [{ part, x, len }] }] }], tooBig, area, used }
+  // Strips 100 mm wide or less are cut from 2400 mm lengths instead, end to end.
+  const SHEET = [2440, 1220];
+  const KERF = 3;
+  const STRIP = 100; // boards this narrow or less are cut from timber lengths
+  const TIMBER = 2400;
+
+  function layout(d, opts) {
+    const [SW, SH] = (opts && opts.sheet) || SHEET;
+    const kerf = opts && opts.kerf !== undefined ? opts.kerf : KERF;
+    const rows = parts(d);
+    const pieces = [];
+    rows.forEach((r, part) => { for (let i = 0; i < r.qty; i++) pieces.push({ part, l: r.length, w: r.width, t: r.thickness }); });
+    // Narrow boards (strips) come from lengths of timber; the rest from sheets.
+    const strips = pieces.filter((p) => p.w <= STRIP);
+    const flats = pieces.filter((p) => p.w > STRIP);
+    flats.sort((a, b) => b.t - a.t || b.l - a.l || b.w - a.w);
+    const sheets = [];
+    const tooBig = [];
+    const timber = [];
+    const stock = (opts && opts.timber) || TIMBER;
+    strips.sort((a, b) => b.l - a.l);
+    for (const p of strips) {
+      if (p.l > stock) { tooBig.push({ part: p.part, w: p.l, h: p.w }); continue; }
+      let group = timber.find((g) => g.width === p.w && g.thickness === p.t);
+      if (!group) timber.push(group = { width: p.w, thickness: p.t, stock, bars: [] });
+      // First bar with room left (a saw cut goes between boards).
+      const bar = group.bars.find((b) => b.left >= p.l + kerf);
+      if (bar) { bar.pieces.push({ part: p.part, x: stock - bar.left, len: p.l }); bar.left -= p.l + kerf; }
+      else group.bars.push({ pieces: [{ part: p.part, x: 0, len: p.l }], left: stock - p.l - kerf });
+    }
+    for (const p of flats) {
+      // Long way along the sheet first, then turned a quarter if that does not fit.
+      const ways = [[p.l, p.w], [p.w, p.l]].filter(([w, h]) => w <= SW && h <= SH);
+      if (!ways.length) { tooBig.push({ part: p.part, w: p.l, h: p.w }); continue; }
+      let done = false;
+      for (const sheet of sheets) {
+        if (sheet.thickness !== p.t) continue;
+        for (const [w, h] of ways) {
+          // Into a row with room beside it and height to spare ...
+          const row = sheet.rows.find((r) => r.h >= h && SW - r.x >= w);
+          if (row) {
+            sheet.pieces.push({ part: p.part, x: row.x, y: row.y, w, h });
+            row.x += w + kerf;
+            done = true;
+            break;
+          }
+          // ... or a new row under the last one.
+          const y = sheet.rows.length ? sheet.rows[sheet.rows.length - 1].y + sheet.rows[sheet.rows.length - 1].h + kerf : 0;
+          if (y + h <= SH && w <= SW) {
+            sheet.rows.push({ y, h, x: w + kerf });
+            sheet.pieces.push({ part: p.part, x: 0, y, w, h });
+            done = true;
+            break;
+          }
+        }
+        if (done) break;
+      }
+      if (!done) {
+        const [w, h] = ways[0];
+        sheets.push({ thickness: p.t, rows: [{ y: 0, h, x: w + kerf }], pieces: [{ part: p.part, x: 0, y: 0, w, h }] });
+      }
+    }
+    const area = sheets.length * SW * SH;
+    const used = sheets.reduce((a, sh) => a + sh.pieces.reduce((b, q) => b + q.w * q.h, 0), 0);
+    return { width: SW, height: SH, sheets: sheets.map((sh) => ({ thickness: sh.thickness, pieces: sh.pieces })), tooBig, area, used, timber: timber.map((g) => ({ width: g.width, thickness: g.thickness, stock: g.stock, bars: g.bars.map((b) => ({ pieces: b.pieces })) })) };
+  }
+
   // The faces of those boards as seen from a turned and tilted viewpoint,
   // furthest first, so drawing them in order hides what is behind. yaw turns
   // the model about its upright axis, pitch tilts the view down (both radians).
@@ -255,7 +328,7 @@
     return { template, set, unused };
   }
 
-  const exported = { TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, project, parse };
+  const exported = { TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, layout, project, parse };
   if (typeof module !== 'undefined' && module.exports) module.exports = exported;
   else window.birdhouseModel = exported;
 })();

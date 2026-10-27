@@ -1854,3 +1854,8 @@ a.app-card:active { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--shad
 .bh-ask input:focus { outline: none; }
 .bh-ask:focus-within { border-style: solid; }
 .bh-say { min-height: 1.4em; margin: 0 0 12px; font-size: 12px; color: var(--bp-soft); }
+.bh-sheets svg { display: block; width: 100%; max-height: 40vh; margin-bottom: 14px; }
+.bh-stock { fill: none; stroke: var(--bp-soft); stroke-width: 1.5; stroke-dasharray: 8 6; vector-effect: non-scaling-stroke; }
+.bh-key { color: var(--bp-soft); width: 1.6em; }
+.bh-warn { margin: 8px 0 0; font-size: 12px; border: 1.5px solid var(--bp-ink); border-radius: 4px; padding: 6px 10px; }
+.bh-sheets .bh-bars { max-height: none; margin-bottom: 14px; }

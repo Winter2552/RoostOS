@@ -104,7 +104,44 @@
     return root;
   }
 
-  const VIEWS = [['front', 'Front', () => drawFlat('front', 'Front')], ['side', 'Side', () => drawFlat('side', 'Side')], ['top', 'Top', () => drawFlat('top', 'Top')], ['3d', '3D', draw3d]];
+  const letter = (i) => String.fromCharCode(65 + i);
+
+  // The boards laid out on sheets of stock: what to cut from where.
+  function drawSheets() {
+    const l = model.layout(S.d);
+    const box = h('div', { class: 'bh-sheets' });
+    l.sheets.forEach((sheet, n) => {
+      const root = svg('svg', { viewBox: `-20 -20 ${l.width + 40} ${l.height + 40}`, role: 'img', 'aria-label': `Sheet ${n + 1}, ${sheet.thickness} millimetre board, ${sheet.pieces.length} pieces` });
+      root.append(svg('rect', { x: 0, y: 0, width: l.width, height: l.height, class: 'bh-stock' }));
+      for (const p of sheet.pieces) {
+        root.append(svg('rect', { x: p.x, y: p.y, width: p.w, height: p.h, class: 'bh-board' }));
+        if (Math.min(p.w, p.h) > 90) root.append(svg('text', { x: p.x + p.w / 2, y: p.y + p.h / 2 + 30, 'text-anchor': 'middle', 'font-size': 90, class: 'bh-label' }, letter(p.part)));
+      }
+      box.append(h('h3', { class: 'bh-h', text: `Sheet ${n + 1} · ${sheet.thickness} mm · ${l.width} × ${l.height}` }), root);
+    });
+    for (const g of l.timber) {
+      const bars = g.bars.length;
+      const root = svg('svg', { viewBox: `-20 -10 ${g.stock + 40} ${bars * 150 + 10}`, class: 'bh-bars', role: 'img', 'aria-label': `${g.width} by ${g.thickness} timber, ${bars} length${bars === 1 ? '' : 's'}` });
+      g.bars.forEach((bar, i) => {
+        const y = i * 150;
+        root.append(svg('rect', { x: 0, y, width: g.stock, height: 120, class: 'bh-stock' }));
+        for (const p of bar.pieces) {
+          root.append(svg('rect', { x: p.x, y, width: p.len, height: 120, class: 'bh-board' }));
+          if (p.len > 160) root.append(svg('text', { x: p.x + p.len / 2, y: y + 82, 'text-anchor': 'middle', 'font-size': 70, class: 'bh-label' }, letter(p.part)));
+        }
+      });
+      box.append(h('h3', { class: 'bh-h', text: `${bars} × ${g.stock} mm length${bars === 1 ? '' : 's'} of ${g.width} × ${g.thickness} timber` }), root);
+    }
+    const waste = l.area ? Math.round((1 - l.used / l.area) * 100) : 0;
+    const bits = [];
+    if (l.sheets.length) bits.push(`${l.sheets.length} sheet${l.sheets.length === 1 ? '' : 's'}, ${waste}% left over`);
+    if (l.timber.length) { const n = l.timber.reduce((a, g) => a + g.bars.length, 0); bits.push(`${n} length${n === 1 ? '' : 's'} of timber`); }
+    box.append(h('p', { class: 'bh-note', text: `${bits.join(' · ')} · 3 mm saw cut between boards · letters match the cut list` }));
+    if (l.tooBig.length) box.append(h('p', { class: 'bh-warn', text: `Too big for a ${l.width} × ${l.height} sheet: ${[...new Set(l.tooBig.map((t) => letter(t.part)))].join(', ')}. Make it smaller or join boards.` }));
+    return box;
+  }
+
+  const VIEWS = [['front', 'Front', () => drawFlat('front', 'Front')], ['side', 'Side', () => drawFlat('side', 'Side')], ['top', 'Top', () => drawFlat('top', 'Top')], ['3d', '3D', draw3d], ['sheets', 'Sheets', drawSheets]];
 
   function tabs() {
     return VIEWS.map(([id, name]) => h('button', {
@@ -120,8 +157,8 @@
     return h('div', {},
       h('h3', { class: 'bh-h', text: 'Cut list' }),
       h('table', { class: 'bh-table' },
-        h('thead', {}, h('tr', {}, ...['Part', 'Qty', 'Length', 'Width', 'Thick'].map((t) => h('th', { text: t })))),
-        h('tbody', {}, ...rows.map((r) => h('tr', {}, h('td', { text: r.name }), h('td', { text: String(r.qty) }), h('td', { text: `${r.length}` }), h('td', { text: `${r.width}` }), h('td', { text: `${r.thickness}` }))))),
+        h('thead', {}, h('tr', {}, ...['', 'Part', 'Qty', 'Length', 'Width', 'Thick'].map((t) => h('th', { text: t })))),
+        h('tbody', {}, ...rows.map((r, i) => h('tr', {}, h('td', { class: 'bh-key', text: letter(i) }), h('td', { text: r.name }), h('td', { text: String(r.qty) }), h('td', { text: `${r.length}` }), h('td', { text: `${r.width}` }), h('td', { text: `${r.thickness}` }))))),
       h('p', { class: 'bh-note', text: `${rows.reduce((a, r) => a + r.qty, 0)} boards · ${area.toFixed(2)} m² of board · sizes in mm` }));
   }
 

@@ -136,3 +136,35 @@ test('whatever is typed ends up inside the limits', () => {
   assert.equal(d.height, 2400);
   assert.equal(d.width, 200);
 });
+
+test('the default bookshelf fits on one sheet, with every board placed once and none overlapping', () => {
+  const l = model.layout(shelf);
+  assert.equal(l.sheets.length, 1);
+  assert.equal(l.tooBig.length, 0);
+  const all = l.sheets[0].pieces;
+  assert.equal(all.length, 7);
+  for (const p of all) assert.ok(p.x >= 0 && p.y >= 0 && p.x + p.w <= 2440 && p.y + p.h <= 1220, 'inside the sheet');
+  for (const a of all) for (const b of all) {
+    if (a === b) continue;
+    assert.ok(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y, 'no two boards overlap');
+  }
+  assert.ok(l.used / l.area > 0.3 && l.used / l.area < 1);
+});
+
+test('boards of different thickness never share a sheet, and a big plan takes more sheets', () => {
+  const l = model.layout(model.defaults('table'));
+  assert.deepEqual(l.sheets.map((s) => s.thickness), [25], 'only the top is a sheet cut');
+  assert.deepEqual(l.timber.map((g) => [g.width, g.thickness, g.bars.length]).sort(), [[60, 60, 2], [80, 20, 2]].sort(), 'legs and aprons come from timber lengths');
+  assert.equal(l.sheets.reduce((n, s) => n + s.pieces.length, 0) + l.timber.reduce((n, g) => n + g.bars.reduce((m, b) => m + b.pieces.length, 0), 0), 9);
+  for (const g of l.timber) for (const b of g.bars) assert.ok(b.pieces.reduce((a, p) => a + p.len + 3, 0) - 3 <= 2400, 'no bar longer than the timber');
+  const big = model.layout({ ...shelf, height: 2400, width: 2400, depth: 800, shelves: 12 });
+  assert.ok(big.sheets.length >= 3);
+});
+
+test('a board too big for any sheet is reported, and a smaller sheet is respected', () => {
+  const l = model.layout(shelf, { sheet: [1500, 1000] });
+  assert.equal(l.tooBig.length, 2, 'the two 1800 mm sides');
+  assert.equal(l.sheets.reduce((n, s) => n + s.pieces.length, 0), 5);
+  assert.equal(model.layout(shelf, { kerf: 0 }).sheets.length, 1);
+  assert.equal(model.layout(model.defaults('table'), { timber: 600 }).tooBig.length, 6, 'the four legs and two long aprons are longer than 600');
+});
