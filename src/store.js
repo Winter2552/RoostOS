@@ -50,6 +50,7 @@ const DEFAULT_APPS = [
     // Built into Roost: the link opens the Plans page.
     url: '#/birdhouse',
     icon: 'house',
+    adminOnly: true, // admins only while it is being tried out
   },
 ];
 

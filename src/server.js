@@ -208,10 +208,12 @@ function guestEnded(user) {
   return user.role === 'guest' && !(Date.parse(user.guestUntil) > Date.now());
 }
 
+// Admins see every app. Someone with a chosen list sees what is on it. Someone
+// with no list sees everything except apps marked adminOnly (still being tried
+// out), which an admin can switch on for them in their app list.
 function visibleApps(db, user) {
-  return user.role === 'admin' || !Array.isArray(user.apps)
-    ? db.apps
-    : db.apps.filter((a) => user.apps.includes(a.id));
+  if (user.role === 'admin') return db.apps;
+  return Array.isArray(user.apps) ? db.apps.filter((a) => user.apps.includes(a.id)) : db.apps.filter((a) => !a.adminOnly);
 }
 
 // A list of app ids from the client, kept to apps that exist, without repeats.
@@ -815,6 +817,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const schedule = cleanSchedule(a.restartSchedule);
       if (schedule instanceof Error) throw new HttpError(400, `${app.name || 'App'}: ${schedule.message}`);
       if (schedule) app.restartSchedule = schedule;
+      if ((db().apps.find((x) => x.id === app.id) || {}).adminOnly) app.adminOnly = true; // saving the list keeps it
       // The Nova card's link to the Galaxies page is added when apps are listed, not saved.
       if (app.id === 'nova' && app.url === '#/galaxies') app.url = '';
       if (!app.name) throw new HttpError(400, 'Every app needs a name');
@@ -2235,7 +2238,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const wanted = new URL(req.url, 'http://roost').searchParams.get('username');
       if (wanted !== null) return send(res, 200, usernameCheck(wanted.toLowerCase()));
       const inviter = db().users.find((u) => u.id === link.createdBy);
-      const apps = link.role === 'admin' || !Array.isArray(link.apps) ? db().apps : db().apps.filter((a) => link.apps.includes(a.id));
+      const apps = link.role === 'admin' ? db().apps : Array.isArray(link.apps) ? db().apps.filter((a) => link.apps.includes(a.id)) : db().apps.filter((a) => !a.adminOnly);
       send(res, 200, {
         kind: 'invite',
         serverName: db().settings.serverName,

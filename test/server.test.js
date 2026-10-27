@@ -632,6 +632,14 @@ test('Fetch price is off until an admin switches it on, then only reads listed s
 
 test('Birdhouse keeps each person\'s plans, workshop wood and prices on their account', async () => {
   assert.equal((await call('GET', '/api/birdhouse/data')).status, 401);
+  // Admins only for now: an ordinary member neither sees the app nor can use it,
+  // until an admin puts it on their list.
+  const joinerMade = await call('POST', '/api/admin/users', { username: 'joiner', password: 'joiner pass 12' }, adminCookie);
+  const joiner = (await call('POST', '/api/login', { username: 'joiner', password: 'joiner pass 12' })).cookie;
+  assert.equal((await call('GET', '/api/birdhouse/data', null, joiner)).status, 403);
+  assert.ok(!(await call('GET', '/api/apps', null, joiner)).body.apps.some((a) => a.id === 'birdhouse'));
+  assert.ok((await call('GET', '/api/apps', null, adminCookie)).body.apps.some((a) => a.id === 'birdhouse'));
+  await call('DELETE', `/api/admin/users/${joinerMade.body.user.id}`, null, adminCookie);
   const first = await call('GET', '/api/birdhouse/data', null, adminCookie);
   assert.deepEqual(first.body, { plans: [], stock: [], prices: {}, prefs: { units: 'mm', sheet: [2440, 1220], timber: 2400 } });
 
