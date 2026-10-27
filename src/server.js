@@ -885,6 +885,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     };
   }
 
+  function helperSummary() {
+    const updater = selfUpdate.summarize(selfUpdate.readStatus(dataDir));
+    return selfUpdate.summarizeHelper(selfUpdate.readHelperStatus(dataDir), updater.state, selfUpdate.hasRequest(dataDir));
+  }
+
   // The electricity price for the power cost, per kWh in pence (or cents).
   function energyView() {
     const { price, currency } = priceOf(db().settings);
@@ -1500,6 +1505,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         driveHealth: driveHealth.read(),
         // Power, CPU heat and the hottest drive, for admins only.
         sensors: user.role === 'admin' ? sensors.view({ driveHealth: driveHealth.read(), settings: db().settings }) : null,
+        // Whether the roost-smart helper can be built from here, for admins only.
+        helper: user.role === 'admin' ? helperSummary() : null,
         // Wear and sector trends per drive, for admins only.
         driveOutlook: user.role === 'admin' ? driveTrends.outlooks(healthHistory, (driveHealth.read() || {}).drives, Date.now()) : null,
         apps,
@@ -1881,6 +1888,17 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (summary.conflicts.length) throw new HttpError(409, `You changed ${summary.conflicts.join(', ')} on the server, and this update changes it too. Move your own settings into docker-compose.override.yml first.`);
       selfUpdate.writeRequest(dataDir, 'apply');
       record(req, 'settings-changed', { actor: admin.username, detail: `Roost update started (${summary.behind} ${summary.behind === 1 ? 'change' : 'changes'})` });
+      send(res, 202, { ok: true });
+    },
+
+    // Builds the roost-smart helper once, for the Power and heat section.
+    'POST /api/admin/helper/rebuild': (req, res) => {
+      const admin = requireAdmin(req);
+      const helper = helperSummary();
+      if (helper.building || selfUpdate.summarize(selfUpdate.readStatus(dataDir)).state === 'applying') throw new HttpError(409, 'The updater is busy. Try again in a minute.');
+      if (!helper.capable) throw new HttpError(409, 'The updater can’t do this yet. Run once in the server terminal: cd /DATA/AppData/roost-src && sudo docker compose up -d --build roost-updater roost-smart');
+      selfUpdate.writeRequest(dataDir, 'helper');
+      record(req, 'settings-changed', { actor: admin.username, detail: 'Power and heat helper rebuild started' });
       send(res, 202, { ok: true });
     },
 

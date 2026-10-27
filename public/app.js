@@ -1819,7 +1819,7 @@ function renderOutside(list) {
 
 // Power and heat (admins). Power is the CPU's reading plus an allowance, so it
 // is labelled an estimate; a tile the server can't read is left out.
-function renderPower(p) {
+function renderPower(p, helper) {
   $('#status-power-wrap').classList.toggle('hidden', !p);
   if (!p) return;
   const tiles = [];
@@ -1836,14 +1836,48 @@ function renderPower(p) {
   if (charts) loadPowerCharts(false);
   const note = $('#status-power-note');
   let text = '';
-  if (p.missing) text = 'Waiting for the roost-smart helper. Power and heat appear once it is running with the /sys line from the compose file.';
-  else if (p.stale) text = `Power and heat readings have stopped; the last was ${ago(p.at)}. Is roost-smart running?`;
-  else if (!tiles.length) text = 'This server doesn\'t report power or heat to Roost.';
+  // The one-time button: shown only while there are no readings, gone once the tiles show.
+  const needsHelper = p.missing || p.stale;
+  const last = helper && helper.last;
+  const btn = $('#power-setup-btn');
+  $('#status-power-setup').classList.toggle('hidden', !(needsHelper && helper && helper.capable));
+  btn.disabled = Boolean(helper && helper.building);
+  btn.textContent = helper && helper.building ? 'Setting up…' : last && !last.ok ? 'Try again' : p.stale ? 'Restart the helper' : 'Set up power and heat';
+  if (p.missing || p.stale) {
+    if (!helper || !helper.capable) {
+      text = 'Power and heat need the roost-smart helper. Run this once in the server terminal, and after that the button here does it for you: cd /DATA/AppData/roost-src && sudo docker compose up -d --build roost-updater roost-smart';
+    } else if (helper.building) {
+      text = 'Building the helper. This takes about a minute, then the readings appear here by themselves.';
+    } else if (last && !last.ok) {
+      text = `${last.error}${last.detail ? ` (${last.detail.split('\n').slice(-2).join(' ')})` : ''}`;
+    } else if (last && last.ok && p.missing) {
+      text = 'The helper is built. The first readings appear within two minutes.';
+    } else if (p.stale) {
+      text = `Power and heat readings have stopped; the last was ${ago(p.at)}. The helper may need a restart.`;
+    } else {
+      text = 'Power and heat need the roost-smart helper. One press builds it, and this section fills in when it is running.';
+    }
+  } else if (!tiles.length) text = 'This server doesn\'t report power or heat to Roost.';
   else if (p.power) text = 'Power is the CPU\'s own reading plus about 6 W for the board and 4 W per spinning hard drive, so the wall figure is usually a few watts higher. The cost uses your price under Admin → Server.';
   else text = 'This server doesn\'t report CPU power, so there is no power estimate.';
   note.textContent = text;
   note.classList.toggle('hidden', !text);
 }
+
+$('#power-setup-btn').addEventListener('click', async () => {
+  const btn = $('#power-setup-btn');
+  btn.disabled = true;
+  try {
+    await api('POST', '/api/admin/helper/rebuild');
+    btn.textContent = 'Setting up…';
+    $('#status-power-note').textContent = 'Building the helper. This takes about a minute, then the readings appear here by themselves.';
+    // Look again soon rather than waiting for the next refresh.
+    setTimeout(loadStatus, 6000);
+  } catch (err) {
+    btn.disabled = false;
+    $('#status-power-note').textContent = err.message;
+  }
+});
 
 // ---------- power and heat charts (admins) ----------
 
@@ -1866,26 +1900,28 @@ function chartPath(points, key, x, y, gap) {
 
 function chartSvg(h, keys, unit) {
   const W = 480;
-  const H = 90;
+  const H = 100;
   const end = Date.now();
   const spans = { day: 864e5, week: 6048e5, month: 2592e6 };
-  const start = end - spans[h.range];
   const values = h.points.flatMap((p) => keys.map((k) => p[k])).filter((v) => typeof v === 'number');
   if (!values.length) return null;
+  // With only a little history, fill the chart with it instead of leaving a sliver.
+  const first = h.points.length ? h.points[0].t : end;
+  const start = Math.max(end - spans[h.range], first - h.step);
   let lo = Math.min(...values);
   let hi = Math.max(...values);
   if (hi - lo < 4) { hi += 2; lo -= 2; }
   lo = Math.max(0, Math.floor(lo));
   hi = Math.ceil(hi);
-  const x = (t) => 36 + ((t - start) / (end - start)) * (W - 36);
-  const y = (v) => H - 4 - ((v - lo) / (hi - lo)) * (H - 12);
+  const x = (t) => ((t - start) / (end - start)) * W;
+  const y = (v) => H - 4 - ((v - lo) / (hi - lo)) * (H - 8);
   const gap = h.step * 2.5;
   const lines = keys.map((k, i) => `<path class="line${i ? ' alt' : ''}" d="${chartPath(h.points, k, x, y, gap)}"/>`).join('');
-  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${unit} over the last ${h.range}">
-    <line class="grid" x1="36" x2="${W}" y1="${y(hi).toFixed(1)}" y2="${y(hi).toFixed(1)}"/>
-    <line class="grid" x1="36" x2="${W}" y1="${y(lo).toFixed(1)}" y2="${y(lo).toFixed(1)}"/>
-    <text x="30" y="${(y(hi) + 3).toFixed(1)}" text-anchor="end">${hi}</text>
-    <text x="30" y="${(y(lo) + 3).toFixed(1)}" text-anchor="end">${lo}</text>${lines}</svg>`;
+  // The numbers are plain text beside the picture, so they stay a readable size at any width.
+  return `<div class="chart"><span class="chart-y top">${hi}</span><span class="chart-y bottom">${lo}</span>
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${unit} over the last ${h.range}">
+    <line class="grid" x1="0" x2="${W}" y1="${y(hi).toFixed(1)}" y2="${y(hi).toFixed(1)}"/>
+    <line class="grid" x1="0" x2="${W}" y1="${y(lo).toFixed(1)}" y2="${y(lo).toFixed(1)}"/>${lines}</svg></div>`;
 }
 
 function renderPowerCharts(h) {
@@ -1984,7 +2020,7 @@ function renderStatus(s) {
     return statCard(d.label, `${bytes(d.free)} free`, `${bytes(used)} of ${bytes(d.total)} used`, pct(used, d.total));
   }));
 
-  renderPower(s.sensors);
+  renderPower(s.sensors, s.helper);
   renderHealth(s.driveHealth, s.driveOutlook);
   renderOutside(s.outside);
 
