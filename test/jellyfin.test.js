@@ -490,13 +490,13 @@ test('Play for TV: with the switch on, the playback request leaves HEVC out; off
   await call('PUT', '/api/admin/jellyfin', { url: jfUrl, apiKey: KEY }, admin);
   await call('POST', '/api/admin/users', { username: 'tvuser', password: 'tv user pass 1', apps: ['jellyfin'] }, admin);
   const tv = (await call('POST', '/api/login', { username: 'tvuser', password: 'tv user pass 1' })).cookie;
-  const profile = { DeviceProfile: { DirectPlayProfiles: [{ Type: 'Video', VideoCodec: 'hevc' }], TranscodingProfiles: [{ Type: 'Video', VideoCodec: 'h264,hevc' }] } };
+  const profile = { DeviceProfile: { DirectPlayProfiles: [{ Type: 'Video', VideoCodec: 'hevc' }], TranscodingProfiles: [{ Type: 'Video', VideoCodec: 'h264,hevc', Container: 'mp4', Protocol: 'hls' }] } };
   const post = (cookie) => fetch(`${base}/jellyfin/Items/abc123/PlaybackInfo`, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie }, body: JSON.stringify(profile) });
   await settle();
   const info = () => jf.seen.filter((r) => /PlaybackInfo/.test(r.url)).at(-1);
   await post(tv);
   assert.deepEqual(info().body, profile);
   await post(`${tv}; roost_h264=1`);
-  assert.deepEqual(info().body.DeviceProfile, { DirectPlayProfiles: [], TranscodingProfiles: [{ Type: 'Video', VideoCodec: 'h264' }] });
+  assert.deepEqual(info().body.DeviceProfile, { DirectPlayProfiles: [], TranscodingProfiles: [{ Type: 'Video', VideoCodec: 'h264', Container: 'ts', Protocol: 'hls' }] });
   assert.equal(info().cookie, undefined);
 });

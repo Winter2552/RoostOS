@@ -56,6 +56,11 @@ function plainProfile(profile) {
       return Boolean(x.VideoCodec);
     });
   }
+  // Streamed as MPEG-TS pieces rather than fragmented MP4: TVs with built-in
+  // AirPlay read those more reliably (the picture was dropped with fMP4).
+  for (const x of out.TranscodingProfiles || []) {
+    if (x && x.Type === 'Video' && x.Protocol === 'hls' && /^mp4$/i.test(x.Container || '')) x.Container = 'ts';
+  }
   return out;
 }
 
