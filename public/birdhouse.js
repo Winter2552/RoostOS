@@ -194,11 +194,33 @@
     document.removeEventListener('keydown', escape);
   }
 
+  // The sentence box: reads what was typed, redraws, and says what it did, so a
+  // number it could not place is never quietly dropped.
+  function draft(text) {
+    const say = $('#bh-say');
+    const p = model.parse(text, S.d.template);
+    if (!p.template && !Object.keys(p.set).length && !p.unused.length) {
+      say.textContent = 'Try: bookshelf 1800 tall, 800 wide, 5 shelves';
+      return;
+    }
+    if (p.template && p.template !== S.d.template) {
+      S.by[S.d.template] = S.d;
+      S.d = model.defaults(p.template);
+    }
+    S.d = model.clean({ ...S.d, ...p.set });
+    const t = model.info(S.d);
+    const said = Object.keys(p.set).map((k) => `${t.limits[k].label.toLowerCase()} ${S.d[k]}`);
+    say.textContent = `${p.template ? `Drafted a ${t.name.toLowerCase()}` : `Changed the ${t.name.toLowerCase()}`}${said.length ? `: ${said.join(', ')}` : ''}.${p.unused.length ? ` Couldn't place ${p.unused.join(', ')}: say what it is, like "55 thick".` : ''}`;
+    fill();
+    paint();
+  }
+
   window.birdhouseOpen = () => {
     document.title = 'Birdhouse';
     if (!S.built) {
       S.built = true;
       $('#bh-adjust').addEventListener('click', openCard);
+      $('#bh-ask').addEventListener('submit', (e) => { e.preventDefault(); draft($('#bh-text').value); });
     }
     closeCard();
     paint();

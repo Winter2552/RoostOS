@@ -2,7 +2,7 @@
   "items": [
     {
       "title": "Birdhouse: plan a build",
-      "text": "A new app for woodworking plans. Pick a bookshelf, table, box or bench, set the sizes, and a to-scale plan appears on blueprint paper: front, side and top views, a 3D model you can drag to turn, and a cut list of every board. Your last plans are kept on this device.",
+      "text": "A new app for woodworking plans. Type what you want ("a table 1200 long, 700 wide") or pick a bookshelf, table, box or bench, and a to-scale plan appears on blueprint paper: front, side and top views, a 3D model you can drag to turn, and a cut list of every board. Your last plans are kept on this device.",
       "image": "birdhouse.png"
     }
   ]

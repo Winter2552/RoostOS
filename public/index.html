@@ -249,6 +249,12 @@
     <section id="view-birdhouse" class="birdhouse hidden">
       <div class="bh-page">
         <div class="bh-sheet">
+          <form class="bh-ask" id="bh-ask" autocomplete="off">
+            <label class="sr" for="bh-text">Describe what to build</label>
+            <input type="text" id="bh-text" maxlength="200" placeholder="Describe it: a table 1200 long, 700 wide, 740 tall" enterkeyhint="go">
+            <button type="submit" class="bh-btn solid">Draft</button>
+          </form>
+          <p class="bh-say" id="bh-say" aria-live="polite"></p>
           <div class="bh-bar">
             <h2 class="bh-name" id="bh-name">Bookshelf</h2>
             <button type="button" class="bh-btn" id="bh-adjust" aria-expanded="false" aria-haspopup="dialog">⚙ Adjust</button>

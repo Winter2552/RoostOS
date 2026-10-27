@@ -17,6 +17,8 @@
       // "shelves" counts every horizontal board, top and bottom included.
       limits: { height: range(300, 2400, 10, 'Height'), width: range(200, 2400, 10, 'Width'), depth: range(100, 800, 10, 'Depth'), shelves: range(2, 12, 1, 'Shelves'), thickness: range(6, 40, 1, 'Board thickness') },
       defaults: { height: 1800, width: 800, depth: 300, shelves: 5, thickness: 18 },
+      words: { height: ['tall', 'high', 'height'], width: ['wide', 'width', 'across'], depth: ['deep', 'depth'], shelves: ['shelves', 'shelf', 'boards'], thickness: ['thick', 'thickness'] },
+      order: ['height', 'width', 'depth'],
       fit(d) { d.thickness = Math.min(d.thickness, Math.floor((d.width - 20) / 2), Math.floor(d.height / (d.shelves * 2))); },
       chips: (d) => [`H ${d.height}`, `W ${d.width}`, `D ${d.depth}`, `${d.shelves} shelves`, `Pine ${d.thickness}`],
       solids(d) {
@@ -38,6 +40,8 @@
       name: 'Table',
       limits: { height: range(300, 1200, 10, 'Height'), width: range(400, 3000, 10, 'Length'), depth: range(300, 1200, 10, 'Width'), thickness: range(12, 60, 1, 'Top thickness'), leg: range(30, 120, 5, 'Leg size') },
       defaults: { height: 740, width: 1200, depth: 700, thickness: 25, leg: 60 },
+      words: { width: ['long', 'length'], depth: ['wide', 'width', 'deep', 'depth'], height: ['tall', 'high', 'height'], thickness: ['thick', 'thickness'], leg: ['leg', 'legs'] },
+      order: ['width', 'depth', 'height'],
       fit(d) { d.leg = Math.min(d.leg, Math.floor((Math.min(d.width, d.depth) - 20) / 4)); d.thickness = Math.min(d.thickness, Math.floor(d.height / 4)); },
       chips: (d) => [`L ${d.width}`, `W ${d.depth}`, `H ${d.height}`, `Top ${d.thickness}`, `Legs ${d.leg}`],
       solids(d) {
@@ -61,6 +65,8 @@
       name: 'Box',
       limits: { width: range(100, 1200, 10, 'Width'), depth: range(100, 900, 10, 'Depth'), height: range(50, 800, 10, 'Height'), thickness: range(4, 30, 1, 'Board thickness') },
       defaults: { width: 400, depth: 300, height: 200, thickness: 12 },
+      words: { width: ['wide', 'width', 'long', 'length'], depth: ['deep', 'depth'], height: ['tall', 'high', 'height'], thickness: ['thick', 'thickness'] },
+      order: ['width', 'depth', 'height'],
       fit(d) { d.thickness = Math.min(d.thickness, Math.floor((Math.min(d.width, d.depth) - 20) / 2), Math.floor(d.height / 2)); },
       chips: (d) => [`W ${d.width}`, `D ${d.depth}`, `H ${d.height}`, `Board ${d.thickness}`],
       solids(d) {
@@ -80,6 +86,8 @@
       name: 'Bench',
       limits: { width: range(300, 2400, 10, 'Length'), depth: range(150, 600, 10, 'Width'), height: range(200, 700, 10, 'Height'), thickness: range(15, 60, 1, 'Seat thickness') },
       defaults: { width: 1000, depth: 350, height: 450, thickness: 30 },
+      words: { width: ['long', 'length'], depth: ['wide', 'width', 'deep', 'depth'], height: ['tall', 'high', 'height'], thickness: ['thick', 'thickness', 'seat'] },
+      order: ['width', 'depth', 'height'],
       fit(d) { d.thickness = Math.min(d.thickness, Math.floor(d.height / 3)); },
       chips: (d) => [`L ${d.width}`, `W ${d.depth}`, `H ${d.height}`, `Seat ${d.thickness}`],
       solids(d) {
@@ -194,7 +202,60 @@
     return faces.map((f) => ({ pts: f.pts.map((p) => [p.sx, p.sy]), light: f.light }));
   }
 
-  const exported = { TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, project };
+  // Reads a sentence like "bookshelf 1800 tall, 800 wide, 5 shelves" or
+  // "table 1200 x 700 x 740, 25mm top". Words only pick the project and the
+  // size each number belongs to; anything it cannot place is reported so
+  // nothing is silently ignored. It never guesses a size that was not typed.
+  //   -> { template: id | null, set: { key: value }, unused: [text] }
+  const KINDS = {
+    bookshelf: ['bookshelf', 'bookcase', 'shelf', 'shelves', 'shelving'],
+    table: ['table', 'desk'],
+    box: ['box', 'crate', 'chest'],
+    bench: ['bench', 'seat'],
+  };
+  const MM = { mm: 1, cm: 10, m: 1000, in: 25.4, inch: 25.4, inches: 25.4, '"': 25.4 };
+  const NUM = String.raw`(\d+(?:[.,]\d+)?)\s*(mm|cm|m|inches|inch|in|")?`;
+
+  function parse(text, current) {
+    const src = String(text || '').toLowerCase().slice(0, 300);
+    const words = src.match(/[a-z]+/g) || [];
+    let template = null;
+    for (const w of words) {
+      template = IDS.find((id) => KINDS[id].includes(w)) || null;
+      if (template) break;
+    }
+    const id = template || (current && TEMPLATES[current] ? current : 'bookshelf');
+    const t = TEMPLATES[id];
+    const set = {};
+    const unused = [];
+    const mm = (n, u) => Math.round(Number(n.replace(/^(\d{1,3}),(\d{3})$/, '$1$2').replace(',', '.')) * (MM[u] || 1)); // 1,200 is twelve hundred, 1,5 is one and a half
+    const keyFor = (word) => (word ? Object.keys(t.words).find((k) => t.words[k].includes(word)) : null);
+    let rest = src;
+
+    // "A x B x C": the sizes in the order this project is usually quoted.
+    const triple = new RegExp(`${NUM}\\s*[x×*]\\s*${NUM}\\s*[x×*]\\s*${NUM}`);
+    const m3 = rest.match(triple);
+    if (m3) {
+      const raw = [[m3[1], m3[2]], [m3[3], m3[4]], [m3[5], m3[6]]];
+      // One unit after the last number covers them all ("80 x 30 x 180 cm").
+      const unit = raw[2][1] || raw[1][1] || raw[0][1];
+      t.order.forEach((key, i) => { set[key] = mm(raw[i][0], raw[i][1] || unit); });
+      rest = rest.replace(triple, ' ');
+    }
+
+    const re = new RegExp(NUM, 'g');
+    for (const m of [...rest.matchAll(re)]) {
+      const after = (rest.slice(m.index + m[0].length).match(/^[\s,]*([a-z]+)/) || [])[1];
+      const before = (rest.slice(0, m.index).match(/([a-z]+)[\s:=]*$/) || [])[1];
+      const key = keyFor(after) || keyFor(before);
+      if (!key) { unused.push(m[0].trim()); continue; }
+      // "5 shelves" is a count, not a length.
+      set[key] = key === 'shelves' ? Math.round(Number(m[1])) : mm(m[1], m[2]);
+    }
+    return { template, set, unused };
+  }
+
+  const exported = { TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, project, parse };
   if (typeof module !== 'undefined' && module.exports) module.exports = exported;
   else window.birdhouseModel = exported;
 })();

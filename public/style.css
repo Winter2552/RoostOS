@@ -1848,3 +1848,9 @@ a.app-card:active { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--shad
 .bh-pick:focus-visible { outline: 2px solid var(--bp-ink); outline-offset: 2px; }
 .bh-card { max-height: calc(100vh - 230px); overflow: auto; }
 @media (max-width: 600px) { .bh-card { max-height: 62vh; } }
+.bh-ask { display: flex; gap: 8px; border: 1.5px dashed var(--bp-ink); border-radius: 6px; padding: 6px 6px 6px 12px; margin-bottom: 6px; }
+.bh-ask input { flex: 1; min-width: 0; background: transparent; border: 0; color: var(--bp-ink); font: inherit; font-size: 14px; }
+.bh-ask input::placeholder { color: var(--bp-soft); }
+.bh-ask input:focus { outline: none; }
+.bh-ask:focus-within { border-style: solid; }
+.bh-say { min-height: 1.4em; margin: 0 0 12px; font-size: 12px; color: var(--bp-soft); }

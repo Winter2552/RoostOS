@@ -100,3 +100,39 @@ test('in the browser it adds one name to the page and nothing else', () => {
   assert.deepEqual(Object.keys(window), ['birdhouseModel']);
   assert.equal(Object.keys(ctx).filter((k) => k !== 'window').length, 0, 'no stray globals that could clash with app.js');
 });
+
+test('a sentence picks the project and the size each number belongs to', () => {
+  const p = model.parse('A bookshelf, 1800 tall, 80cm wide, 30 cm deep, 6 shelves');
+  assert.equal(p.template, 'bookshelf');
+  assert.deepEqual(p.set, { height: 1800, width: 800, depth: 300, shelves: 6 });
+  assert.deepEqual(p.unused, []);
+});
+
+test('sizes can come before or after their word, in other units', () => {
+  assert.deepEqual(model.parse('table, length 1.8m, 90cm wide, height 75cm, 3cm thick top').set, { width: 1800, depth: 900, height: 750, thickness: 30 });
+  assert.deepEqual(model.parse('bench 36 inches long').set, { width: 914 });
+  assert.deepEqual(model.parse('table 1,200 long, 0,7 m wide').set, { width: 1200, depth: 700 });
+});
+
+test('A x B x C is read in the order each project is usually quoted', () => {
+  assert.deepEqual(model.parse('bookshelf 1800 x 800 x 300').set, { height: 1800, width: 800, depth: 300 });
+  assert.deepEqual(model.parse('table 1200 × 700 × 740').set, { width: 1200, depth: 700, height: 740 });
+  assert.deepEqual(model.parse('box 40 x 30 x 20 cm').set, { width: 400, depth: 300, height: 200 });
+});
+
+test('what it cannot place is reported, and no project word keeps the current one', () => {
+  const p = model.parse('make it 55 and 300 wide', 'table');
+  assert.equal(p.template, null);
+  assert.deepEqual(p.set, { depth: 300 });
+  assert.deepEqual(p.unused, ['55']);
+  assert.deepEqual(model.parse('table with 4 shelves').unused, ['4']);
+  assert.deepEqual(model.parse('').set, {});
+  assert.deepEqual(model.parse('x'.repeat(5000)).set, {});
+});
+
+test('whatever is typed ends up inside the limits', () => {
+  const p = model.parse('bookshelf 99999 tall, 1 wide');
+  const d = model.clean({ template: p.template, ...p.set });
+  assert.equal(d.height, 2400);
+  assert.equal(d.width, 200);
+});
