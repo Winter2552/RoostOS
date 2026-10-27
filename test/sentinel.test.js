@@ -198,6 +198,26 @@ test('a new container, or a changed image, is flagged until trusted', () => {
   assert.equal(off.s.known, null);
 });
 
+test('an unnamed one-off container only counts if it stays', () => {
+  const m = make('manual');
+  const base = [{ name: 'roost', imageRef: 'roost-roost' }];
+  m.s.containers(base);
+  const odd = [...base, { name: 'nice_fermi', imageRef: 'sha256:a7b4' }];
+  m.s.containers(odd);
+  m.tick(60 * 1000);
+  m.s.containers(odd);
+  assert.equal(m.raised.length, 0, 'a build step or one-off helper');
+  m.s.containers(base); // it finished
+  m.tick(20 * 60 * 1000);
+  m.s.containers(odd); // a different run, seen fresh
+  assert.equal(m.raised.length, 0);
+  m.tick(11 * 60 * 1000);
+  m.s.containers(odd); // still running after ten minutes
+  assert.equal(m.raised.length, 1);
+  assert.match(m.raised[0].detail, /nice_fermi/);
+  m.s.stop();
+});
+
 test('a stolen sign-in is flagged once; auto mode signs it out', () => {
   const ended = [];
   const m = make('manual');

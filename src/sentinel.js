@@ -44,6 +44,10 @@ const SAVE_DELAY_MS = 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 // One-off containers (docker compose run) come and go; they aren't news.
 const EPHEMERAL = /-run-[0-9a-f]+$/;
+// `docker run` with no name gets two words like nice_fermi. Build steps and
+// one-off helpers look like that, so they only count if they stay running.
+const RANDOM_NAME = /^[a-z]+_[a-z]+$/;
+const UNNAMED_GRACE_MS = 10 * 60 * 1000;
 const TRACE_MAX = 400; // recent outside requests kept in memory, never saved
 const EVIDENCE_MAX = 40; // requests kept with an incident
 const EVIDENCE_KEPT = 10; // incidents that keep their evidence
@@ -117,6 +121,8 @@ class Sentinel {
     this.recent = []; // the last few outside requests, for the evidence in a report
     this.scans = new Map(); // ip → times
     this.names = new Map(); // ip → Map(name → time)
+    this.unnamed = new Map(); // random-named container → when first seen (memory only)
+    this.lastList = null;
     this.probes = new Map(); // ip → time of its latest quiet incident, for spotting a wave
     this.waveAt = 0;
     this.timer = null;
@@ -133,6 +139,7 @@ class Sentinel {
 
   stop() {
     clearInterval(this.daily);
+    clearTimeout(this.unnamedTimer);
     this.flush();
   }
 
@@ -211,12 +218,33 @@ class Sentinel {
       this.saveSoon();
       return;
     }
+    this.lastList = list;
+    for (const name of this.unnamed.keys()) if (!(name in seen)) this.unnamed.delete(name);
     for (const [name, ref] of Object.entries(seen)) {
       const was = this.known[name];
       if (was === ref || this.unknown[name] === ref) continue;
+      if (was === undefined && RANDOM_NAME.test(name)) {
+        const first = this.unnamed.get(name);
+        if (first === undefined) {
+          this.unnamed.set(name, this.now());
+          this.recheckLater();
+          continue;
+        }
+        if (this.now() - first < UNNAMED_GRACE_MS) continue;
+      }
       this.unknown[name] = ref;
       this.incident('container', null, was === undefined ? `A new container is running: ${name} (${ref}). If you did not install it, remove it in ZimaOS and run the recovery steps.` : `${name} now runs a different image: ${was} → ${ref}.`, was !== undefined, { name, ref });
     }
+  }
+
+  // Docker only reports changes, so look again once the grace time is up.
+  recheckLater() {
+    if (this.unnamedTimer) return;
+    this.unnamedTimer = setTimeout(() => {
+      this.unnamedTimer = null;
+      if (this.lastList) this.containers(this.lastList);
+    }, UNNAMED_GRACE_MS + 1000);
+    this.unnamedTimer.unref();
   }
 
   // "I know that one": accepts a container (or its new image) as normal.
