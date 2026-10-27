@@ -1421,6 +1421,20 @@ button.restore-name:hover { text-decoration: underline; text-underline-offset: 3
 @media (prefers-reduced-motion: reduce) { .gshow-img, .gshow-title { transition: none; } }
 @media (max-width: 640px) { .gmem { width: 118px; height: 160px; } }
 
+/* People: the scan card and the faces */
+.glint-scan { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px 16px; margin: 0 0 20px; padding: 14px 16px; border: 1.5px solid var(--line); border-radius: 16px; background: var(--panel); }
+.glint-scan-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.glint-scan-text .muted { font-size: 13px; }
+.glint-scan .meter { grid-column: 1 / -1; grid-row: 2; }
+.glint-people { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 20px 12px; }
+.gperson { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; text-decoration: none; text-align: center; }
+.gperson b { font-weight: 500; font-size: 15px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gperson .mono { font-size: 11px; }
+.gface { position: relative; display: grid; place-items: center; width: 96px; aspect-ratio: 1; overflow: hidden; border: 1.5px solid var(--line); border-radius: 50%; background: var(--panel); color: var(--muted); margin-bottom: 4px; }
+.gface img { position: absolute; max-width: none; }
+.gface.small { width: 40px; margin: 0; flex: none; }
+@media (max-width: 640px) { .glint-people { grid-template-columns: repeat(3, minmax(0, 1fr)); } .gface { width: 84px; } .glint-scan { grid-template-columns: 1fr; } .glint-scan .meter { grid-row: auto; } }
+
 /* Trash */
 .glint-trash { display: flex; flex-direction: column; }
 .gtrash { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto auto; align-items: center; gap: 12px; min-height: 56px; padding: 0 8px; border-bottom: 1px solid var(--line); }

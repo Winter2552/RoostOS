@@ -2081,7 +2081,12 @@ async function loadGlintPrefs() {
   panel.classList.toggle('hidden', isGuest(state.user) || !hasGlint());
   if (panel.classList.contains('hidden')) return;
   const box = $('#pref-memories');
-  try { box.checked = (await api('GET', '/api/glint/prefs')).memories; } catch { panel.classList.add('hidden'); }
+  try {
+    const p = await api('GET', '/api/glint/prefs');
+    box.checked = p.memories;
+    $('#pref-people').checked = p.people;
+    $('#people-delete-row').classList.toggle('hidden', !p.people);
+  } catch { panel.classList.add('hidden'); }
 }
 $('#pref-memories').addEventListener('change', async (e) => {
   const box = e.target;
@@ -2089,7 +2094,36 @@ $('#pref-memories').addEventListener('change', async (e) => {
   try {
     await api('POST', '/api/glint/prefs', { memories: box.checked });
     msg.textContent = box.checked ? 'Memories are on.' : 'Memories are off.';
+    if (window.glintPrefsChanged) window.glintPrefsChanged();
   } catch (err) { box.checked = !box.checked; msg.textContent = err.message; }
+});
+$('#pref-people').addEventListener('change', async (e) => {
+  const box = e.target;
+  const msg = $('#glint-prefs-panel .msg');
+  try {
+    await api('POST', '/api/glint/prefs', { people: box.checked });
+    $('#people-delete-row').classList.toggle('hidden', !box.checked);
+    msg.textContent = box.checked ? 'People is on. Open Glint > People and press Start.' : 'People is off. Your face data is kept; use Delete face data to remove it.';
+    if (window.glintPrefsChanged) window.glintPrefsChanged();
+  } catch (err) { box.checked = !box.checked; msg.textContent = err.message; }
+});
+// Two presses, so a stray tap doesn't wipe hours of work.
+$('#people-delete').addEventListener('click', async (e) => {
+  const btn = e.target;
+  const msg = $('#glint-prefs-panel .msg');
+  if (btn.dataset.sure !== '1') {
+    btn.dataset.sure = '1';
+    btn.textContent = 'Press again to delete';
+    setTimeout(() => { btn.dataset.sure = ''; btn.textContent = 'Delete face data'; }, 5000);
+    return;
+  }
+  btn.dataset.sure = '';
+  btn.textContent = 'Delete face data';
+  try {
+    await api('DELETE', '/api/glint/faces');
+    msg.textContent = 'Face data deleted. People starts fresh the next time you press Start.';
+    if (window.glintPrefsChanged) window.glintPrefsChanged();
+  } catch (err) { msg.textContent = err.message; }
 });
 
 async function loadDevices() {

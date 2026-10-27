@@ -70,7 +70,7 @@
   const G = {
     space: '',
     hideNest: false, // show only photos added through Glint, not ones that live elsewhere in Nest
-    mode: 'photos', // photos | favourites | undated | albums | album | memory | trash | move
+    mode: 'photos', // photos | favourites | undated | albums | album | memory | people | person | trash | move
     album: null, // { id, name } when mode is 'album'
     items: [],
     next: null,
@@ -80,6 +80,9 @@
     token: 0,
     loading: false,
     albums: [],
+    prefs: null, // { memories, people } from Profile, read once per visit
+    people: [], // the People page
+    person: null, // { id, name } when mode is 'person'
     memories: [], // the cards above the timeline
     memory: null, // { id, title, sub } when mode is 'memory'
     storage: null,
@@ -116,10 +119,15 @@
     const [a, b] = parts;
     if (space !== G.space) G.storage = null;
     G.space = space;
-    const mode = a === 'favourites' ? 'favourites' : a === 'undated' ? 'undated' : a === 'albums' ? 'albums' : a === 'album' && b ? 'album' : a === 'memory' && b ? 'memory' : a === 'trash' ? 'trash' : a === 'move' ? 'move' : 'photos';
+    const mode = a === 'favourites' ? 'favourites' : a === 'undated' ? 'undated' : a === 'albums' ? 'albums' : a === 'album' && b ? 'album' : a === 'memory' && b ? 'memory' : a === 'people' ? 'people' : a === 'person' && b ? 'person' : a === 'trash' ? 'trash' : a === 'move' ? 'move' : 'photos';
     G.mode = mode;
     G.album = mode === 'album' ? { id: b, name: '' } : null;
     G.memory = mode === 'memory' ? { id: b, title: '', sub: '' } : null;
+    G.person = mode === 'person' ? { id: b, name: '' } : null;
+    // People are personal: nothing in the family space.
+    if (space && (mode === 'people' || mode === 'person')) { location.hash = '#/glint'; return; }
+    if (mode !== 'people') scanner.pause();
+    readPrefs();
     if (mode !== 'photos') G.memories = [];
     G.items = [];
     G.next = null;
@@ -142,6 +150,15 @@
         G.albums = albums;
       } else if (G.mode === 'move') {
         await move.fetchStatus();
+      } else if (G.mode === 'people') {
+        await readPrefs();
+        if (token !== G.token) return;
+        if (G.prefs && G.prefs.people) {
+          const d = await api('GET', '/api/glint/people');
+          if (token !== G.token) return;
+          G.people = d.people;
+          scanner.set(d.total, d.scanned);
+        }
       } else if (G.mode === 'memory') {
         const d = await gapi('GET', `/api/glint/memories/${G.memory.id}?tz=${tzOffset()}`);
         if (token !== G.token) return;
@@ -160,12 +177,18 @@
         if (G.mode === 'undated') q.set('undated', '1');
         if (G.hideNest && (G.mode === 'photos' || G.mode === 'favourites')) q.set('own', '1');
         if (G.mode === 'album') q.set('album', G.album.id);
+        if (G.mode === 'person') q.set('person', G.person.id);
         const d = await gapi('GET', `/api/glint/photos?${q}`);
         if (token !== G.token) return;
         G.items = first ? d.items : G.items.concat(d.items);
         G.next = d.next;
         if (first) { G.total = d.total; G.storage = d.storage; }
         if (first && G.mode === 'photos') loadMemories(token);
+        if (G.mode === 'person' && !G.person.name) {
+          const { person } = await gapi('GET', `/api/glint/people/${G.person.id}`);
+          G.person.name = person.name || 'Unnamed';
+          G.person.unnamed = !person.name;
+        }
         if (G.mode === 'album' && !G.album.name) {
           const { albums } = await gapi('GET', '/api/glint/albums');
           G.albums = albums;
@@ -175,7 +198,7 @@
       G.error = '';
     } catch (err) {
       if (token !== G.token) return;
-      G.error = err.status === 404 && G.mode === 'album' ? 'That album no longer exists.' : err.status === 404 && G.mode === 'memory' ? 'That memory is gone.' : err.message;
+      G.error = err.status === 404 && G.mode === 'album' ? 'That album no longer exists.' : err.status === 404 && G.mode === 'memory' ? 'That memory is gone.' : err.status === 404 && G.mode === 'person' ? 'That person is gone.' : err.message;
     } finally {
       if (token === G.token) G.loading = false;
     }
@@ -233,6 +256,7 @@
       return;
     }
     if (G.mode === 'albums') return renderAlbums();
+    if (G.mode === 'people') return renderPeople();
     if (G.mode === 'trash') return renderTrash();
     if (G.mode === 'move') return renderMove();
     renderTimeline();
@@ -254,9 +278,15 @@
   }
 
   function renderCrumbs() {
-    const names = { photos: 'Photos', favourites: 'Favourites', undated: 'Undated', albums: 'Albums', trash: 'Trash', move: 'Move to Glint' };
+    const names = { photos: 'Photos', favourites: 'Favourites', undated: 'Undated', albums: 'Albums', people: 'People', trash: 'Trash', move: 'Move to Glint' };
     const crumbs = $('#glint-crumbs');
-    if (G.mode === 'memory') {
+    if (G.mode === 'person') {
+      crumbs.replaceChildren(
+        el('a', { class: 'crumb', href: `${base()}/people`, text: 'People' }),
+        gi('right', 'crumb-sep'),
+        el('h2', { text: G.person.name || '…' }));
+      document.title = `${G.person.name || 'Person'} · ${state.serverName}`;
+    } else if (G.mode === 'memory') {
       crumbs.replaceChildren(
         el('a', { class: 'crumb', href: base(), text: 'Photos' }),
         gi('right', 'crumb-sep'),
@@ -285,6 +315,14 @@
     }
     else if (G.mode === 'favourites') tools.replaceChildren(zoomButtons());
     else if (G.mode === 'move') tools.replaceChildren();
+    else if (G.mode === 'people') tools.replaceChildren();
+    else if (G.mode === 'person') {
+      tools.replaceChildren(
+        zoomButtons(),
+        el('button', { type: 'button', class: 'btn ghost small', text: G.person.unnamed ? 'Add name' : 'Rename', onclick: renamePerson }),
+        el('button', { type: 'button', class: 'btn ghost small', text: 'Merge', onclick: mergePerson }),
+        el('button', { type: 'button', class: 'btn ghost small', text: 'Hide', onclick: hidePerson }));
+    }
     else if (G.mode === 'albums') tools.replaceChildren(el('button', { type: 'button', class: 'btn ghost small', text: 'New album', onclick: () => newAlbum([]) }));
     else if (G.mode === 'album') {
       tools.replaceChildren(
@@ -316,6 +354,7 @@
         favourites: ['No favourites yet', 'Tap the star on a photo to keep it here.'],
         undated: ['Every photo has a date', 'Photos with no date taken inside them show up here, so you can date them.'],
         album: ['This album is empty', 'Select photos in Photos and choose Add to album.'],
+        person: ['No photos of this person', 'Photos you moved out are no longer here.'],
       }[G.mode];
       body.replaceChildren(el('div', { class: 'nest-empty' }, gi('photo'), el('b', { text: head }), el('span', { class: 'muted', text: text })));
       return;
@@ -610,6 +649,7 @@
         btn('album', 'Add to album', () => albumPicker(items)),
         btn('download', 'Download', () => download(items)),
         G.mode === 'album' ? btn('minus', 'Remove from album', () => removeFromAlbum(items)) : null,
+        G.mode === 'person' ? btn('minus', 'Not this person', () => notThisPerson(items)) : null,
         btn('trash', 'Delete', () => trash(items)),
       ].filter(Boolean);
     bar.replaceChildren(
@@ -836,6 +876,149 @@
       if (items.length) { toast(`Added to “${album.name}”`); clearSel(); } else await load(true);
       return album;
     } catch (err) { toast(err.message); return null; }
+  }
+
+  // ---------- people ----------
+
+  // Photos aren't read by the server: this browser finds the faces and sends only their fingerprints.
+  const scanner = createFaceScanner({
+    api,
+    mediaUrl: (p, convert) => `/api/glint/media/${p.id}${convert ? '?preview=1' : ''}`,
+    onChange: (s) => {
+      if (G.mode !== 'people') return;
+      updateScanCard();
+      // A pass that has just ended: show who it found.
+      if (!s.running && !s.loading && G.prefs && G.prefs.people) refreshPeople();
+    },
+  });
+  window.addEventListener('hashchange', () => { if (!location.hash.startsWith('#/glint/people')) scanner.pause(); });
+
+  async function readPrefs(force) {
+    if (G.prefs && !force) return;
+    try { G.prefs = await api('GET', '/api/glint/prefs'); } catch { G.prefs = { memories: true, people: false }; }
+    $('#glint-people-link').classList.toggle('hidden', !G.prefs.people);
+  }
+  // Profile changed a switch.
+  window.glintPrefsChanged = () => { G.prefs = null; };
+
+  let refreshing = false;
+  async function refreshPeople() {
+    if (refreshing) return;
+    refreshing = true;
+    try {
+      const d = await api('GET', '/api/glint/people');
+      if (G.mode === 'people') { G.people = d.people; renderPeopleGrid(); }
+    } catch { /* the grid stays as it was */ } finally { refreshing = false; }
+  }
+
+  // Where the face sits in a round picture: the thumbnail, moved and scaled so the face fills it.
+  function faceCrop(c) {
+    const a = c.aspect || 4 / 3; // width over height; heights are 1 unit, widths a units
+    const [x, y, w, h] = c.box.map((v) => v / 1000);
+    const side = Math.max(w * a, h) * 1.7;
+    const cx = (x + w / 2) * a;
+    const cy = y + h / 2;
+    const img = el('img', { src: thumbUrl({ id: c.photo }), alt: '', draggable: 'false', loading: 'lazy' });
+    img.style.cssText = `left:${(-(cx - side / 2) / side) * 100}%;top:${(-(cy - side / 2) / side) * 100}%;width:${(a / side) * 100}%;height:${(1 / side) * 100}%`;
+    return img;
+  }
+
+  function renderPeople() {
+    if (!G.prefs) { body.replaceChildren(el('div', { class: 'muted glint-note', text: 'Loading…' })); return; }
+    if (!G.prefs.people) {
+      body.replaceChildren(el('div', { class: 'nest-empty' }, gi('photo'), el('b', { text: 'People is off' }),
+        el('span', { class: 'muted', text: 'Glint can find the faces in your photos, in this browser, and group them by person. Only you see them and nothing leaves Roost.' }),
+        el('button', { type: 'button', class: 'btn small', text: 'Turn on People', onclick: async () => {
+          try { G.prefs = await api('POST', '/api/glint/prefs', { people: true }); } catch (err) { toast(err.message); return; }
+          $('#glint-people-link').classList.remove('hidden');
+          load(true);
+        } })));
+      return;
+    }
+    body.replaceChildren(el('div', { class: 'glint-scan', id: 'glint-scan' }), el('div', { id: 'glint-people' }));
+    updateScanCard();
+    renderPeopleGrid();
+  }
+
+  function updateScanCard() {
+    const card = document.getElementById('glint-scan');
+    if (!card) return;
+    const s = scanner.state;
+    const pct = s.total ? Math.min(100, (s.scanned / s.total) * 100) : 0;
+    const done = s.total > 0 && s.scanned >= s.total;
+    let text;
+    if (s.error) text = s.error;
+    else if (s.loading) text = 'Getting the face finder ready (about 12 MB, once)…';
+    else if (s.running) text = `Looking at photos: ${s.scanned.toLocaleString()} of ${s.total.toLocaleString()}`;
+    else if (!s.total) text = 'No photos to look at yet.';
+    else if (done) text = `All ${s.total.toLocaleString()} photos looked at. Press Find people again after adding more.`;
+    else text = `${s.scanned.toLocaleString()} of ${s.total.toLocaleString()} photos looked at. This runs only while this page is open, and is quicker on a computer.`;
+    card.replaceChildren(
+      el('div', { class: 'glint-scan-text' }, el('b', { text: s.running ? 'Finding people' : 'People' }), el('span', { class: 'muted', text })),
+      s.total ? el('div', { class: 'meter', 'aria-hidden': 'true' }, el('i', { style: `width:${Math.max(pct, s.scanned ? 1 : 0)}%` })) : '',
+      s.total && (s.running || s.loading)
+        ? el('button', { type: 'button', class: 'btn ghost small', text: 'Pause', onclick: () => scanner.pause() })
+        : s.total ? el('button', { type: 'button', class: 'btn small', text: s.scanned ? 'Find people' : 'Start', onclick: () => scanner.start() }) : '');
+  }
+
+  function renderPeopleGrid() {
+    const host = document.getElementById('glint-people');
+    if (!host) return;
+    if (!G.people.length) {
+      host.replaceChildren(el('div', { class: 'nest-empty' }, gi('photo'), el('b', { text: 'No people yet' }),
+        el('span', { class: 'muted', text: 'Press Start and Glint will group the faces it finds. Groups with a few photos show up here for you to name.' })));
+      return;
+    }
+    host.replaceChildren(el('div', { class: 'glint-people' }, ...G.people.map((p) => el('a', { class: 'gperson', href: `${base()}/person/${p.id}` },
+      el('span', { class: 'gface' }, p.cover ? faceCrop(p.cover) : gi('photo')),
+      el('b', { class: p.name ? '' : 'muted', text: p.name || 'Add name' }),
+      el('span', { class: 'mono muted', text: plural(p.count, 'photo') })))));
+  }
+
+  async function renamePerson() {
+    const name = await ask({ title: 'Name this person', value: G.person.unnamed ? '' : G.person.name, ok: 'Save' });
+    if (!name) return;
+    try {
+      await api('PATCH', `/api/glint/people/${G.person.id}`, { name });
+      G.person.name = name;
+      G.person.unnamed = false;
+      render();
+    } catch (err) { toast(err.message); }
+  }
+
+  async function hidePerson() {
+    try { await api('PATCH', `/api/glint/people/${G.person.id}`, { hidden: true }); } catch (err) { toast(err.message); return; }
+    toast('Person hidden');
+    location.hash = `${base()}/people`;
+  }
+
+  async function mergePerson() {
+    let people = [];
+    try { ({ people } = await api('GET', '/api/glint/people')); } catch (err) { toast(err.message); return; }
+    people = people.filter((p) => String(p.id) !== String(G.person.id));
+    const list = el('div', { class: 'nmove-list' }, ...(people.length ? people.map((p) => el('button', {
+      type: 'button',
+      class: 'nmove-item',
+      onclick: async () => {
+        dialog.close();
+        try {
+          await api('POST', `/api/glint/people/${G.person.id}/merge`, { into: p.id });
+          toast('Merged');
+          location.hash = `${base()}/person/${p.id}`;
+        } catch (err) { toast(err.message); }
+      },
+    }, el('span', { class: 'gface small' }, p.cover ? faceCrop(p.cover) : gi('photo')), el('span', { text: p.name || 'Unnamed' }), el('span', { class: 'muted', text: String(p.count) })))
+      : [el('div', { class: 'muted nmove-note', text: 'No one else to merge with' })]));
+    showDialog(`Merge ${G.person.name} into…`, [el('p', { class: 'muted', text: 'Use this when two groups are the same person.' }), list],
+      [el('button', { type: 'button', class: 'btn ghost small', text: 'Cancel', onclick: () => dialog.close() })]);
+  }
+
+  async function notThisPerson(items) {
+    try {
+      await api('POST', `/api/glint/people/${G.person.id}/reject`, { ids: items.map((i) => i.id) });
+      removeLocal(items.map((i) => i.id));
+      toast('Moved out of this person');
+    } catch (err) { toast(err.message); }
   }
 
   // ---------- memories ----------
