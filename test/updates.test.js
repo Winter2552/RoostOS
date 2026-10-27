@@ -148,3 +148,24 @@ test('only admins see update badges on the status page', async () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('it counts how long an update has been waiting', async () => {
+  const images = { 'jellyfin/jellyfin:latest': { Id: 'sha256:j1', RepoDigests: ['jellyfin/jellyfin@sha256:old'] } };
+  const { docker, fetchFn } = fakes({ images, remote: { 'jellyfin/jellyfin': 'sha256:new' } });
+  await new Promise((r) => docker.listen(0, '127.0.0.1', r));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'roost-updates-'));
+  let now = Date.parse('2026-10-01T00:00:00Z');
+  const checker = new UpdateChecker({ dataDir: dir, dockerHost: `tcp://127.0.0.1:${docker.address().port}`, fetch: fetchFn, now: () => now });
+  const containers = [{ id: 'a', imageRef: 'jellyfin/jellyfin:latest', imageId: 'sha256:j1' }];
+  try {
+    assert.equal(checker.summary().checked, false);
+    await checker.check(containers);
+    assert.deepEqual(checker.summary(), { checked: true, update: 1, restart: 0, waitingDays: 0 });
+    now += 12 * 86400000;
+    await checker.check(containers); // still waiting, and counted from the first sighting
+    assert.equal(checker.summary().waitingDays, 12);
+  } finally {
+    docker.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

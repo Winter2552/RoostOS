@@ -488,6 +488,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     store,
     raise: (key, title, detail) => secWatch.raise(key, title, detail),
     lockdown: (by) => engageLockdown(by),
+    endSession: (userId, sessionId) => sessions.destroyId(userId, sessionId),
     // Never ban the home network, or Cloudflare's own addresses.
     skip: (ip) => isPrivateIp(ip) || remoteAccess.isCloudflare(ip),
   });
@@ -512,7 +513,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     readTrends: (open, t) => driveTrends.trendProblems({ history: healthHistory, driveHealth: driveHealth.read(), now: t, open }),
     tidy: (t) => secWatch.tidy(t),
     onChange: (kind, alert) => push.alert(kind, alert),
-    readContainers: readContainers || (async () => (events.live() && !lastDocker.error ? lastDocker : listContainers(dockerHost, probeTimeoutMs))),
+    readContainers: async () => {
+      const read = await (readContainers || (async () => (events.live() && !lastDocker.error ? lastDocker : listContainers(dockerHost, probeTimeoutMs))))();
+      // Sentinel looks at the same reading, so it adds no Docker calls of its own.
+      if (read && read.containers) sentinel.containers(read.containers);
+      return read;
+    },
     readDisks: () => readDisks(diskList),
     newId: () => store.newId(),
   });
@@ -579,6 +585,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     if (user && guestEnded(user)) {
       sessions.destroyUser(user.id);
       return null;
+    }
+    // An admin's browser cookie turning up in a different browser or device is a sign it was stolen.
+    if (user && user.role === 'admin' && s.kind === 'browser' && s.name && req.socket.encrypted) {
+      const now = deviceName(req.headers['user-agent']);
+      if (now !== s.name && sentinel.sessionMismatch({ userId: user.id, username: user.username, sessionId: s.id, was: s.name, now, ip: clientIp(req, trustProxy) })) return null;
     }
     return user;
   }
@@ -2445,6 +2456,29 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (!ip || net.isIP(ip) === 0) throw new HttpError(400, 'That is not an address');
       if (!sentinel.ban(ip, incident ? incident.kind : 'by hand')) throw new HttpError(400, 'That address is on your home network or Cloudflare, so it can’t be banned');
       record(req, 'settings-changed', { actor: admin.username, detail: `Sentinel banned ${ip}` });
+      send(res, 200, sentinel.view());
+    },
+
+    // "That's mine": accepts a new container, or its new image, as normal.
+    'POST /api/admin/sentinel/trust': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const incident = sentinel.incidents.find((i) => i.id === body.incident);
+      if (!sentinel.trust(incident)) throw new HttpError(404, 'That is not a container incident');
+      record(req, 'settings-changed', { actor: admin.username, detail: `Sentinel trusts container ${incident.target.name}` });
+      send(res, 200, sentinel.view());
+    },
+
+    // Signs out a sign-in Sentinel thinks was stolen.
+    'POST /api/admin/sentinel/end-session': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const incident = sentinel.incidents.find((i) => i.id === body.incident);
+      if (!incident || incident.kind !== 'session' || !incident.target) throw new HttpError(404, 'That is not a stolen-sign-in incident');
+      sessions.destroyId(incident.target.userId, incident.target.sessionId);
+      incident.handled = 'signed out';
+      sentinel.saveSoon();
+      record(req, 'settings-changed', { actor: admin.username, detail: 'Sentinel: signed out a sign-in that looked stolen' });
       send(res, 200, sentinel.view());
     },
 

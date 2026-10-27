@@ -3119,14 +3119,17 @@ async function loadSecurity() {
 const SENTINEL_TEXT = {
   off: 'Not watching. Nothing is banned.',
   manual: 'Watches and alerts you, then waits for you to press Ban.',
-  auto: 'Watches and acts on its own: bans offenders for 24 hours, and locks Roost down if the admin accounts are changed behind its back. Home access is never banned.',
+  auto: 'Watches and acts on its own: bans offenders for 24 hours, signs out a stolen sign-in, and locks Roost down if the admin accounts are changed behind its back. Home access is never banned. It only tells you about new containers.',
 };
-const SENTINEL_WHAT = { scanner: 'Scanner probing', spray: 'Guessing usernames', tamper: 'Admin accounts changed' };
+const SENTINEL_WHAT = { scanner: 'Scanner probing', spray: 'Guessing usernames', tamper: 'Admin accounts changed', session: 'Sign-in looks stolen', container: 'Unexpected container' };
 
 function sentinelRow(inc) {
+  const button = (text, action) => el('button', { class: 'btn ghost small', type: 'button', text, onclick: () => sentinelPost(action, { incident: inc.id }) });
   const act = inc.handled ? el('span', { class: 'pill', text: inc.handled })
-    : inc.ip ? el('button', { class: 'btn ghost small', type: 'button', text: 'Ban', onclick: () => sentinelPost('ban', { incident: inc.id }) })
-      : '';
+    : inc.canTrust ? button('Trust', 'trust')
+      : inc.kind === 'session' ? button('Sign out', 'end-session')
+        : inc.ip ? button('Ban', 'ban')
+          : '';
   const report = inc.report ? el('a', { class: 'btn ghost small', href: `/api/admin/sentinel/report?incident=${encodeURIComponent(inc.id)}`, download: '', text: 'Report' }) : '';
   return el('li', { class: 'security-row sentinel-row' },
     el('span', { class: `dot ${inc.handled ? 'online' : 'offline'}` }),

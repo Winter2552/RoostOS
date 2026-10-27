@@ -160,7 +160,7 @@ const order = { ok: 0, info: 0, warn: 1, bad: 2 };
 // The Admin → Security list. Every check is { id, status: ok|info|warn|bad,
 // title, detail }; `info` is a fact with nothing to do about it.
 //   db, now, entries (activity log), cert (certSummary() or null), updates
-//   ({ update, restart, checked } or null), backup (backup.summarize()),
+//   ({ update, restart, checked, waitingDays } or null), backup (backup.summarize()),
 //   pushDevices (phones with alerts on, for admins), outside (reachable from outside),
 //   lockdown ({ at, by } while outside access is paused),
 //   ports (the last open-port check, src/portcheck.js, or null),
@@ -197,7 +197,9 @@ function securityChecks({ db, now = Date.now(), entries = [], cert = null, updat
 
   if (updates && updates.checked) {
     const waiting = updates.update + updates.restart;
-    if (waiting) add('updates', 'warn', `${plural(waiting, 'app has', 'apps have')} an update waiting`, 'Old versions are how most home servers get hacked. Update in ZimaOS or Admin → Updates.');
+    const days = updates.waitingDays || 0;
+    const for_ = days >= 1 ? ` (the oldest for ${plural(days, 'day', 'days')})` : '';
+    if (waiting) add('updates', days >= 30 ? 'bad' : 'warn', `${plural(waiting, 'app has', 'apps have')} an update waiting${for_}`, 'Old versions are how most home servers get hacked. Update in ZimaOS or Admin → Updates.');
     else add('updates', 'ok', 'Apps are up to date', 'As of the last check');
   } else {
     add('updates', 'info', 'Updates not checked yet', 'Open the Status page to check.');

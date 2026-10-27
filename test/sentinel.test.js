@@ -145,6 +145,52 @@ test('an incident keeps its evidence and makes a report without secrets', () => 
   assert.equal(m.s.view().incidents.filter((i) => i.report).length, 10, 'only the latest ten keep evidence');
 });
 
+test('a new container, or a changed image, is flagged until trusted', () => {
+  const m = make('manual');
+  const c = (name, imageRef) => ({ name, imageRef });
+  m.s.containers([c('jellyfin', 'jellyfin/jellyfin:latest'), c('roost', 'roost-roost')]); // the baseline
+  assert.equal(m.raised.length, 0);
+  m.s.containers([c('jellyfin', 'jellyfin/jellyfin:latest'), c('roost', 'roost-roost'), c('roost-roost-run-1a2b3c', 'x')]); // a one-off
+  assert.equal(m.raised.length, 0);
+  m.s.containers([c('jellyfin', 'jellyfin/jellyfin:latest'), c('miner', 'evil/miner:latest')]);
+  assert.equal(m.raised.length, 1);
+  assert.match(m.raised[0].detail, /new container is running: miner \(evil\/miner:latest\)/);
+  m.s.containers([c('miner', 'evil/miner:latest')]);
+  assert.equal(m.raised.length, 1, 'once, not on every look');
+  m.s.containers([c('jellyfin', 'someone/else:latest')]);
+  assert.match(m.raised[1].detail, /jellyfin now runs a different image: jellyfin\/jellyfin:latest → someone\/else:latest/);
+  const inc = m.s.incidents[0];
+  assert.equal(m.s.view().incidents.find((i) => i.id === inc.id).canTrust, true);
+  assert.equal(m.s.trust(inc), true);
+  assert.equal(inc.handled, 'trusted');
+  m.s.containers([c('miner', 'evil/miner:latest')]);
+  assert.equal(m.raised.length, 2, 'trusted, so quiet');
+
+  const off = make('off');
+  off.s.containers([c('a', 'x')]);
+  assert.equal(off.s.known, null);
+});
+
+test('a stolen sign-in is flagged once; auto mode signs it out', () => {
+  const ended = [];
+  const m = make('manual');
+  m.s.endSession = (u, id) => ended.push([u, id]);
+  const hit = { userId: 'u1', username: 'raven', sessionId: 's1', was: 'Safari on iPhone', now: 'Chrome on Windows', ip: '87.1.1.1' };
+  assert.equal(m.s.sessionMismatch(hit), false);
+  assert.equal(m.s.sessionMismatch(hit), false);
+  assert.equal(m.raised.length, 1);
+  assert.match(m.raised[0].detail, /made on Safari on iPhone, is being used from Chrome on Windows/);
+  assert.deepEqual(ended, []);
+  assert.equal(m.s.view().incidents[0].canEnd, true);
+
+  const a = make('auto');
+  a.s.endSession = (u, id) => ended.push([u, id]);
+  assert.equal(a.s.sessionMismatch(hit), true);
+  assert.deepEqual(ended, [['u1', 's1']]);
+  assert.equal(a.s.isBanned('87.1.1.1'), true);
+  assert.match(a.s.incidents[0].handled, /signed out/);
+});
+
 // ---------- through the server ----------
 
 test('outside (HTTPS) scanners are banned in auto mode, and the admin can see and lift it', async () => {
@@ -212,6 +258,21 @@ test('outside (HTTPS) scanners are banned in auto mode, and the admin can see an
     assert.match(text, /87\.7\.7\.7/);
     assert.doesNotMatch(text, /scrypt:/);
     assert.equal((await fetch(`${base}/api/admin/sentinel/report?incident=nope`, { headers: { Cookie: cookie } })).status, 404);
+
+    // A stolen sign-in: the admin's cookie (made over plain HTTP at home) turns up on the outside in another browser.
+    await call('PUT', '/api/admin/sentinel', { mode: 'manual' }, cookie);
+    const getAs = (p, ip, ua, ck) => new Promise((resolve, reject) => https.get({ host: '127.0.0.1', port: secure.address().port, path: p, rejectUnauthorized: false, agent: false, servername: 'localhost', headers: { 'X-Forwarded-For': ip, 'User-Agent': ua, Cookie: ck } }, (res) => { let body = ''; res.on('data', (d) => { body += d; }); res.on('end', () => resolve({ status: res.statusCode, body })); }).on('error', reject));
+    const chrome = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0 Safari/537.36';
+    const seenAs = (r) => JSON.parse(r.body).user;
+    // The cookie from a session made by "node" (Unknown browser): same label, no alarm.
+    assert.equal((seenAs(await getAs('/api/state', '87.5.5.5', 'node', cookie))).username, 'raven');
+    assert.equal((await call('GET', '/api/admin/sentinel', null, cookie)).body.incidents.some((i) => i.kind === 'session'), false);
+    // Manual: a different browser raises an incident but still gets in; Sign out ends it.
+    assert.equal((seenAs(await getAs('/api/state', '87.5.5.6', chrome, cookie))).username, 'raven');
+    const stolen = (await call('GET', '/api/admin/sentinel', null, cookie)).body.incidents.find((i) => i.kind === 'session');
+    assert.equal(stolen.canEnd, true);
+    assert.equal((await call('POST', '/api/admin/sentinel/end-session', { incident: stolen.id }, cookie)).status, 200);
+    assert.equal(seenAs(await getAs('/api/state', '87.5.5.6', chrome, cookie)), null);
   } finally {
     secure.closeAllConnections();
     secure.close();

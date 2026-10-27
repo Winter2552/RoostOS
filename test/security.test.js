@@ -103,6 +103,14 @@ test('the checklist says all is well when it is', () => {
   assert.equal(out.headline, 'Everything looks safe');
 });
 
+test('an update waiting a long time turns the checklist red', () => {
+  const find = (waitingDays) => securityChecks({ ...base, updates: { checked: true, update: 1, restart: 0, waitingDays } }).checks.find((c) => c.id === 'updates');
+  assert.equal(find(0).status, 'warn');
+  assert.match(find(9).title, /the oldest for 9 days/);
+  assert.equal(find(9).status, 'warn');
+  assert.equal(find(30).status, 'bad');
+});
+
 test('the checklist reports the backup test', () => {
   const at = '2026-10-20T03:00:00Z';
   const find = (backupTest, state = 'ok') => securityChecks({ ...base, backup: { state }, backupTest }).checks.find((c) => c.id === 'backup-test');
