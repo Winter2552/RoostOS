@@ -231,7 +231,7 @@
     // Fetch price only shows when an admin has switched it on; asked about once.
     if (S.fetchOn === undefined) {
       S.fetchOn = false;
-      api('GET', '/api/birdhouse').then((r) => { S.fetchOn = r.fetch; if (r.fetch && S.view === 'cost') paint(); }).catch(() => {});
+      flags().then((r) => { S.fetchOn = r.fetch; if (r.fetch && S.view === 'cost') paint(); });
     }
     const rows = items.map((m) => {
       const note = h('span', { class: 'bh-age' });
@@ -435,7 +435,7 @@
     if (document.activeElement !== name) name.value = S.name;
     $('#bh-kind').textContent = info().name;
     $('#bh-chips').replaceChildren(...info().chips(S.d, fmt).map((t) => h('span', { class: 'bh-chip', text: t })));
-    $('#bh-checks').replaceChildren(...model.checks(S.d).map((c) => h('p', { class: c.level === 'warn' ? 'bh-warn' : 'bh-note', text: `${c.level === 'warn' ? 'Careful: ' : 'Tip: '}${c.text}` })));
+    $('#bh-checks').replaceChildren(...(S.d.notes ? [h('p', { class: 'bh-note', text: `Design notes: ${S.d.notes}` })] : []), ...model.checks(S.d).map((c) => h('p', { class: c.level === 'warn' ? 'bh-warn' : 'bh-note', text: `${c.level === 'warn' ? 'Careful: ' : 'Tip: '}${c.text}` })));
     $('#bh-tabs').replaceChildren(...tabs());
     $('#bh-view').replaceChildren(VIEWS.find((v) => v[0] === S.view)[2]());
     $('#bh-cuts').replaceChildren(cutList());
@@ -452,6 +452,7 @@
       onclick: () => { S.by[S.d.template] = S.d; S.d = S.by[id] || model.defaults(id); fill(); paint(); },
     })));
     const show = (key, v) => (COUNTS.has(key) ? String(v) : fmt(v));
+    if (S.d.template === 'custom') return [projects, h('p', { class: 'bh-note', text: 'This is a custom design, so it has no sliders. To change it, use Ask Claude on the projects page and describe the change.' })];
     // How it is built: a timber frame with plywood skins, or sheets butted together.
     const style = info().framed ? h('div', { class: 'bh-projects', role: 'group', 'aria-label': 'How it is built' },
       ...[['framed', 'Framed'], ['panel', 'Panels']].map(([id, name]) => h('button', {
@@ -584,6 +585,8 @@
   function readSentence(text, current) {
     const p = model.parse(text, current);
     if (!p.template && !Object.keys(p.set).length && !p.unused.length) return null;
+    // Starting a project with no project word in it: don't guess one.
+    if (!current && !p.template) return { unknown: true };
     const id = p.template || current || 'bookshelf';
     const d = model.clean({ ...(current && id === S.d.template ? S.d : model.defaults(id)), template: id, ...p.set });
     const t = model.TEMPLATES[id];
@@ -607,65 +610,78 @@
   // person pastes into their own Claude chat, then pastes the reply back.
   // Birdhouse calls nothing and holds no key: the chat is the person's own.
   function askPrompt(idea) {
-    const kinds = model.IDS.map((id) => {
-      const t = model.TEMPLATES[id];
-      const sizes = Object.entries(t.limits).map(([k, l]) => `${k} (${l.label}, ${l.min} to ${l.max}${COUNTS.has(k) ? '' : ' mm'})`).join(', ');
-      return `- ${id}: ${t.name}. ${sizes}`;
-    }).join('\n');
-    return `I'm planning a woodworking project in an app called Birdhouse. Turn my idea into one of these project types and sizes.
-
-Project types and the sizes each one takes:
-${kinds}
-
-Reply with only a JSON object in a code block, like:
-{"template": "bookshelf", "name": "Hall shelves", "sizes": {"height": 1800, "width": 800}}
-Use whole millimetres (counts like shelves are plain numbers), only the keys listed for that type, and the closest type if none fits exactly.
-
-My idea: ${idea.trim() || '(describe what you want to build)'}`;
+    return `${model.designInstructions()}\n\nMy idea: ${idea.trim() || '(describe what you want to build)'}`;
   }
 
-  // The first {...} in a reply, tolerating a code fence or chat around it.
-  function readReply(reply) {
-    const start = reply.indexOf('{');
-    const end = reply.lastIndexOf('}');
-    if (start < 0 || end <= start) return null;
-    let data;
-    try { data = JSON.parse(reply.slice(start, end + 1)); } catch { return null; }
-    if (!data || typeof data !== 'object' || !model.TEMPLATES[data.template]) return null;
-    const sizes = data.sizes && typeof data.sizes === 'object' ? data.sizes : {};
-    const t = model.TEMPLATES[data.template];
-    const set = {};
-    for (const k of Object.keys(t.limits)) if (sizes[k] !== undefined && Number.isFinite(Number(sizes[k]))) set[k] = Number(sizes[k]);
-    const name = typeof data.name === 'string' ? data.name.replace(/\s+/g, ' ').trim().slice(0, 60) : '';
-    return { d: model.clean({ template: data.template, ...t.defaults, ...set }), name: name || t.name };
+  // Reads Claude's reply; null if there is no usable design in it.
+  const readReply = (reply) => { const r = model.readDesign(reply); return r.ok ? r : null; };
+
+  // Asked once: whether Fetch price and Design with Claude are switched on.
+  function flags() {
+    if (!S.flags) S.flags = api('GET', '/api/birdhouse').catch(() => ({ fetch: false, ai: null }));
+    return S.flags;
   }
 
   function openAsk(button) {
     if (S.card) { const same = S.cardButton === button; closeCard(); if (same) return; }
-    const idea = h('textarea', { rows: '2', maxlength: '300', placeholder: 'e.g. a low shelf for my records, about a metre wide', 'aria-label': 'Your idea' });
+    const idea = h('textarea', { rows: '2', maxlength: '1500', placeholder: 'e.g. a low shelf for my records, about a metre wide', 'aria-label': 'Your idea' });
     const prompt = h('textarea', { rows: '4', readonly: true, 'aria-label': 'Request to paste into Claude' });
-    const reply = h('textarea', { rows: '3', maxlength: '4000', placeholder: 'Paste Claude’s reply here', 'aria-label': 'Claude’s reply' });
+    const reply = h('textarea', { rows: '3', maxlength: '60000', placeholder: 'Paste Claude’s reply here', 'aria-label': 'Claude’s reply' });
     const say = h('p', { class: 'bh-note', 'aria-live': 'polite' });
     const sync = () => { prompt.value = askPrompt(idea.value); };
     idea.addEventListener('input', sync);
     sync();
+    const finish = async (got) => { closeCard(); await newPlan(got.d, got.name); };
+    // Design with Claude: only when an admin has saved a key.
+    const ai = h('div', { class: 'bh-ai' });
     popup('Ask Claude', button,
-      h('p', { class: 'bh-note', text: 'Uses your own Claude chat, so nothing is sent from Roost and no key is needed. Copy the request, paste it into Claude, then paste its reply here.' }),
-      h('label', { class: 'bh-field' }, h('span', { text: '1. Your idea' }), idea),
-      h('label', { class: 'bh-field' }, h('span', { text: '2. Copy this into Claude' }), prompt),
-      h('button', { type: 'button', class: 'bh-btn bh-small', text: 'Copy request', onclick: async () => {
-        try { await navigator.clipboard.writeText(prompt.value); say.textContent = 'Copied. Paste it into your Claude chat.'; } catch { prompt.select(); say.textContent = 'Select and copy it.'; }
-      } }),
-      h('label', { class: 'bh-field' }, h('span', { text: '3. Claude’s reply' }), reply),
-      h('div', { class: 'bh-actions' }, h('button', { type: 'button', class: 'bh-btn solid', text: 'Make the plan', onclick: async () => {
-        const got = readReply(reply.value);
-        if (!got) { say.textContent = 'I couldn’t find the plan in that. Paste Claude’s whole reply, including the { } part.'; return; }
-        closeCard();
-        await newPlan(got.d, got.name);
-      } })),
+      h('label', { class: 'bh-field' }, h('span', { text: 'Your idea' }), idea),
+      ai,
+      h('details', { class: 'bh-paste' },
+        h('summary', { text: 'Or use your own Claude chat (no key needed)' }),
+        h('p', { class: 'bh-note', text: 'Nothing is sent from Roost. Copy the request, paste it into Claude, then paste its reply back here.' }),
+        h('label', { class: 'bh-field' }, h('span', { text: 'Copy this into Claude' }), prompt),
+        h('button', { type: 'button', class: 'bh-btn bh-small', text: 'Copy request', onclick: async () => {
+          try { await navigator.clipboard.writeText(prompt.value); say.textContent = 'Copied. Paste it into your Claude chat.'; } catch { prompt.select(); say.textContent = 'Select and copy it.'; }
+        } }),
+        h('label', { class: 'bh-field' }, h('span', { text: 'Claude’s reply' }), reply),
+        h('div', { class: 'bh-actions' }, h('button', { type: 'button', class: 'bh-btn solid', text: 'Make the plan', onclick: async () => {
+          const got = readReply(reply.value);
+          if (!got) { say.textContent = 'I couldn’t find a design in that. Paste Claude’s whole reply, including the { } part.'; return; }
+          await finish(got);
+        } }))),
       say);
     idea.focus({ preventScroll: true });
+    flags().then(({ ai: info }) => {
+      if (!info || !ai.isConnected) return;
+      let tier = info.tiers[1] ? info.tiers[1].id : info.tiers[0].id;
+      const note = h('p', { class: 'bh-note' });
+      const tell = () => {
+        const t = info.tiers.find((x) => x.id === tier);
+        note.textContent = `${t.hint} About $${t.estimate.toFixed(2)} a design. ${info.left} left today; $${info.spent.toFixed(2)} of $${info.monthCap} used this month.`;
+      };
+      const picks = h('div', { class: 'bh-projects', role: 'group', 'aria-label': 'How hard Claude thinks' }, ...info.tiers.map((t) => h('button', {
+        type: 'button', class: `bh-pick${t.id === tier ? ' on' : ''}`, 'aria-pressed': String(t.id === tier), text: t.label,
+        onclick: (e) => { tier = t.id; for (const b of picks.children) { const on = b === e.currentTarget; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); } tell(); },
+      })));
+      const go = h('button', { type: 'button', class: 'bh-btn solid', text: 'Design it', onclick: async () => {
+        if (!idea.value.trim()) { say.textContent = 'Say what you want to build first.'; return; }
+        go.disabled = true;
+        say.textContent = 'Claude is designing it. Deeper tiers can take a few minutes…';
+        try {
+          const r = await api('POST', '/api/birdhouse/design', { prompt: idea.value, tier });
+          flags_reset();
+          await finish({ d: r.d, name: r.name });
+        } catch (err) {
+          go.disabled = false;
+          say.textContent = err.message;
+        }
+      } });
+      ai.replaceChildren(h('b', { class: 'bh-aihead', text: 'Design with Claude' }), picks, note, h('div', { class: 'bh-actions' }, go));
+      tell();
+    });
   }
+  const flags_reset = () => { S.flags = null; };
 
   // ---------- projects ----------
   async function newPlan(d, name) {
@@ -728,6 +744,7 @@ My idea: ${idea.trim() || '(describe what you want to build)'}`;
       e.preventDefault();
       const r = readSentence(ask.querySelector('input').value, null);
       if (!r) { flashHome('Try: bookshelf 1800 tall, 800 wide, 5 shelves'); return; }
+      if (r.unknown) { flashHome(`I don’t know that project yet. I can plan a ${model.IDS.map((id) => model.TEMPLATES[id].name.toLowerCase()).join(', ')}. Tap one, or use Ask Claude to turn your idea into the closest.`); return; }
       newPlan(r.d, null);
     });
     const starters = h('ul', { class: 'bh-starters' }, ...model.IDS.map((id) => h('li', {}, h('button', { type: 'button', class: 'bh-starter', 'aria-label': `New ${model.TEMPLATES[id].name.toLowerCase()}`, onclick: () => newPlan(model.defaults(id), null) },

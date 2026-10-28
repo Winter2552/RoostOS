@@ -16,7 +16,7 @@ const path = require('node:path');
 
 // Files that already make outbound calls or start programs; a new file doing
 // either gets flagged so somebody looks at what it can reach.
-const OUTBOUND = new Set(['acme', 'cloudflare', 'coffee', 'docker', 'docker-helper', 'jellyfin', 'mail', 'portcheck', 'push', 'remote', 'server', 'uptime', 'birdhouse', 'immich', 'wireguard', 'updates', 'tls', 'self-update']);
+const OUTBOUND = new Set(['acme', 'cloudflare', 'coffee', 'docker', 'docker-helper', 'jellyfin', 'mail', 'portcheck', 'push', 'remote', 'server', 'uptime', 'birdhouse', 'birdhouse-ai', 'immich', 'wireguard', 'updates', 'tls', 'self-update']);
 const PROGRAMS = new Set(['convert', 'wireguard']);
 const CAPS = new Set(['NET_ADMIN', 'SYS_RAWIO']);
 const PORTS = new Set(['8080:8080', '443:8443']);

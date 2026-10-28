@@ -297,3 +297,48 @@ test('tip-over and sagging checks: tall panel pieces are warned about, framed on
   assert.deepEqual(model.checks(model.defaults('table')), []);
   assert.ok(model.checks(model.clean({ template: 'bookshelf', width: 2000, thickness: 12 })).some((c) => /sag/.test(c.text)));
 });
+
+test('a stool is a project, and new project words are known', () => {
+  assert.equal(model.parse('a stool 450 high', null).template, 'stool');
+  assert.equal(model.parse('a barstool', null).template, 'stool');
+  assert.equal(model.parse('a nightstand 500 tall', null).template, 'cabinet');
+  assert.equal(model.parse('a workbench 1800 x 600 x 900', null).template, 'desk');
+  for (const style of ['framed', 'panel']) {
+    const d = model.clean({ template: 'stool', style });
+    assert.equal(model.layout(d).tooBig.length, 0);
+    assert.equal(model.parts(d).find((r) => r.name === 'Leg').qty, 4);
+  }
+  assert.ok(model.parts(model.defaults('stool')).some((r) => r.name === 'Low stretcher'));
+});
+
+test('a custom design is read from a reply, cleaned, and checked', () => {
+  const reply = 'Sure:\n```json\n' + JSON.stringify({ template: 'custom', name: 'Record shelf', notes: 'Frame and skins.', boards: [
+    { name: 'Post', x: 100, y: 50, z: 0, w: 44, d: 44, h: 600 },
+    { name: 'Top', x: 100, y: 50, z: 600, w: 400, d: 300, h: 18 },
+    { name: 'Bad', x: 0, y: 0, z: 0, w: 0, d: 5, h: 5 },
+    { name: 'Island', x: 2000, y: 0, z: 0, w: 50, d: 50, h: 50 },
+  ] }) + '\n```';
+  const r = model.readDesign(reply);
+  assert.equal(r.ok, true);
+  assert.equal(r.d.template, 'custom');
+  assert.equal(r.d.boards.length, 3, 'the unusable board is dropped');
+  assert.equal(Math.min(...r.d.boards.map((b) => b.x)), 0, 'moved to the origin');
+  assert.ok(r.problems.some((p) => /not attached/.test(p)) && r.problems.some((p) => /could not be used/.test(p)));
+  assert.ok(model.checks(r.d).some((c) => c.level === 'warn' && /not attached/.test(c.text)));
+  assert.ok(model.layout(r.d).sheets.length + model.layout(r.d).timber.length > 0);
+  assert.ok(model.materials(r.d).length > 0);
+});
+
+test('boards that pass through each other are flagged, and replies without a design are refused', () => {
+  const d = model.readDesign(JSON.stringify({ template: 'custom', boards: [
+    { name: 'A', x: 0, y: 0, z: 0, w: 100, d: 100, h: 100 }, { name: 'B', x: 20, y: 20, z: 20, w: 100, d: 100, h: 100 } ] }));
+  assert.ok(d.problems.some((p) => /pass through/.test(p)));
+  assert.equal(model.readDesign('no json here').ok, false);
+  assert.equal(model.readDesign('{"template":"nonsense"}').ok, false);
+  assert.equal(model.readDesign(JSON.stringify({ template: 'custom', boards: [{ name: 'One', x: 0, y: 0, z: 0, w: 5, d: 5, h: 5 }] })).ok, false);
+  const built = model.readDesign('{"template":"stool","sizes":{"height":450}}');
+  assert.equal(built.ok, true);
+  assert.equal(built.d.height, 450);
+  assert.ok(!model.IDS.includes('custom'));
+  assert.match(model.designInstructions(), /"template": "custom"/);
+});

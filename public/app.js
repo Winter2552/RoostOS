@@ -2631,6 +2631,7 @@ const adminLoaders = {
     form.adminsNeedTwoStep.checked = settings.adminsNeedTwoStep;
     form.publicLinks.checked = settings.publicLinks;
     form.birdhouseFetch.checked = settings.birdhouseFetch;
+    showBirdhouseAi(settings.birdhouseAi);
     form.energyPrice.value = settings.energyPrice;
     form.energyCurrency.value = settings.energyCurrency;
     form.serverName.value = state.serverName;
@@ -3104,6 +3105,28 @@ $('#settings-form').addEventListener('submit', async (e) => {
     flash(e.target, 'Saved');
   } catch (err) { flash(e.target, err.message, false); }
 });
+
+// Birdhouse's Claude key: the key itself is never sent back, only its last four.
+function showBirdhouseAi(ai) {
+  const form = $('#birdhouse-ai');
+  form.monthCap.value = ai.monthCap;
+  form.dayCap.value = ai.dayCap;
+  form.key.value = '';
+  $('#bhai-remove').hidden = !ai.on;
+  $('#bhai-state').textContent = ai.on ? `Key saved (ends ${ai.last4}). Used $${ai.spent.toFixed(2)} this month and ${ai.today} design${ai.today === 1 ? '' : 's'} today.` : 'No key saved, so Design with Claude is off. Pasting from your own Claude chat still works.';
+}
+async function saveBirdhouseAi(body, form) {
+  try {
+    showBirdhouseAi(await api('PUT', '/api/admin/birdhouse-ai', body));
+    flash(form, 'Saved');
+  } catch (err) { flash(form, err.message, false); }
+}
+$('#birdhouse-ai').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const f = e.target;
+  saveBirdhouseAi({ key: f.key.value, monthCap: f.monthCap.value, dayCap: f.dayCap.value }, f);
+});
+$('#bhai-remove').addEventListener('click', () => saveBirdhouseAi({ remove: true }, $('#birdhouse-ai')));
 
 // ---------- security ----------
 async function loadSecurity() {
