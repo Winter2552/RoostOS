@@ -19,6 +19,14 @@ function verifyPassword(password, stored) {
   return crypto.timingSafeEqual(expected, actual);
 }
 
+// Checked when the username doesn't exist, so a wrong name takes as long to
+// refuse as a wrong password and the reply time can't reveal who has an account.
+const DUMMY_HASH = hashPassword(crypto.randomBytes(8).toString('hex'));
+function verifyAgainstNobody(password) {
+  verifyPassword(String(password), DUMMY_HASH);
+  return false;
+}
+
 // Sign-ins (browser sessions and device keys) are saved to sessions.json so a
 // restart or update doesn't sign everyone out. Only a hash of each token is
 // written, so the file can't be used to sign in.
@@ -184,4 +192,5 @@ class RateLimiter {
   }
 }
 
-module.exports = { hashPassword, verifyPassword, Sessions, RateLimiter, deviceName, SESSION_TTL_MS, APP_KEY_TTL_MS };
+module.exports = {
+  verifyAgainstNobody, hashPassword, verifyPassword, Sessions, RateLimiter, deviceName, SESSION_TTL_MS, APP_KEY_TTL_MS };

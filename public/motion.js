@@ -38,7 +38,7 @@
       document.body.append(overlay);
     }
     overlay.classList.remove('on');
-    overlay.innerHTML = `${app.svg}<div class="switch-name mono"></div>`;
+    overlay.innerHTML = `${app.svg}<div class="switch-name mono"></div>`; // code-check: ok (Roost's own app marks)
     overlay.querySelector('.switch-name').textContent = app.name;
     void overlay.offsetWidth; // restart the animation if one is still showing
     overlay.classList.add('on');
