@@ -1420,7 +1420,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const user = requireBirdhouse(req);
       const a = db().settings.birdhouseAi;
       if (!a || !a.key) throw new HttpError(403, 'Design with Claude is not set up');
-      const body = await readJson(req, 8000);
+      const body = await readJson(req, 60000);
       const tier = str(body.tier, 20);
       if (!birdhouseAi.TIER_IDS.includes(tier)) throw new HttpError(400, 'Pick a tier');
       const wish = str(body.prompt, 1500).trim();
@@ -1433,7 +1433,9 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (!key) throw new HttpError(500, 'The saved key cannot be read. Save it again in Admin');
       designing = true;
       try {
-        const messages = [{ role: 'user', content: wish }];
+        // Changing an existing design: it goes along, cleaned, so Claude builds on it.
+        const cur = body.current && body.current.d ? birdhouseModel.clean(body.current.d) : null;
+        const messages = [{ role: 'user', content: cur ? birdhouseModel.reviseRequest(cur, str(body.current.name, 60) || birdhouseModel.info(cur).name, wish) : wish }];
         let reply = await birdhouseAi.ask({ key, tier, system: birdhouseModel.designInstructions(), messages, baseUrl: aiBase });
         let spent = reply.cost;
         let read = birdhouseModel.readDesign(reply.text);

@@ -91,7 +91,7 @@ test('without a key Design with Claude is off and the design route refuses', asy
 test('the key is stored encrypted, never sent back, and bad keys are refused', async () => {
   assert.equal((await call('PUT', '/api/admin/birdhouse-ai', { key: 'not a key' })).status, 400);
   const key = `sk-ant-${'a'.repeat(30)}WXYZ`;
-  const saved = await call('PUT', '/api/admin/birdhouse-ai', { key, monthCap: 5, dayCap: 3 });
+  const saved = await call('PUT', '/api/admin/birdhouse-ai', { key, monthCap: 5, dayCap: 4 });
   assert.equal(saved.status, 200);
   assert.deepEqual([saved.body.on, saved.body.last4], [true, 'WXYZ']);
   assert.ok(!JSON.stringify(saved.body).includes(key));
@@ -133,6 +133,19 @@ test('an unreadable reply gets one repair attempt, and a second failure is repor
   assert.match(seen[1].body.messages[2].content, /could not be used/);
   replies = ['nope', 'still nope'];
   assert.equal((await call('POST', '/api/birdhouse/design', { prompt: 'x', tier: 'quick' })).status, 422);
+});
+
+test('changing a design sends its current boards along', async () => {
+  const model = require('../public/birdhouse-model');
+  const d = model.readDesign(good).d;
+  replies = [`\`\`\`json\n${good}\n\`\`\``];
+  seen = [];
+  const r = await call('POST', '/api/birdhouse/design', { prompt: 'make it taller', tier: 'quick', current: { name: 'Record shelf', d } });
+  assert.equal(r.status, 200);
+  const sent = seen[0].body.messages[0].content;
+  assert.match(sent, /"name":"Post"/);
+  assert.match(sent, /make it taller/);
+  assert.equal(model.readDesign(sent).d.boards.length, 2, 'what was sent can be read back as the same design');
 });
 
 test('the daily limit stops further designs, and API errors are explained', async () => {

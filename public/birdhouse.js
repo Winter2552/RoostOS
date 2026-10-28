@@ -596,6 +596,14 @@
 
   function draft(text) {
     const say = $('#bh-say');
+    // A custom design has no sliders or project words to read: changes go to
+    // Claude along with the boards, so it builds on what is there.
+    if (S.d.template === 'custom') {
+      if (!text.trim()) { say.textContent = 'Say what to change, like "make it 200 mm taller and add a drawer".'; return; }
+      say.textContent = '';
+      openAsk($('#bh-ask button'), text.trim());
+      return;
+    }
     const r = readSentence(text, S.d.template);
     if (!r) { say.textContent = 'Try: bookshelf 1800 tall, 800 wide, 5 shelves'; return; }
     if (r.p.template && r.p.template !== S.d.template) S.by[S.d.template] = S.d;
@@ -609,7 +617,8 @@
   // For wording the helper can't read, Birdhouse writes a short request the
   // person pastes into their own Claude chat, then pastes the reply back.
   // Birdhouse calls nothing and holds no key: the chat is the person's own.
-  function askPrompt(idea) {
+  function askPrompt(idea, revise) {
+    if (revise) return `${model.designInstructions()}\n\n${model.reviseRequest(S.d, S.name || model.info(S.d).name, idea.trim() || '(describe the change)')}`;
     return `${model.designInstructions()}\n\nMy idea: ${idea.trim() || '(describe what you want to build)'}`;
   }
 
@@ -622,20 +631,29 @@
     return S.flags;
   }
 
-  function openAsk(button) {
+  // change: text for changing the open design (then Claude gets its boards too).
+  function openAsk(button, change) {
+    const revise = typeof change === 'string';
     if (S.card) { const same = S.cardButton === button; closeCard(); if (same) return; }
-    const idea = h('textarea', { rows: '2', maxlength: '1500', placeholder: 'e.g. a low shelf for my records, about a metre wide', 'aria-label': 'Your idea' });
+    const idea = h('textarea', { rows: '2', maxlength: '1500', placeholder: revise ? 'What to change' : 'e.g. a low shelf for my records, about a metre wide', 'aria-label': revise ? 'The change' : 'Your idea' });
+    if (revise) idea.value = change;
     const prompt = h('textarea', { rows: '4', readonly: true, 'aria-label': 'Request to paste into Claude' });
     const reply = h('textarea', { rows: '3', maxlength: '60000', placeholder: 'Paste Claude’s reply here', 'aria-label': 'Claude’s reply' });
     const say = h('p', { class: 'bh-note', 'aria-live': 'polite' });
-    const sync = () => { prompt.value = askPrompt(idea.value); };
+    const sync = () => { prompt.value = askPrompt(idea.value, revise); };
     idea.addEventListener('input', sync);
     sync();
-    const finish = async (got) => { closeCard(); await newPlan(got.d, got.name); };
+    const finish = async (got) => {
+      closeCard();
+      if (!revise) { await newPlan(got.d, got.name); return; }
+      S.d = got.d; // the same project, changed: it saves like any other edit
+      fill(); paint();
+      $('#bh-say').textContent = 'Changed it.';
+    };
     // Design with Claude: only when an admin has saved a key.
     const ai = h('div', { class: 'bh-ai' });
-    popup('Ask Claude', button,
-      h('label', { class: 'bh-field' }, h('span', { text: 'Your idea' }), idea),
+    popup(revise ? 'Change with Claude' : 'Ask Claude', button,
+      h('label', { class: 'bh-field' }, h('span', { text: revise ? 'The change' : 'Your idea' }), idea),
       ai,
       h('details', { class: 'bh-paste' },
         h('summary', { text: 'Or use your own Claude chat (no key needed)' }),
@@ -645,7 +663,7 @@
           try { await navigator.clipboard.writeText(prompt.value); say.textContent = 'Copied. Paste it into your Claude chat.'; } catch { prompt.select(); say.textContent = 'Select and copy it.'; }
         } }),
         h('label', { class: 'bh-field' }, h('span', { text: 'Claude’s reply' }), reply),
-        h('div', { class: 'bh-actions' }, h('button', { type: 'button', class: 'bh-btn solid', text: 'Make the plan', onclick: async () => {
+        h('div', { class: 'bh-actions' }, h('button', { type: 'button', class: 'bh-btn solid', text: revise ? 'Apply the change' : 'Make the plan', onclick: async () => {
           const got = readReply(reply.value);
           if (!got) { say.textContent = 'I couldn’t find a design in that. Paste Claude’s whole reply, including the { } part.'; return; }
           await finish(got);
@@ -664,12 +682,12 @@
         type: 'button', class: `bh-pick${t.id === tier ? ' on' : ''}`, 'aria-pressed': String(t.id === tier), text: t.label,
         onclick: (e) => { tier = t.id; for (const b of picks.children) { const on = b === e.currentTarget; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); } tell(); },
       })));
-      const go = h('button', { type: 'button', class: 'bh-btn solid', text: 'Design it', onclick: async () => {
+      const go = h('button', { type: 'button', class: 'bh-btn solid', text: revise ? 'Change it' : 'Design it', onclick: async () => {
         if (!idea.value.trim()) { say.textContent = 'Say what you want to build first.'; return; }
         go.disabled = true;
         say.textContent = 'Claude is designing it. Deeper tiers can take a few minutes…';
         try {
-          const r = await api('POST', '/api/birdhouse/design', { prompt: idea.value, tier });
+          const r = await api('POST', '/api/birdhouse/design', { prompt: idea.value, tier, current: revise ? { name: S.name, d: S.d } : undefined });
           flags_reset();
           await finish({ d: r.d, name: r.name });
         } catch (err) {
@@ -677,7 +695,7 @@
           say.textContent = err.message;
         }
       } });
-      ai.replaceChildren(h('b', { class: 'bh-aihead', text: 'Design with Claude' }), picks, note, h('div', { class: 'bh-actions' }, go));
+      ai.replaceChildren(h('b', { class: 'bh-aihead', text: revise ? 'Change with Claude' : 'Design with Claude' }), picks, note, h('div', { class: 'bh-actions' }, go));
       tell();
     });
   }
