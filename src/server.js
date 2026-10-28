@@ -9,6 +9,9 @@ const os = require('os');
 const path = require('path');
 const { Store, DEFAULT_APPS } = require('./store');
 const birdhouse = require('./birdhouse');
+const birdhouseAi = require('./birdhouse-ai');
+const secrets = require('./secrets');
+const birdhouseModel = require('../public/birdhouse-model');
 const { hashPassword, verifyPassword, verifyAgainstNobody, Sessions, RateLimiter, deviceName, SESSION_TTL_MS } = require('./auth');
 const storage = require('./storage');
 const links = require('./links');
@@ -266,7 +269,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, coffeeOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, registryFetch, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000, alertIntervalMs = 60 * 1000, readContainers, push: pushOptions = {}, portOptions = {} } = {}) {
+function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, coffeeOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, registryFetch, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000, alertIntervalMs = 60 * 1000, readContainers, push: pushOptions = {}, portOptions = {}, aiBase } = {}) {
   const store = new Store(dataDir);
   const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
   // The few outside services Roost leans on, for the admin's status page.
@@ -312,6 +315,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     linked = true;
   }
   if (linked) store.save();
+  let designing = false; // one Claude design at a time
   const priceAsked = new Map(); // when each person last pressed Fetch price
   // Roostflix, the look Roost gives Jellyfin's page, is on unless switched off.
   const jellyfin = new Jellyfin(
@@ -884,11 +888,43 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     return url.origin;
   }
 
+  // Birdhouse's Claude key: kept encrypted (see secrets.js); only the last four
+  // characters and the spending so far are ever shown.
+  const aiDefaults = { monthCap: 5, dayCap: 20 };
+  function aiState() {
+    const a = db().settings.birdhouseAi || {};
+    const day = new Date().toISOString().slice(0, 10);
+    const month = day.slice(0, 7);
+    const u = a.usage || {};
+    return {
+      on: Boolean(a.key),
+      last4: a.last4 || '',
+      monthCap: a.monthCap ?? aiDefaults.monthCap,
+      dayCap: a.dayCap ?? aiDefaults.dayCap,
+      today: u.day === day ? u.count : 0,
+      spent: u.month === month ? u.spent : 0,
+    };
+  }
+  function aiView() {
+    return aiState();
+  }
+  function aiUse(usd) {
+    const a = db().settings.birdhouseAi;
+    const day = new Date().toISOString().slice(0, 10);
+    const month = day.slice(0, 7);
+    const u = a.usage && a.usage.month === month ? a.usage : { month, spent: 0, day, count: 0 };
+    if (u.day !== day) { u.day = day; u.count = 0; }
+    u.count += 1;
+    u.spent = Math.round((u.spent + usd) * 10000) / 10000;
+    a.usage = u;
+    store.save();
+  }
+
   // Settings for the admin page. The mail password never leaves the server.
   function settingsView() {
     // The Cloudflare token (in tls) stays on the server.
-    const { mail: _mail, jellyfin: _jellyfin, tls: _tls, coffee: _coffee, wireguard: _wireguard, galaxies: _galaxies, ...rest } = db().settings;
-    return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()), publicLinks: rest.publicLinks !== false, birdhouseFetch: rest.birdhouseFetch === true, ...energyView() };
+    const { mail: _mail, jellyfin: _jellyfin, tls: _tls, coffee: _coffee, wireguard: _wireguard, galaxies: _galaxies, birdhouseAi: _birdhouseAi, ...rest } = db().settings;
+    return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()), publicLinks: rest.publicLinks !== false, birdhouseFetch: rest.birdhouseFetch === true, birdhouseAi: aiView(), ...energyView() };
   }
 
   // The admin's notice on the dashboard. Expired notices are simply not
@@ -1358,7 +1394,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     // reads one shop page, only when asked, and only for people with the app.
     'GET /api/birdhouse': (req, res) => {
       const user = requireUser(req);
-      send(res, 200, { fetch: db().settings.birdhouseFetch === true && visibleApps(db(), user).some((a) => a.id === 'birdhouse') });
+      const has = visibleApps(db(), user).some((a) => a.id === 'birdhouse');
+      const ai = aiState();
+      send(res, 200, {
+        fetch: db().settings.birdhouseFetch === true && has,
+        ai: has && ai.on ? { tiers: birdhouseAi.TIER_IDS.map((id) => ({ id, label: birdhouseAi.TIERS[id].label, hint: birdhouseAi.TIERS[id].hint, estimate: Math.round(birdhouseAi.estimate(id) * 100) / 100 })), left: Math.max(0, ai.dayCap - ai.today), spent: ai.spent, monthCap: ai.monthCap } : null,
+      });
     },
     'POST /api/birdhouse/price': async (req, res) => {
       const user = requireUser(req);
@@ -1372,6 +1413,81 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         if (err instanceof birdhouse.FetchError) throw new HttpError(422, err.message);
         throw err;
       }
+    },
+
+    // Birdhouse: "Design with Claude" through the API, only if an admin saved a key.
+    'POST /api/birdhouse/design': async (req, res) => {
+      const user = requireBirdhouse(req);
+      const a = db().settings.birdhouseAi;
+      if (!a || !a.key) throw new HttpError(403, 'Design with Claude is not set up');
+      const body = await readJson(req, 8000);
+      const tier = str(body.tier, 20);
+      if (!birdhouseAi.TIER_IDS.includes(tier)) throw new HttpError(400, 'Pick a tier');
+      const wish = str(body.prompt, 1500).trim();
+      if (!wish) throw new HttpError(400, 'Say what you want to build');
+      const st = aiState();
+      if (st.today >= st.dayCap) throw new HttpError(429, `That is ${st.dayCap} designs today; try tomorrow or raise the limit in Admin`);
+      if (st.spent + birdhouseAi.estimate(tier) > st.monthCap) throw new HttpError(429, `That could pass this month's $${st.monthCap} limit (spent $${st.spent.toFixed(2)}). Raise it in Admin or pick a cheaper tier`);
+      if (designing) throw new HttpError(429, 'A design is already being made, give it a moment');
+      const key = secrets.open(dataDir, a.key);
+      if (!key) throw new HttpError(500, 'The saved key cannot be read. Save it again in Admin');
+      designing = true;
+      try {
+        const messages = [{ role: 'user', content: wish }];
+        let reply = await birdhouseAi.ask({ key, tier, system: birdhouseModel.designInstructions(), messages, baseUrl: aiBase });
+        let spent = reply.cost;
+        let read = birdhouseModel.readDesign(reply.text);
+        if (!read.ok) {
+          // One repair attempt, telling it what was wrong.
+          messages.push({ role: 'assistant', content: reply.text }, { role: 'user', content: `That could not be used: ${read.error}. Reply again with only the JSON object in a code block.` });
+          reply = await birdhouseAi.ask({ key, tier, system: birdhouseModel.designInstructions(), messages, baseUrl: aiBase });
+          spent += reply.cost;
+          read = birdhouseModel.readDesign(reply.text);
+        }
+        aiUse(spent);
+        record(req, 'settings-changed', { actor: user.username, detail: `Birdhouse design (${tier}, about $${spent.toFixed(2)})` });
+        if (!read.ok) throw new HttpError(422, `Claude's design could not be read (${read.error}). Try again`);
+        send(res, 200, { d: read.d, name: read.name, notes: read.notes, problems: read.problems, cost: Math.round(spent * 1000) / 1000 });
+      } catch (err) {
+        if (err instanceof birdhouseAi.AiError) throw new HttpError(err.status, err.message);
+        throw err;
+      } finally {
+        designing = false;
+      }
+    },
+    // Admin: save or remove the key, and set the spending limits.
+    'PUT /api/admin/birdhouse-ai': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req, 2000);
+      const a = db().settings.birdhouseAi || (db().settings.birdhouseAi = {});
+      const changes = [];
+      if (body.remove === true && a.key) {
+        delete a.key;
+        delete a.last4;
+        changes.push('Claude key removed');
+      } else if (typeof body.key === 'string' && body.key.trim()) {
+        const key = body.key.trim();
+        if (!/^sk-ant-[A-Za-z0-9_-]{20,300}$/.test(key)) throw new HttpError(400, 'That does not look like an Anthropic key (it starts sk-ant-)');
+        a.key = secrets.seal(dataDir, key);
+        a.last4 = key.slice(-4);
+        changes.push('Claude key saved');
+      }
+      const num = (v, lo, hi) => (Number.isFinite(Number(v)) && Number(v) >= lo && Number(v) <= hi ? Number(v) : null);
+      if (body.monthCap !== undefined) {
+        const n = num(body.monthCap, 1, 1000);
+        if (n === null) throw new HttpError(400, 'Monthly limit must be between $1 and $1000');
+        a.monthCap = n;
+        changes.push('monthly limit');
+      }
+      if (body.dayCap !== undefined) {
+        const n = num(body.dayCap, 1, 500);
+        if (n === null) throw new HttpError(400, 'Daily designs must be between 1 and 500');
+        a.dayCap = Math.round(n);
+        changes.push('daily limit');
+      }
+      store.save();
+      if (changes.length) record(req, 'settings-changed', { actor: admin.username, detail: `Birdhouse Claude: ${changes.join(', ')}` });
+      send(res, 200, aiView());
     },
 
     // Birdhouse: each person's plans, workshop wood and price book, kept on

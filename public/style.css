@@ -1973,3 +1973,8 @@ a.bh-btn { text-decoration: none; display: inline-block; }
 #bh-checks .bh-warn, #bh-checks .bh-note { margin: 0 0 8px; }
 #bh-checks .bh-note { font-size: 12px; border-left: 3px solid var(--bp-line); padding-left: 8px; }
 .bh-table td .bh-age { display: inline-block; max-width: 28em; line-height: 1.3; }
+
+.bh-ai { display: grid; gap: 8px; margin: 10px 0; padding: 10px 0; border-top: 1px solid var(--bp-line, currentColor); }
+.bh-aihead { font-size: 13px; }
+.bh-paste { margin-top: 8px; }
+.bh-paste summary { cursor: pointer; font-size: 13px; }

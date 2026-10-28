@@ -735,6 +735,19 @@
         <div class="msg" role="status"></div>
       </form>
 
+      <form class="card panel" id="birdhouse-ai" data-sec="server">
+        <h3>Birdhouse and Claude</h3><span class="mono muted">Optional. Lets Birdhouse design projects with Claude's API, in Quick, Balanced, Creative and Deep tiers</span>
+        <p class="muted" id="bhai-state"></p>
+        <label>Anthropic API key<input type="password" name="key" autocomplete="off" placeholder="sk-ant-…" spellcheck="false"></label>
+        <p class="muted">Kept encrypted on this server and never shown again, only its last four characters. Create it at console.anthropic.com and set a spend limit there too.</p>
+        <div class="two-col" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <label>Monthly limit ($)<input type="number" name="monthCap" min="1" max="1000" step="1"></label>
+          <label>Designs per day<input type="number" name="dayCap" min="1" max="500" step="1"></label>
+        </div>
+        <div class="row"><button class="btn" type="submit">Save</button> <button class="btn ghost" type="button" id="bhai-remove" hidden>Remove key</button></div>
+        <div class="msg" role="status"></div>
+      </form>
+
       <form class="card panel" id="tls-form" data-sec="network">
         <h3>Secure connection</h3><span class="mono muted">HTTPS for your domain and every name under it, renewed automatically</span>
         <p class="tls-state" id="tls-state"><span class="dot"></span><span>Checking…</span></p>

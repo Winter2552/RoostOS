@@ -411,6 +411,22 @@ const STEPS = [
     check: (ctx) => Boolean(ctx.db.settings.mail && ctx.db.settings.mail.verifiedAt),
   },
   {
+    id: 'birdhouse-claude',
+    section: 'server',
+    group: 'Birdhouse',
+    title: 'Let Birdhouse design with Claude',
+    why: 'Optional. Birdhouse can ask Claude to design a project board by board, with a Quick, Balanced, Creative or Deep tier. It works without this by pasting from your own Claude chat.',
+    how: [
+      'At console.anthropic.com create an API key and, under Limits, set a monthly spend limit there too.',
+      'Under Admin → Server → Birdhouse and Claude, paste the key and save. It is stored encrypted, and only the last four characters are shown again.',
+      'Set the monthly dollar limit and designs per day you are happy with.',
+    ],
+    action: { label: 'Add the key', view: 'admin', focus: 'birdhouse-ai' },
+    optional: true,
+    covers: ['birdhouseAi'],
+    check: (ctx) => Boolean(ctx.db.settings.birdhouseAi && ctx.db.settings.birdhouseAi.key),
+  },
+  {
     id: 'admin-email',
     section: 'server',
     group: 'Email',

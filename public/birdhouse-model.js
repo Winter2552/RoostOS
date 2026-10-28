@@ -315,13 +315,31 @@
     },
   };
 
-  const IDS = Object.keys(TEMPLATES);
+
+  // A free-form design: the boards themselves are the plan (from an AI helper
+  // or pasted in), instead of sizes fed to a template. Everything else
+  // (drawings, cut list, layout, cost) works off the boards exactly the same.
+  TEMPLATES.custom = {
+    name: 'Custom',
+    custom: true,
+    limits: {},
+    defaults: {},
+    words: {},
+    order: [],
+    fit() {},
+    chips: (d, f = String) => { const z = size(d); return [`W ${f(z.width)}`, `D ${f(z.depth)}`, `H ${f(z.height)}`, `${d.boards.length} boards`]; },
+    solids: (d) => d.boards.map((b) => ({ ...b })),
+  };
+
+  // Custom designs are made by asking, not picked from a tile.
+  const IDS = Object.keys(TEMPLATES).filter((id) => !TEMPLATES[id].custom);
 
   // Sizes kept to what the template allows, so a slider or a saved plan can
   // never make an impossible board. Unknown templates become a bookshelf.
   function clean(input) {
     const id = input && TEMPLATES[input.template] ? input.template : 'bookshelf';
     const t = TEMPLATES[id];
+    if (t.custom) return { template: id, style: 'panel', boards: sanitizeBoards(input && input.boards).boards, notes: plain(input && input.notes, 1500) };
     const out = { template: id };
     for (const [key, lim] of Object.entries(t.limits)) {
       let v = Math.round(Number(input && input[key]));
@@ -333,6 +351,125 @@
     out.style = t.framed && !(input && input.style === 'panel') ? 'framed' : 'panel';
     t.fit(out);
     return out;
+  }
+
+
+  // ---- Free-form boards ----
+  const MAX_BOARDS = 120;
+  const plain = (v, n) => String(v === undefined || v === null ? '' : v).replace(/[\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
+
+  // Boards cleaned to whole millimetres inside sensible limits, and moved so
+  // the piece starts at the origin (the drawings expect that).
+  //   -> { boards, dropped }  (dropped: how many were unusable or over the limit)
+  function sanitizeBoards(input) {
+    const list = Array.isArray(input) ? input : [];
+    const out = [];
+    let dropped = 0;
+    for (const b of list) {
+      if (!b || typeof b !== 'object') { dropped++; continue; }
+      const n = (v) => Math.round(Number(v));
+      const [x, y, z, w, d, h] = [b.x, b.y, b.z, b.w, b.d, b.h].map(n);
+      if (![x, y, z].every((v) => Number.isFinite(v) && Math.abs(v) <= 6000) || ![w, d, h].every((v) => Number.isFinite(v) && v >= 1 && v <= 6000)) { dropped++; continue; }
+      if (out.length >= MAX_BOARDS) { dropped++; continue; }
+      out.push({ name: plain(b.name, 40) || 'Board', x, y, z, w, d, h, join: plain(b.join, 120) });
+    }
+    if (out.length) {
+      const [mx, my, mz] = [Math.min(...out.map((b) => b.x)), Math.min(...out.map((b) => b.y)), Math.min(...out.map((b) => b.z))];
+      for (const b of out) { b.x -= mx; b.y -= my; b.z -= mz; }
+    }
+    return { boards: out, dropped };
+  }
+
+  // Things wrong with a set of boards: boards that pass through each other, and
+  // boards not attached to the rest. Plain sentences, empty if all is well.
+  function boardProblems(boards) {
+    const out = [];
+    const over = (a0, al, b0, bl) => Math.min(a0 + al, b0 + bl) - Math.max(a0, b0);
+    const pairs = [];
+    for (let i = 0; i < boards.length; i++) {
+      for (let j = i + 1; j < boards.length; j++) {
+        const a = boards[i];
+        const b = boards[j];
+        const ox = over(a.x, a.w, b.x, b.w);
+        const oy = over(a.y, a.d, b.y, b.d);
+        const oz = over(a.z, a.h, b.z, b.h);
+        if (ox > 3 && oy > 3 && oz > 3 && ox * oy * oz > 0.1 * Math.min(a.w * a.d * a.h, b.w * b.d * b.h)) pairs.push(`${a.name} and ${b.name}`);
+      }
+    }
+    if (pairs.length) out.push(`${plural(pairs.length, 'pair')} of boards pass through each other (${[...new Set(pairs)].slice(0, 3).join(', ')}${pairs.length > 3 ? ', ...' : ''}).`);
+    // Boards that touch (within 2 mm) are attached; find the groups.
+    const root = boards.map((_, i) => i);
+    const find = (i) => { while (root[i] !== i) { root[i] = root[root[i]]; i = root[i]; } return i; };
+    for (let i = 0; i < boards.length; i++) {
+      for (let j = i + 1; j < boards.length; j++) {
+        const a = boards[i];
+        const b = boards[j];
+        if (over(a.x, a.w, b.x, b.w) >= -2 && over(a.y, a.d, b.y, b.d) >= -2 && over(a.z, a.h, b.z, b.h) >= -2) root[find(i)] = find(j);
+      }
+    }
+    if (boards.length) {
+      const main = find(0);
+      const sizes = new Map();
+      boards.forEach((_, i) => sizes.set(find(i), (sizes.get(find(i)) || 0) + 1));
+      const biggest = [...sizes.entries()].sort((a, b) => b[1] - a[1])[0][0];
+      const loose = boards.filter((_, i) => find(i) !== biggest);
+      if (loose.length && main !== undefined) out.push(`${plural(loose.length, 'board')} not attached to the rest (${[...new Set(loose.map((b) => b.name))].slice(0, 4).join(', ')}).`);
+    }
+    return out;
+  }
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+  // What to tell a designer (a person's own Claude chat, or the API) so its
+  // reply can be read back: the coordinate system, the rules, the two shapes.
+  function designInstructions() {
+    const kinds = IDS.map((id) => {
+      const t = TEMPLATES[id];
+      const sizes = Object.entries(t.limits).map(([k, l]) => `${k} (${l.label}, ${l.min} to ${l.max}${k === 'shelves' || k === 'doors' ? '' : ' mm'})`).join(', ');
+      return `- ${id}: ${t.name}. ${sizes}`;
+    }).join('\n');
+    return `You design woodworking projects for an app called Birdhouse. Reply with one JSON object in a code block.
+
+Either pick a built-in type and give its sizes:
+{"template": "bookshelf", "name": "Hall shelves", "sizes": {"height": 1800, "width": 800}}
+Built-in types (whole millimetres; shelves and doors are plain counts; use only the keys listed):
+${kinds}
+
+Or, when none of them fits what was asked (or a custom design would be better), design it yourself, board by board:
+{"template": "custom", "name": "Record shelf", "notes": "Why it is built this way and what to watch.", "boards": [{"name": "Post", "x": 0, "y": 0, "z": 0, "w": 44, "d": 44, "h": 600, "join": "Rails screwed between posts, 2 x 60 mm screws per end, glue"}]}
+
+Rules for custom designs:
+- All sizes are whole millimetres. x runs left to right, y front to back, z up. Each board is a box with its lowest, left, front corner at (x, y, z) and size w along x, d along y, h along z.
+- Build it the way a woodworker would: a frame of timber posts and rails (for example 44 x 44 or 44 x 94 mm) with thin plywood (6 to 18 mm) fixed to it as skins, shelves resting on rails, back panels or braces to stop it racking. Do not just butt big sheets together.
+- The piece stands on the floor (its lowest boards start at z = 0). Every board must touch the boards it is fixed to, and nothing may float or pass through another board.
+- Use standard stock: sheets 2440 x 1220 mm, timber up to 2400 mm long, usual plywood and timber thicknesses.
+- Give identical boards the same name, a short name each (at most 40 characters), and a "join" saying how it is fixed.
+- At most 100 boards. Make it stable: wide enough for its height, and say in the notes if it should be fixed to a wall.
+- "notes" is 2 to 5 sentences: why it is built this way and anything to watch for.`;
+  }
+
+  // Reads a designer's reply: the built-in kind or a custom design.
+  //   -> { ok: true, d, name, notes, problems } | { ok: false, error }
+  function readDesign(reply) {
+    const text = String(reply || '');
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start < 0 || end <= start) return { ok: false, error: 'no design in that reply' };
+    let data;
+    try { data = JSON.parse(text.slice(start, end + 1)); } catch { return { ok: false, error: 'the design was not valid JSON' }; }
+    if (!data || typeof data !== 'object' || !TEMPLATES[data.template]) return { ok: false, error: 'the design did not name a project type' };
+    const t = TEMPLATES[data.template];
+    const name = plain(data.name, 60) || t.name;
+    if (t.custom) {
+      const { boards, dropped } = sanitizeBoards(data.boards);
+      if (boards.length < 2) return { ok: false, error: 'a custom design needs at least two boards' };
+      const problems = boardProblems(boards);
+      if (dropped) problems.push(`${plural(dropped, 'board')} could not be used (bad sizes or over the ${MAX_BOARDS} limit).`);
+      return { ok: true, d: clean({ template: 'custom', boards, notes: data.notes }), name, notes: plain(data.notes, 1500), problems };
+    }
+    const sizes = data.sizes && typeof data.sizes === 'object' ? data.sizes : {};
+    const set = {};
+    for (const k of Object.keys(t.limits)) if (sizes[k] !== undefined && Number.isFinite(Number(sizes[k]))) set[k] = Number(sizes[k]);
+    return { ok: true, d: clean({ template: data.template, ...t.defaults, ...set }), name, notes: plain(data.notes, 1500), problems: [] };
   }
 
   const defaults = (id) => clean({ template: id, ...TEMPLATES[id].defaults });
@@ -516,7 +653,7 @@
     }
     const c = clean(d);
     const boards = solids(c).length;
-    if (c.style === 'framed') out.push({ key: 'screws', label: '60 mm wood screws, box of 200', qty: Math.max(1, Math.ceil((boards * 6) / 200)), have: 0, search: '60mm wood screws box 200', estimate: 8 });
+    if (c.style === 'framed' || c.template === 'custom') out.push({ key: 'screws', label: '60 mm wood screws, box of 200', qty: Math.max(1, Math.ceil((boards * 6) / 200)), have: 0, search: '60mm wood screws box 200', estimate: 8 });
     else out.push({ key: 'screws', label: 'Wood screws, box', qty: 1, have: 0, search: 'wood screws box', estimate: 5 });
     out.push({ key: 'glue', label: 'Wood glue, 250 ml', qty: 1, have: 0, search: 'wood glue 250ml', estimate: 5 });
     if (c.doors) out.push({ key: 'hinges', label: 'Cabinet hinges, pair', qty: c.doors, have: 0, search: 'cabinet hinges pair', estimate: 3 });
@@ -529,6 +666,12 @@
   function checks(d) {
     d = clean(d);
     const out = [];
+    if (d.template === 'custom') {
+      for (const text of boardProblems(d.boards)) out.push({ level: 'warn', text });
+      const z = size(d);
+      if (z.height / Math.min(z.width, z.depth) > 4) out.push({ level: 'note', tip: true, text: 'Tall for its footprint: fix it to the wall with an anti-tip bracket; one is on the shopping list.' });
+      return out;
+    }
     if (d.template === 'bookshelf' || d.template === 'cabinet') {
       const ratio = d.height / d.depth;
       const times = Math.round(ratio * 10) / 10;
@@ -639,7 +782,7 @@
     return { template, set, unused };
   }
 
-  const exported = { TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, layout, materials, project, parse, ownedStock, checks };
+  const exported = { TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, layout, materials, project, parse, ownedStock, checks, sanitizeBoards, boardProblems, designInstructions, readDesign };
   if (typeof module !== 'undefined' && module.exports) module.exports = exported;
   else window.birdhouseModel = exported;
 })();
