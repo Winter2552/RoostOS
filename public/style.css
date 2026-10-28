@@ -1970,3 +1970,6 @@ a.bh-btn { text-decoration: none; display: inline-block; }
 #bh-home .bh-bar, #bh-shop .bh-bar { margin-bottom: 12px; }
 .bh-starters { grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); }
 .bh-starter .bh-thumb { max-width: 80px; }
+#bh-checks .bh-warn, #bh-checks .bh-note { margin: 0 0 8px; }
+#bh-checks .bh-note { font-size: 12px; border-left: 3px solid var(--bp-line); padding-left: 8px; }
+.bh-table td .bh-age { display: inline-block; max-width: 28em; line-height: 1.3; }

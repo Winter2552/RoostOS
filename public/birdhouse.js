@@ -420,7 +420,7 @@
       h('h3', { class: 'bh-h', text: 'Cut list' }),
       h('table', { class: 'bh-table' },
         h('thead', {}, h('tr', {}, ...['', 'Part', 'Qty', 'Length', 'Width', 'Thick'].map((t) => h('th', { text: t })))),
-        h('tbody', {}, ...rows.map((r, i) => h('tr', {}, h('td', { class: 'bh-key', text: letter(i) }), h('td', { text: r.name }), h('td', { text: String(r.qty) }), h('td', { text: fmt(r.length) }), h('td', { text: fmt(r.width) }), h('td', { text: fmt(r.thickness) }))))),
+        h('tbody', {}, ...rows.map((r, i) => h('tr', {}, h('td', { class: 'bh-key', text: letter(i) }), h('td', {}, r.name, h('br'), h('span', { class: 'bh-age', text: r.join })), h('td', { text: String(r.qty) }), h('td', { text: fmt(r.length) }), h('td', { text: fmt(r.width) }), h('td', { text: fmt(r.thickness) }))))),
       h('p', { class: 'bh-note', text: `${rows.reduce((a, r) => a + r.qty, 0)} boards · ${area.toFixed(2)} m² of board · sizes in ${inch() ? 'inches' : 'mm'}` }));
   }
 
@@ -435,6 +435,7 @@
     if (document.activeElement !== name) name.value = S.name;
     $('#bh-kind').textContent = info().name;
     $('#bh-chips').replaceChildren(...info().chips(S.d, fmt).map((t) => h('span', { class: 'bh-chip', text: t })));
+    $('#bh-checks').replaceChildren(...model.checks(S.d).map((c) => h('p', { class: c.level === 'warn' ? 'bh-warn' : 'bh-note', text: `${c.level === 'warn' ? 'Careful: ' : 'Tip: '}${c.text}` })));
     $('#bh-tabs').replaceChildren(...tabs());
     $('#bh-view').replaceChildren(VIEWS.find((v) => v[0] === S.view)[2]());
     $('#bh-cuts').replaceChildren(cutList());
@@ -451,7 +452,13 @@
       onclick: () => { S.by[S.d.template] = S.d; S.d = S.by[id] || model.defaults(id); fill(); paint(); },
     })));
     const show = (key, v) => (COUNTS.has(key) ? String(v) : fmt(v));
-    const rows = Object.entries(info().limits).map(([key, lim]) => {
+    // How it is built: a timber frame with plywood skins, or sheets butted together.
+    const style = info().framed ? h('div', { class: 'bh-projects', role: 'group', 'aria-label': 'How it is built' },
+      ...[['framed', 'Framed'], ['panel', 'Panels']].map(([id, name]) => h('button', {
+        type: 'button', class: `bh-pick${S.d.style === id ? ' on' : ''}`, 'aria-pressed': String(S.d.style === id), text: name,
+        onclick: () => { S.d = model.clean({ ...S.d, style: id }); fill(); paint(); },
+      }))) : null;
+    const rows = Object.entries(info().limits).filter(([key]) => key !== 'frame' || S.d.style === 'framed').map(([key, lim]) => {
       const out = h('span', { class: 'bh-val', text: show(key, S.d[key]) });
       const input = h('input', { type: 'range', min: lim.min, max: lim.max, step: lim.step, value: S.d[key], 'aria-label': lim.label });
       input.addEventListener('input', () => {
@@ -462,7 +469,7 @@
       S.fields[key] = { input, out };
       return h('label', { class: 'bh-slider' }, h('span', { class: 'bh-row' }, h('span', { text: lim.label }), out), input);
     });
-    return [projects, ...rows];
+    return [projects, style, ...rows];
   }
 
   const fill = () => { const body = S.card && S.card.querySelector('.bh-body'); if (body) body.replaceChildren(...cardBody()); };

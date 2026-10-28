@@ -11,16 +11,78 @@
 (() => {
   const range = (min, max, step, label) => ({ min, max, step, label });
 
+  // ---- Framed construction ----
+  // Real furniture is a frame of timber posts and rails with thin plywood fixed
+  // to it as skins; the frame carries the load and keeps it square. "Panel"
+  // style (sheets butted together) is kept for small boxes and quick sketches.
+  const SKIN = 12; // plywood skins, mm
+  const JOIN = {
+    post: 'Rails butt-screwed between posts: 2 × 60 mm screws per end, pilot holes, glue',
+    rail: 'Screwed into the posts: 2 × 60 mm screws per end, pilot holes, glue',
+    shelf: 'Rests on the side rails; glue and screw down through the top',
+    top: 'Screwed down through the rails and posts, glue',
+    skin: 'Glued and screwed or nailed to the frame about every 150 mm',
+    door: 'Hung on two hinges, screwed to the frame',
+    panel: 'Butt joint: glue and screws, or dowels or pocket holes',
+  };
+  const B = (name, x, y, z, w, d, h, join) => ({ name, x, y, z, w, d, h, join });
+
+  // A box frame: four posts, rails across the front and back and along the
+  // sides, a pair of side rails at each shelf level, side and back skins, a top
+  // board overhanging them. o: { inner (shelves between bottom and top),
+  // topT (top board thickness, 0 for none), boardT (shelf thickness), front
+  // (space kept at the front for doors or a front skin) }.
+  function carcass(d, o) {
+    const f = d.frame;
+    const s = SKIN;
+    const W = d.width;
+    const D = d.depth;
+    const front = o.front || 0;
+    const top = o.topT || 0;
+    const Hf = d.height - top;
+    const x0 = s;
+    const x1 = W - s;
+    const y0 = front;
+    const y1 = D - s;
+    const across = x1 - x0 - 2 * f;
+    const deep = y1 - y0 - 2 * f;
+    const out = [];
+    for (const x of [x0, x1 - f]) for (const y of [y0, y1 - f]) out.push(B('Post', x, y, 0, f, f, Hf, JOIN.post));
+    for (const z of [0, Hf - f]) {
+      out.push(B('Front rail', x0 + f, y0, z, across, f, f, JOIN.rail));
+      out.push(B('Back rail', x0 + f, y1 - f, z, across, f, f, JOIN.rail));
+    }
+    // Levels: the bottom, then the shelves between it and the top rails.
+    const levels = [0];
+    for (let i = 1; i <= o.inner; i++) levels.push(Math.round(((Hf - f) * i) / (o.inner + 1)));
+    for (const z of [...levels.slice(1), Hf - f]) for (const x of [x0, x1 - f]) out.push(B('Side rail', x, y0 + f, z, f, deep, f, JOIN.rail));
+    for (const z of levels) {
+      if (z === 0) for (const x of [x0, x1 - f]) out.push(B('Side rail', x, y0 + f, 0, f, deep, f, JOIN.rail));
+      out.push(B('Shelf', x0, y0 + f, z + f, x1 - x0, deep, o.boardT, JOIN.shelf));
+    }
+    out.push(B('Side skin', 0, 0, 0, s, D, Hf, JOIN.skin), B('Side skin', W - s, 0, 0, s, D, Hf, JOIN.skin));
+    out.push(B('Back skin', x0, y1, 0, x1 - x0, s, Hf, JOIN.skin));
+    if (top) out.push(B('Top', 0, 0, Hf, W, D, top, JOIN.top));
+    return out;
+  }
+
+
   const TEMPLATES = {
     bookshelf: {
       name: 'Bookshelf',
       // "shelves" counts every horizontal board, top and bottom included.
-      limits: { height: range(300, 2400, 10, 'Height'), width: range(200, 2400, 10, 'Width'), depth: range(100, 800, 10, 'Depth'), shelves: range(2, 12, 1, 'Shelves'), thickness: range(6, 40, 1, 'Board thickness') },
-      defaults: { height: 1800, width: 800, depth: 300, shelves: 5, thickness: 18 },
-      words: { height: ['tall', 'high', 'height'], width: ['wide', 'width', 'across'], depth: ['deep', 'depth'], shelves: ['shelves', 'shelf', 'boards'], thickness: ['thick', 'thickness'] },
+      limits: { height: range(300, 2400, 10, 'Height'), width: range(200, 2400, 10, 'Width'), depth: range(100, 800, 10, 'Depth'), shelves: range(2, 12, 1, 'Shelves'), thickness: range(6, 40, 1, 'Board thickness'), frame: range(34, 94, 1, 'Frame timber') },
+      defaults: { height: 1800, width: 800, depth: 300, shelves: 5, thickness: 18, frame: 44 },
+      words: { height: ['tall', 'high', 'height'], width: ['wide', 'width', 'across'], depth: ['deep', 'depth'], shelves: ['shelves', 'shelf', 'boards'], thickness: ['thick', 'thickness'], frame: ['frame', 'timber', 'post'] },
       order: ['height', 'width', 'depth'],
-      fit(d) { d.thickness = Math.min(d.thickness, Math.floor((d.width - 20) / 2), Math.floor(d.height / (d.shelves * 2))); },
-      chips: (d, f = String) => [`H ${f(d.height)}`, `W ${f(d.width)}`, `D ${f(d.depth)}`, `${d.shelves} shelves`, `Pine ${f(d.thickness)}`],
+      fit(d) {
+        d.thickness = Math.min(d.thickness, Math.floor((d.width - 20) / 2), Math.floor(d.height / (d.shelves * 2)));
+        d.frame = Math.min(d.frame, Math.floor((Math.min(d.width - 2 * SKIN, d.depth) - 20) / 3));
+        // Shelves need room between the rails.
+        d.shelves = Math.max(2, Math.min(d.shelves, Math.floor(d.height / (d.frame + d.thickness + 40))));
+      },
+      chips: (d, f = String) => [`H ${f(d.height)}`, `W ${f(d.width)}`, `D ${f(d.depth)}`, `${d.shelves} shelves`, d.style === 'framed' ? `Framed ${f(d.frame)}` : `Pine ${f(d.thickness)}`],
+      framed: (d) => carcass(d, { inner: d.shelves - 2, topT: d.thickness, boardT: d.thickness }),
       solids(d) {
         const t = d.thickness;
         const out = [
@@ -42,9 +104,10 @@
       defaults: { height: 740, width: 1200, depth: 700, thickness: 25, leg: 60 },
       words: { width: ['long', 'length'], depth: ['wide', 'width', 'deep', 'depth'], height: ['tall', 'high', 'height'], thickness: ['thick', 'thickness'], leg: ['leg', 'legs'] },
       order: ['width', 'depth', 'height'],
+      framed: (d) => TEMPLATES.table.solids(d, true),
       fit(d) { d.leg = Math.min(d.leg, Math.floor((Math.min(d.width, d.depth) - 20) / 4)); d.thickness = Math.min(d.thickness, Math.floor(d.height / 4)); },
       chips: (d, f = String) => [`L ${f(d.width)}`, `W ${f(d.depth)}`, `H ${f(d.height)}`, `Top ${f(d.thickness)}`, `Legs ${f(d.leg)}`],
-      solids(d) {
+      solids(d, braced) {
         const ov = Math.min(30, Math.floor(d.width / 10)); // the top overhangs the legs a little
         const lg = d.leg;
         const apron = Math.min(80, Math.floor(d.height / 5));
@@ -57,18 +120,34 @@
         const gap = d.depth - 2 * ov - 2 * lg;
         for (const y of [ov, d.depth - ov - at]) out.push({ name: 'Long apron', x: ov + lg, y, z: az, w: run, d: at, h: apron });
         for (const x of [ov, d.width - ov - at]) out.push({ name: 'Short apron', x, y: ov + lg, z: az, w: at, d: gap, h: apron });
+        // Framed: low stretchers tie the legs together so it cannot rack.
+        if (braced) {
+          const sz = Math.min(40, lg);
+          const bz = Math.min(150, Math.floor(lh / 4));
+          for (const y of [ov + lg / 2 - sz / 2, d.depth - ov - lg / 2 - sz / 2]) out.push(B('Low stretcher', ov + lg, Math.round(y), bz, run, sz, sz, JOIN.rail));
+          for (const x of [ov + lg / 2 - sz / 2, d.width - ov - lg / 2 - sz / 2]) out.push(B('Low stretcher', Math.round(x), ov + lg, bz, sz, gap, sz, JOIN.rail));
+        }
         return out;
       },
     },
 
     box: {
       name: 'Box',
-      limits: { width: range(100, 1200, 10, 'Width'), depth: range(100, 900, 10, 'Depth'), height: range(50, 800, 10, 'Height'), thickness: range(4, 30, 1, 'Board thickness') },
-      defaults: { width: 400, depth: 300, height: 200, thickness: 12 },
-      words: { width: ['wide', 'width', 'long', 'length'], depth: ['deep', 'depth'], height: ['tall', 'high', 'height'], thickness: ['thick', 'thickness'] },
+      limits: { width: range(100, 1200, 10, 'Width'), depth: range(100, 900, 10, 'Depth'), height: range(50, 800, 10, 'Height'), thickness: range(4, 30, 1, 'Board thickness'), frame: range(34, 94, 1, 'Frame timber') },
+      defaults: { width: 400, depth: 300, height: 200, thickness: 12, frame: 34 },
+      words: { width: ['wide', 'width', 'long', 'length'], depth: ['deep', 'depth'], height: ['tall', 'high', 'height'], thickness: ['thick', 'thickness'], frame: ['frame', 'timber', 'post'] },
       order: ['width', 'depth', 'height'],
-      fit(d) { d.thickness = Math.min(d.thickness, Math.floor((Math.min(d.width, d.depth) - 20) / 2), Math.floor(d.height / 2)); },
-      chips: (d, f = String) => [`W ${f(d.width)}`, `D ${f(d.depth)}`, `H ${f(d.height)}`, `Board ${f(d.thickness)}`],
+      fit(d) {
+        d.thickness = Math.min(d.thickness, Math.floor((Math.min(d.width, d.depth) - 20) / 2), Math.floor(d.height / 2));
+        d.frame = Math.max(10, Math.min(d.frame, Math.floor((Math.min(d.width, d.depth) - 2 * SKIN - 20) / 3), Math.floor(d.height / 4)));
+      },
+      chips: (d, f = String) => [`W ${f(d.width)}`, `D ${f(d.depth)}`, `H ${f(d.height)}`, d.style === 'framed' ? `Framed ${f(d.frame)}` : `Board ${f(d.thickness)}`],
+      // A crate: a timber frame with plywood on every side and a plywood floor.
+      framed(d) {
+        const out = carcass(d, { inner: 0, topT: 0, boardT: SKIN, front: SKIN });
+        out.push(B('Front skin', SKIN, 0, 0, d.width - 2 * SKIN, SKIN, d.height, JOIN.skin));
+        return out;
+      },
       solids(d) {
         const t = d.thickness;
         const wall = d.height - t;
@@ -84,12 +163,26 @@
 
     bench: {
       name: 'Bench',
-      limits: { width: range(300, 2400, 10, 'Length'), depth: range(150, 600, 10, 'Width'), height: range(200, 700, 10, 'Height'), thickness: range(15, 60, 1, 'Seat thickness') },
-      defaults: { width: 1000, depth: 350, height: 450, thickness: 30 },
-      words: { width: ['long', 'length'], depth: ['wide', 'width', 'deep', 'depth'], height: ['tall', 'high', 'height'], thickness: ['thick', 'thickness', 'seat'] },
+      limits: { width: range(300, 2400, 10, 'Length'), depth: range(150, 600, 10, 'Width'), height: range(200, 700, 10, 'Height'), thickness: range(15, 60, 1, 'Seat thickness'), frame: range(34, 94, 1, 'Frame timber') },
+      defaults: { width: 1000, depth: 350, height: 450, thickness: 30, frame: 44 },
+      words: { width: ['long', 'length'], depth: ['wide', 'width', 'deep', 'depth'], height: ['tall', 'high', 'height'], thickness: ['thick', 'thickness', 'seat'], frame: ['frame', 'timber', 'legs', 'post'] },
       order: ['width', 'depth', 'height'],
-      fit(d) { d.thickness = Math.min(d.thickness, Math.floor(d.height / 3)); },
-      chips: (d, f = String) => [`L ${f(d.width)}`, `W ${f(d.depth)}`, `H ${f(d.height)}`, `Seat ${f(d.thickness)}`],
+      fit(d) { d.thickness = Math.min(d.thickness, Math.floor(d.height / 3)); d.frame = Math.min(d.frame, Math.floor(d.depth / 4)); },
+      chips: (d, f = String) => [`L ${f(d.width)}`, `W ${f(d.depth)}`, `H ${f(d.height)}`, `Seat ${f(d.thickness)}`, ...(d.style === 'framed' ? [`Framed ${f(d.frame)}`] : [])],
+      framed(d) {
+        const f = d.frame;
+        const inset = Math.min(60, Math.floor(d.width / 8));
+        const lh = d.height - d.thickness;
+        const run = d.width - 2 * inset - 2 * f;
+        const deep = d.depth - 2 * f - 2 * 30;
+        const out = [B('Seat', 0, 0, lh, d.width, d.depth, d.thickness, JOIN.top)];
+        for (const x of [inset, d.width - inset - f]) for (const y of [30, d.depth - 30 - f]) out.push(B('Post', x, y, 0, f, f, lh, JOIN.post));
+        for (const y of [30, d.depth - 30 - f]) out.push(B('Front rail', inset + f, y, lh - f, run, f, f, JOIN.rail));
+        for (const x of [inset, d.width - inset - f]) out.push(B('Side rail', x, 30 + f, lh - f, f, deep, f, JOIN.rail));
+        // A low rail down the middle ties the two ends together.
+        out.push(B('Stretcher', inset + f, Math.round((d.depth - f) / 2), Math.round(lh / 4), run, f, f, JOIN.rail));
+        return out;
+      },
       solids(d) {
         const inset = Math.min(60, Math.floor(d.width / 8));
         const pt = 25;
@@ -106,12 +199,26 @@
 
     cabinet: {
       name: 'Cabinet',
-      limits: { height: range(300, 2000, 10, 'Height'), width: range(300, 1200, 10, 'Width'), depth: range(200, 700, 10, 'Depth'), shelves: range(0, 6, 1, 'Shelves inside'), doors: range(0, 2, 1, 'Doors'), thickness: range(12, 25, 1, 'Board thickness') },
-      defaults: { height: 900, width: 600, depth: 350, shelves: 1, doors: 2, thickness: 18 },
-      words: { height: ['tall', 'high', 'height'], width: ['wide', 'width'], depth: ['deep', 'depth'], shelves: ['shelves', 'shelf'], doors: ['doors', 'door'], thickness: ['thick', 'thickness'] },
+      limits: { height: range(300, 2000, 10, 'Height'), width: range(300, 1200, 10, 'Width'), depth: range(200, 700, 10, 'Depth'), shelves: range(0, 6, 1, 'Shelves inside'), doors: range(0, 2, 1, 'Doors'), thickness: range(12, 25, 1, 'Board thickness'), frame: range(34, 94, 1, 'Frame timber') },
+      defaults: { height: 900, width: 600, depth: 350, shelves: 1, doors: 2, thickness: 18, frame: 44 },
+      words: { height: ['tall', 'high', 'height'], width: ['wide', 'width'], depth: ['deep', 'depth'], shelves: ['shelves', 'shelf'], doors: ['doors', 'door'], thickness: ['thick', 'thickness'], frame: ['frame', 'timber', 'post'] },
       order: ['height', 'width', 'depth'],
-      fit(d) { d.thickness = Math.min(d.thickness, Math.floor((d.width - 20) / 4), Math.floor(d.height / 6)); },
-      chips: (d, f = String) => [`H ${f(d.height)}`, `W ${f(d.width)}`, `D ${f(d.depth)}`, `${d.shelves === 1 ? '1 shelf' : `${d.shelves} shelves`}`, `${d.doors} door${d.doors === 1 ? '' : 's'}`, `Pine ${f(d.thickness)}`],
+      fit(d) {
+        d.thickness = Math.min(d.thickness, Math.floor((d.width - 20) / 4), Math.floor(d.height / 6));
+        d.frame = Math.min(d.frame, Math.floor((Math.min(d.width - 2 * SKIN, d.depth) - 20) / 3));
+        d.shelves = Math.min(d.shelves, Math.floor(d.height / (d.frame + d.thickness + 40)));
+      },
+      chips: (d, f = String) => [`H ${f(d.height)}`, `W ${f(d.width)}`, `D ${f(d.depth)}`, `${d.shelves === 1 ? '1 shelf' : `${d.shelves} shelves`}`, `${d.doors} door${d.doors === 1 ? '' : 's'}`, d.style === 'framed' ? `Framed ${f(d.frame)}` : `Pine ${f(d.thickness)}`],
+      framed(d) {
+        const t = d.thickness;
+        const front = d.doors ? t : 0;
+        const out = carcass(d, { inner: d.shelves, topT: t, boardT: t, front });
+        if (d.doors) {
+          const dw = d.doors === 2 ? Math.floor((d.width - 6) / 2) : d.width - 4;
+          for (let i = 0; i < d.doors; i++) out.push(B('Door', 2 + i * (dw + 2), 0, 2, dw, t, d.height - 4, JOIN.door));
+        }
+        return out;
+      },
       solids(d) {
         const t = d.thickness;
         const back = 6; // hardboard back
@@ -137,12 +244,30 @@
 
     desk: {
       name: 'Desk',
-      limits: { width: range(800, 2000, 10, 'Length'), depth: range(400, 900, 10, 'Width'), height: range(600, 900, 10, 'Height'), thickness: range(18, 40, 1, 'Top thickness'), panel: range(15, 30, 1, 'Side panel thickness') },
-      defaults: { width: 1400, depth: 700, height: 740, thickness: 25, panel: 18 },
-      words: { width: ['long', 'length'], depth: ['wide', 'width', 'deep', 'depth'], height: ['tall', 'high', 'height'], thickness: ['thick', 'thickness', 'top'], panel: ['panel', 'panels'] },
+      limits: { width: range(800, 2000, 10, 'Length'), depth: range(400, 900, 10, 'Width'), height: range(600, 900, 10, 'Height'), thickness: range(18, 40, 1, 'Top thickness'), panel: range(15, 30, 1, 'Side panel thickness'), frame: range(34, 94, 1, 'Frame timber') },
+      defaults: { width: 1400, depth: 700, height: 740, thickness: 25, panel: 18, frame: 44 },
+      words: { width: ['long', 'length'], depth: ['wide', 'width', 'deep', 'depth'], height: ['tall', 'high', 'height'], thickness: ['thick', 'thickness', 'top'], panel: ['panel', 'panels'], frame: ['frame', 'timber', 'post', 'legs'] },
       order: ['width', 'depth', 'height'],
-      fit(d) { d.panel = Math.min(d.panel, Math.floor(d.width / 10)); },
-      chips: (d, f = String) => [`L ${f(d.width)}`, `W ${f(d.depth)}`, `H ${f(d.height)}`, `Top ${f(d.thickness)}`, `Panels ${f(d.panel)}`],
+      fit(d) { d.panel = Math.min(d.panel, Math.floor(d.width / 10)); d.frame = Math.min(d.frame, Math.floor(d.depth / 8)); },
+      chips: (d, f = String) => [`L ${f(d.width)}`, `W ${f(d.depth)}`, `H ${f(d.height)}`, `Top ${f(d.thickness)}`, d.style === 'framed' ? `Framed ${f(d.frame)}` : `Panels ${f(d.panel)}`],
+      framed(d) {
+        const f = d.frame;
+        const inset = Math.min(60, Math.floor(d.width / 10));
+        const m = 30;
+        const lh = d.height - d.thickness;
+        const run = d.width - 2 * inset - 2 * f;
+        const deep = d.depth - 2 * m - 2 * f;
+        const modesty = Math.min(300, Math.floor(lh / 3));
+        const out = [B('Top', 0, 0, lh, d.width, d.depth, d.thickness, JOIN.top)];
+        for (const x of [inset, d.width - inset - f]) for (const y of [m, d.depth - m - f]) out.push(B('Post', x, y, 0, f, f, lh, JOIN.post));
+        // Each end is a ladder of two rails; the back rail stops it swaying.
+        for (const z of [lh - f, Math.round(lh / 4)]) for (const x of [inset, d.width - inset - f]) out.push(B('Side rail', x, m + f, z, f, deep, f, JOIN.rail));
+        out.push(B('Back rail', inset + f, d.depth - m - f, lh - f, run, f, f, JOIN.rail));
+        out.push(B('Back rail', inset + f, d.depth - m - f, Math.round(lh / 4), run, f, f, JOIN.rail));
+        out.push(B('Side skin', inset - SKIN, m, 0, SKIN, d.depth - 2 * m, lh, JOIN.skin), B('Side skin', d.width - inset, m, 0, SKIN, d.depth - 2 * m, lh, JOIN.skin));
+        out.push(B('Back skin', inset + f, d.depth - m - SKIN, lh - f - modesty, run, SKIN, modesty, JOIN.skin));
+        return out;
+      },
       solids(d) {
         const inset = Math.min(60, Math.floor(d.width / 10));
         const lh = d.height - d.thickness;
@@ -171,13 +296,31 @@
       if (!Number.isFinite(v)) v = t.defaults[key];
       out[key] = Math.min(lim.max, Math.max(lim.min, v));
     }
+    // Framed (timber frame with plywood skins) is how it is really built; panel
+    // (boards butted together) stays for quick sketches.
+    out.style = t.framed && !(input && input.style === 'panel') ? 'framed' : 'panel';
     t.fit(out);
     return out;
   }
 
   const defaults = (id) => clean({ template: id, ...TEMPLATES[id].defaults });
   const info = (d) => TEMPLATES[clean(d).template];
-  const solids = (d) => { d = clean(d); return TEMPLATES[d.template].solids(d); };
+  // Every board says how it is joined; boards a template did not label get the
+  // usual join for their kind.
+  function joinFor(b, framed) {
+    if (b.join) return b.join;
+    if (!framed) return JOIN.panel;
+    if (/post|leg/i.test(b.name)) return JOIN.post;
+    if (/rail|apron|stretcher/i.test(b.name)) return JOIN.rail;
+    if (/top|seat/i.test(b.name)) return JOIN.top;
+    return JOIN.skin;
+  }
+  const solids = (d) => {
+    d = clean(d);
+    const t = TEMPLATES[d.template];
+    const framed = d.style === 'framed';
+    return (framed ? t.framed(d) : t.solids(d)).map((b) => ({ ...b, join: joinFor(b, framed) }));
+  };
 
   // A flat view: each board as a rectangle, and whether another board in front
   // of it hides it (then it is drawn dashed). from = 'front' | 'side' | 'top'.
@@ -206,9 +349,9 @@
     const rows = new Map();
     for (const b of solids(d)) {
       const [length, width, thickness] = [b.w, b.d, b.h].sort((a, c) => c - a);
-      const key = `${b.name}|${length}|${width}|${thickness}`;
+      const key = `${b.name}|${length}|${width}|${thickness}|${b.join}`;
       if (rows.has(key)) rows.get(key).qty++;
-      else rows.set(key, { name: b.name, qty: 1, length, width, thickness });
+      else rows.set(key, { name: b.name, qty: 1, length, width, thickness, join: b.join });
     }
     return [...rows.values()];
   }
@@ -339,8 +482,30 @@
       const have = g.bars.filter((b) => b.owned).length;
       out.push({ key: `timber-${g.width}x${g.thickness}`, label: `${g.width} × ${g.thickness} timber, ${g.stock} mm length`, qty: g.bars.length - have, have, search: `${g.width}x${g.thickness} timber ${g.stock / 1000}m`, estimate: Math.round(0.00264 * g.width * g.thickness * 100) / 100 });
     }
-    out.push({ key: 'screws', label: 'Wood screws, box', qty: 1, have: 0, search: 'wood screws box', estimate: 5 });
+    const c = clean(d);
+    const boards = solids(c).length;
+    if (c.style === 'framed') out.push({ key: 'screws', label: '60 mm wood screws, box of 200', qty: Math.max(1, Math.ceil((boards * 6) / 200)), have: 0, search: '60mm wood screws box 200', estimate: 8 });
+    else out.push({ key: 'screws', label: 'Wood screws, box', qty: 1, have: 0, search: 'wood screws box', estimate: 5 });
     out.push({ key: 'glue', label: 'Wood glue, 250 ml', qty: 1, have: 0, search: 'wood glue 250ml', estimate: 5 });
+    if (c.doors) out.push({ key: 'hinges', label: 'Cabinet hinges, pair', qty: c.doors, have: 0, search: 'cabinet hinges pair', estimate: 3 });
+    if (checks(c).some((k) => k.tip)) out.push({ key: 'antitip', label: 'Anti-tip wall bracket kit', qty: 1, have: 0, search: 'furniture anti tip wall bracket', estimate: 4 });
+    return out;
+  }
+
+  // Things worth knowing before building: it might tip, sag or rack. Each is
+  // { level: 'warn' | 'note', text, tip? } (tip: needs fixing to the wall).
+  function checks(d) {
+    d = clean(d);
+    const out = [];
+    if (d.template === 'bookshelf' || d.template === 'cabinet') {
+      const ratio = d.height / d.depth;
+      const times = Math.round(ratio * 10) / 10;
+      if (ratio > 7) out.push({ level: 'warn', tip: true, text: `It is ${times} times as tall as it is deep, so it will tip easily. Make it deeper, and fix it to the wall.` });
+      else if (ratio > 4 && d.style === 'panel') out.push({ level: 'warn', tip: true, text: `Sheets butted together have no frame or back, so a piece this tall (${times} times its depth) can rack and topple. Switch to Framed, and fix it to the wall.` });
+      else if (ratio > 4) out.push({ level: 'note', tip: true, text: `Fix it to the wall with an anti-tip bracket; one is on the shopping list.` });
+      const span = d.width - (d.style === 'framed' ? 2 * (SKIN + d.frame) : 2 * d.thickness);
+      if (d.shelves > 0 && span > 50 * d.thickness) out.push({ level: 'note', text: 'Shelves this wide can sag: use thicker boards or add a middle support.' });
+    }
     return out;
   }
 
@@ -441,7 +606,7 @@
     return { template, set, unused };
   }
 
-  const exported = { TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, layout, materials, project, parse, ownedStock };
+  const exported = { TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, layout, materials, project, parse, ownedStock, checks };
   if (typeof module !== 'undefined' && module.exports) module.exports = exported;
   else window.birdhouseModel = exported;
 })();

@@ -1,3 +1,9 @@
 {
-  "items": []
+  "items": [
+    {
+      "title": "Birdhouse builds with real frames",
+      "text": "Plans are now built the way woodworkers build furniture: a frame of timber posts and rails with plywood skins on the sides and back, instead of sheets butted together. Every part says how it joins, the shopping list adds the right screws, hinges and an anti-tip bracket, and Birdhouse warns you when a piece is tall enough to topple or shelves are wide enough to sag. Switch back to Panels for a quick sketch.",
+      "image": "birdhouse-frames.png"
+    }
+  ]
 }
