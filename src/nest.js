@@ -149,7 +149,7 @@ class Nest {
   constructor({ dir, dbFile, users, limitOf, onUsage, publicOn, baseUrl, audit, isSecure }) {
     this.dir = dir;
     this.publicOn = publicOn || (() => true);
-    this.baseUrl = baseUrl || ((req) => `http://${req.headers.host}`);
+    this.baseUrl = baseUrl || ((req) => `http://${req.headers.host}`); // code-check: ok (tests only; Roost always passes baseUrl)
     this.audit = audit || (() => {});
     this.isSecure = isSecure || (() => false);
     // Only failures count (a bad token or password), per visitor address.

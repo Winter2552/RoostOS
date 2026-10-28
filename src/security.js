@@ -164,9 +164,10 @@ const order = { ok: 0, info: 0, warn: 1, bad: 2 };
 //   pushDevices (phones with alerts on, for admins), outside (reachable from outside),
 //   lockdown ({ at, by } while outside access is paused),
 //   ports (the last open-port check, src/portcheck.js, or null),
+//   codeCheck (the last code check, src/code-check.js, or null),
 //   backupTest (the backup service's last restore test, or null),
 //   sentinelMode ('off' | 'manual' | 'auto')
-function securityChecks({ db, now = Date.now(), entries = [], cert = null, updates = null, backup = { state: 'off' }, pushDevices = 0, outside = false, lockdown = null, ports = null, backupTest = null, sentinelMode = 'manual' }) {
+function securityChecks({ db, now = Date.now(), entries = [], cert = null, updates = null, backup = { state: 'off' }, pushDevices = 0, outside = false, lockdown = null, ports = null, backupTest = null, sentinelMode = 'manual', codeCheck = null }) {
   const checks = [];
   const add = (id, status, title, detail = '') => checks.push({ id, status, title, detail });
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -235,6 +236,16 @@ function securityChecks({ db, now = Date.now(), entries = [], cert = null, updat
     else add('ports', 'ok', 'No unexpected doors open to the internet', `Tried ${ports.tried} common ports on ${ports.ip} from inside your network (the way Roost can check), ${when}. Nothing but 443 answered.`);
   } else {
     add('ports', 'info', 'Open doors not checked yet', 'Press Check open ports to try the common ones.');
+  }
+
+  if (codeCheck) {
+    const when = new Date(codeCheck.at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+    const list = codeCheck.findings.slice(0, 5).map((f) => `${f.file}:${f.line} ${f.message}`).join(' ');
+    if (codeCheck.bad) add('code', 'bad', `${plural(codeCheck.bad, 'weak spot', 'weak spots')} found in Roost's code`, `${list} Hand this to Claude in a thread to fix. Checked ${when}.`);
+    else if (codeCheck.review) add('code', 'warn', `${plural(codeCheck.review, 'place needs', 'places need')} a look in Roost's code`, `${list} Checked ${when}.`);
+    else add('code', 'ok', "Roost's code passed its security check", `No known weak spots. Checked ${when}.`);
+  } else {
+    add('code', 'info', "Roost's code not checked yet", "Press Check Roost's code to look for known weak spots.");
   }
 
   const worst = checks.reduce((n, c) => Math.max(n, order[c.status]), 0);

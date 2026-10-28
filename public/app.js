@@ -381,7 +381,7 @@ async function twoStepSetup(container, onDone) {
     return;
   }
   const qr = el('div', { class: 'qr-box' });
-  qr.innerHTML = setup.qr; // drawn by Roost's own QR maker, no user text in it
+  qr.innerHTML = setup.qr; // code-check: ok (drawn by Roost's own QR maker, no user text in it)
   const key = setup.secret.match(/.{1,4}/g).join(' ');
   const copyMsg = el('span', { class: 'mono muted' });
   const code = el('input', {
@@ -1940,8 +1940,8 @@ function renderPowerCharts(h) {
     const bits = [h.peaks.c !== null ? `CPU peak ${h.peaks.c}°C` : null, h.peaks.d !== null ? `drive peak ${h.peaks.d}°C` : null].filter(Boolean).join(' · ');
     blocks.push(`<div class="power-chart"><div class="power-chart-head"><b>Heat</b><span class="mono muted">${bits}</span></div>${heat}<div class="power-chart-foot mono muted"><span>Solid: CPU</span><span>Dashed: hottest drive</span></div></div>`);
   }
-  body.innerHTML = blocks.length ? blocks.join('') : '<p class="mono muted status-note">History starts filling in a few minutes after the helper begins reading. One point every 5 minutes.</p>';
-  if (blocks.length) body.insertAdjacentHTML('beforeend', `<p class="mono muted status-note" style="margin-top:12px">${range}, since ${h.since ? when(new Date(h.since).toISOString()) : 'now'}.</p>`);
+  body.innerHTML = blocks.length ? blocks.join('') : '<p class="mono muted status-note">History starts filling in a few minutes after the helper begins reading. One point every 5 minutes.</p>'; // code-check: ok (fixed text and Roost's own chart markup)
+  if (blocks.length) body.insertAdjacentHTML('beforeend', `<p class="mono muted status-note" style="margin-top:12px">${range}, since ${h.since ? when(new Date(h.since).toISOString()) : 'now'}.</p>`); // code-check: ok
 }
 
 async function loadPowerCharts(force) {
@@ -3199,6 +3199,18 @@ $('#ports-btn').addEventListener('click', async (e) => {
   } catch (err) { flash($('#security-panel'), err.message, false); }
   btn.disabled = false;
   btn.textContent = 'Check open ports';
+});
+
+$('#code-btn').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  btn.textContent = 'Checking…';
+  try {
+    await api('POST', '/api/admin/security/code');
+    await loadSecurity();
+  } catch (err) { flash($('#security-panel'), err.message, false); }
+  btn.disabled = false;
+  btn.textContent = "Check Roost's code";
 });
 
 $('#lockdown-btn').addEventListener('click', async (e) => {

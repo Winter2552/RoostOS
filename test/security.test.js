@@ -132,7 +132,7 @@ test('the checklist names what needs doing', () => {
     entries: Array.from({ length: 6 }, () => ({ type: 'sign-in-failed', at: '2026-10-26T10:00:00Z' })),
   });
   const by = Object.fromEntries(out.checks.map((c) => [c.id, c.status]));
-  assert.deepEqual(by, { 'admin-two-step': 'bad', 'member-two-step': 'warn', https: 'bad', updates: 'warn', backup: 'warn', failed: 'warn', phone: 'warn', ports: 'info', sentinel: 'ok' });
+  assert.deepEqual(by, { 'admin-two-step': 'bad', 'member-two-step': 'warn', https: 'bad', updates: 'warn', backup: 'warn', failed: 'warn', phone: 'warn', ports: 'info', code: 'info', sentinel: 'ok' });
   assert.equal(out.status, 'bad');
   assert.equal(out.headline, '7 things need you');
 });

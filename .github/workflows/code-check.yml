@@ -1,0 +1,28 @@
+# Sentinel's code checker (src/code-check.js) on every pull request: fails the
+# PR when the code has a known weak spot, and runs the tests. No schedule.
+name: Code check
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Security check
+        run: |
+          node -e "
+            const r = require('./src/code-check').run('.');
+            for (const f of r.findings) console.log('::' + (f.level === 'bad' ? 'error' : 'warning') + ' file=' + f.file + ',line=' + f.line + '::' + f.message);
+            if (r.bad || r.review) process.exit(1);
+          "
+      - name: Tests
+        run: npm test

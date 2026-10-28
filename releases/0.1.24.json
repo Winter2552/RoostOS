@@ -1,0 +1,14 @@
+{
+  "version": "0.1.24",
+  "date": "2026-10-28",
+  "title": "Roost checks its own code",
+  "summary": "A security check of Roost's own code",
+  "items": [
+    {
+      "title": "Roost checks its own code",
+      "text": "Admin → Security has a new Check Roost's code button. It reads Roost's files for the mistakes hackers use most (pages loading outside scripts, links built from a visitor's address, new open doors) and lists anything it finds. The same check blocks risky changes before they are merged. Sign-in also now takes the same time for a wrong name as a wrong password.",
+      "image": "code-check.png",
+      "admin": true
+    }
+  ]
+}

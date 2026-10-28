@@ -9,7 +9,7 @@ const os = require('os');
 const path = require('path');
 const { Store, DEFAULT_APPS } = require('./store');
 const birdhouse = require('./birdhouse');
-const { hashPassword, verifyPassword, Sessions, RateLimiter, deviceName, SESSION_TTL_MS } = require('./auth');
+const { hashPassword, verifyPassword, verifyAgainstNobody, Sessions, RateLimiter, deviceName, SESSION_TTL_MS } = require('./auth');
 const storage = require('./storage');
 const links = require('./links');
 const mail = require('./mail');
@@ -57,6 +57,7 @@ const { Watcher, alertSettings, alertsOf } = require('./alerts');
 const { AccountGuard, SecurityWatch, securityChecks, isPrivateIp } = require('./security');
 const { Sentinel, MODES: SENTINEL_MODES, buildReport } = require('./sentinel');
 const { checkPorts } = require('./portcheck');
+const codeCheck = require('./code-check');
 const { Push } = require('./push');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -357,7 +358,16 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     },
     // Public file links: the admin switch, the address links start with, and the activity log.
     publicOn: () => db().settings.publicLinks !== false,
-    baseUrl: (req) => (db().settings.publicUrl || '').replace(/\/+$/, '') || `${secure(req) ? 'https' : 'http'}://${requestHost(req)}`,
+    // Without a saved public address the Host header is only believed when it is the
+    // Roost domain or a home address; anything else is a visitor's say-so.
+    baseUrl: (req) => {
+      const saved = (db().settings.publicUrl || '').replace(/\/+$/, '');
+      if (saved) return saved;
+      const host = requestHost(req);
+      const domain = (db().settings.tls || {}).domain;
+      if (localHost(host) || knownDomain(req)) return `${secure(req) ? 'https' : 'http'}://${host}`;
+      return domain ? `https://${domain}` : `http://localhost`;
+    },
     isSecure: (req) => secure(req),
     audit: (req, type, user, detail) => record(req, type, { actor: user.username, detail }),
   });
@@ -1125,6 +1135,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const username = str(body.username, 32).toLowerCase();
       if (!guard.allow(username, clientIp(req, trustProxy), Boolean(req.socket.encrypted))) throw new HttpError(429, 'Too many wrong passwords for this account. Wait a few minutes, or sign in from home.');
       const user = db().users.find((u) => u.username === username);
+      if (!user) verifyAgainstNobody(body.password);
       if (!user || typeof body.password !== 'string' || !verifyPassword(body.password, user.password)) {
         limiter.fail(clientIp(req, trustProxy));
         guard.fail(username);
@@ -2489,6 +2500,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
           outside: Boolean(cert),
           lockdown: db().settings.lockdown || null,
           ports: db().settings.portCheck || null,
+          codeCheck: db().settings.codeCheck || null,
           sentinelMode: sentinel.mode,
           backupTest: (backup.readStatus(dataDir) || {}).verify || null,
         }),
@@ -2512,6 +2524,15 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       store.save();
       record(req, 'settings-changed', { actor: admin.username, detail: 'checked which ports are open' });
       send(res, 200, { ports: db().settings.portCheck });
+    },
+
+    // Reads Roost's own code for known weak spots (src/code-check.js). Only when asked.
+    'POST /api/admin/security/code': (req, res) => {
+      const admin = requireAdmin(req);
+      db().settings.codeCheck = codeCheck.run(path.join(__dirname, '..'));
+      store.save();
+      record(req, 'settings-changed', { actor: admin.username, detail: 'checked Roost\'s code' });
+      send(res, 200, { codeCheck: db().settings.codeCheck });
     },
 
     // ---------- Sentinel ----------
