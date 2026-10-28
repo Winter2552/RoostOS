@@ -2385,6 +2385,9 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     'POST /api/links/:id': async (req, res, token) => {
       const link = openLink(req, token);
       const body = await readJson(req);
+      // Reading the body takes a moment: a second request with the same link may
+      // have used it up meanwhile, and one link must only ever make one account.
+      if (!(db().links || []).includes(link)) throw new HttpError(404, 'This link has expired or was already used');
       if (!validPassword(body.password)) throw new HttpError(400, 'Password must be at least 8 characters');
       if (link.kind === 'reset') {
         const user = db().users.find((u) => u.id === link.userId);
