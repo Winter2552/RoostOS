@@ -4,7 +4,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const model = require('../public/birdhouse-model');
 
-const shelf = model.defaults('bookshelf');
+// The sheet-panel versions, which these older checks were written for.
+const panelOf = (id) => model.clean({ template: id, style: 'panel' });
+const shelf = panelOf('bookshelf');
 
 test('the default bookshelf has two sides and evenly spaced boards from top to bottom', () => {
   const v = model.view(shelf, 'front');
@@ -44,7 +46,7 @@ test('sizes are kept within sensible limits and boards never get thicker than th
 
 test('every template builds boards that stay inside its stated size and never overlap oddly', () => {
   for (const id of model.IDS) {
-    const d = model.defaults(id);
+    const d = panelOf(id);
     const all = model.solids(d);
     assert.ok(all.length >= 4, id);
     for (const b of all) {
@@ -65,16 +67,16 @@ test('every template builds boards that stay inside its stated size and never ov
 });
 
 test('the table has a top, four legs and four aprons, the bench a seat, two ends and a stretcher', () => {
-  const count = (id) => Object.fromEntries(model.parts(model.defaults(id)).map((r) => [r.name, r.qty]));
+  const count = (id) => Object.fromEntries(model.parts(panelOf(id)).map((r) => [r.name, r.qty]));
   assert.deepEqual(count('table'), { Top: 1, Leg: 4, 'Long apron': 2, 'Short apron': 2 });
   assert.deepEqual(count('bench'), { Seat: 1, 'End panel': 2, Stretcher: 1 });
   assert.deepEqual(count('box'), { Bottom: 1, 'Front and back': 2, End: 2 });
-  const t = model.size(model.defaults('table'));
+  const t = model.size(panelOf('table'));
   assert.deepEqual([t.width, t.depth, t.height], [1200, 700, 740]);
 });
 
 test('from the front a table hides its back legs, back apron and the short aprons behind the front legs', () => {
-  const v = model.view(model.defaults('table'), 'front');
+  const v = model.view(panelOf('table'), 'front');
   assert.equal(v.shapes.filter((s) => s.hidden).length, 5, 'two back legs, the back apron, two short aprons');
 });
 
@@ -152,7 +154,7 @@ test('the default bookshelf fits on one sheet, with every board placed once and 
 });
 
 test('boards of different thickness never share a sheet, and a big plan takes more sheets', () => {
-  const l = model.layout(model.defaults('table'));
+  const l = model.layout(panelOf('table'));
   assert.deepEqual(l.sheets.map((s) => s.thickness), [25], 'only the top is a sheet cut');
   assert.deepEqual(l.timber.map((g) => [g.width, g.thickness, g.bars.length]).sort(), [[60, 60, 2], [80, 20, 2]].sort(), 'legs and aprons come from timber lengths');
   assert.equal(l.sheets.reduce((n, s) => n + s.pieces.length, 0) + l.timber.reduce((n, g) => n + g.bars.reduce((m, b) => m + b.pieces.length, 0), 0), 9);
@@ -166,13 +168,13 @@ test('a board too big for any sheet is reported, and a smaller sheet is respecte
   assert.equal(l.tooBig.length, 2, 'the two 1800 mm sides');
   assert.equal(l.sheets.reduce((n, s) => n + s.pieces.length, 0), 5);
   assert.equal(model.layout(shelf, { kerf: 0 }).sheets.length, 1);
-  assert.equal(model.layout(model.defaults('table'), { timber: 600 }).tooBig.length, 6, 'the four legs and two long aprons are longer than 600');
+  assert.equal(model.layout(panelOf('table'), { timber: 600 }).tooBig.length, 6, 'the four legs and two long aprons are longer than 600');
 });
 
 test('the shopping list has the sheets and timber from the layout plus fixings, each with a search and a guess', () => {
   const shelfList = model.materials(shelf);
-  assert.deepEqual(shelfList.map((m) => [m.key, m.qty]), [['sheet-18', 1], ['screws', 1], ['glue', 1]]);
-  const tableList = model.materials(model.defaults('table'));
+  assert.deepEqual(shelfList.map((m) => [m.key, m.qty]), [['sheet-18', 1], ['screws', 1], ['glue', 1], ['antitip', 1]]);
+  const tableList = model.materials(panelOf('table'));
   assert.deepEqual(tableList.map((m) => [m.key, m.qty]), [['sheet-25', 1], ['timber-80x20', 2], ['timber-60x60', 2], ['screws', 1], ['glue', 1]]);
   for (const m of [...shelfList, ...tableList]) {
     assert.ok(Number.isFinite(m.estimate) && m.estimate > 0 && m.estimate < 500, m.key);
@@ -182,7 +184,7 @@ test('the shopping list has the sheets and timber from the layout plus fixings, 
 });
 
 test('wood already in the workshop is used before buying, and offcuts that are too small are left alone', () => {
-  const d = model.defaults('bookshelf');
+  const d = panelOf('bookshelf');
   const bought = model.materials(d).filter((m) => m.key.startsWith('sheet-') || m.key.startsWith('timber-'));
   assert.ok(bought.every((m) => m.have === 0));
 
@@ -193,7 +195,7 @@ test('wood already in the workshop is used before buying, and offcuts that are t
     ...l.timber.map((g) => ({ kind: 'timber', w: g.width, thick: g.thickness, l: 2400, qty: 5 })),
   ];
   const rich = model.materials(d, { stock });
-  for (const m of rich.filter((x) => x.key !== 'screws' && x.key !== 'glue')) {
+  for (const m of rich.filter((x) => !['screws', 'glue', 'antitip'].includes(x.key))) {
     assert.equal(m.qty, 0, `${m.key} needs nothing bought`);
     assert.ok(m.have > 0);
   }
@@ -232,11 +234,66 @@ test('every project makes real boards at its smallest, default and biggest sizes
 });
 
 test('a cabinet has doors in front of its box, a desk has a back panel, and "2 doors" is a count', () => {
-  const c = model.defaults('cabinet');
+  const c = panelOf('cabinet');
   assert.equal(model.solids(c).filter((b) => b.name === 'Door').length, 2);
   assert.equal(model.solids({ ...c, doors: 0 }).filter((b) => b.name === 'Door').length, 0);
   assert.equal(model.size(c).depth, c.depth);
   assert.equal(model.parse('cabinet 900 tall 3 shelves 1 door', null).set.doors, 1);
-  assert.ok(model.solids(model.defaults('desk')).some((b) => b.name === 'Back panel'));
+  assert.ok(model.solids(panelOf('desk')).some((b) => b.name === 'Back panel'));
   assert.equal(model.parse('desk 1500 x 750 x 740', null).template, 'desk');
+});
+
+test('framed is the default: a timber frame of posts and rails with plywood skins, same overall size', () => {
+  for (const id of model.IDS) {
+    const f = model.defaults(id);
+    const p = panelOf(id);
+    assert.equal(f.style, 'framed', id);
+    assert.deepEqual(model.size(f), model.size(p), `${id} keeps its size`);
+    const names = model.parts(f).map((r) => r.name);
+    assert.ok(names.some((n) => /rail|stretcher/i.test(n)), `${id} has rails`);
+    assert.ok(model.parts(f).every((r) => r.join && r.join.length > 10), `${id} says how each part joins`);
+  }
+  const shelf = model.defaults('bookshelf');
+  const names = model.parts(shelf).map((r) => r.name);
+  for (const n of ['Post', 'Front rail', 'Back rail', 'Side rail', 'Shelf', 'Top', 'Side skin', 'Back skin']) assert.ok(names.includes(n), n);
+  assert.equal(model.parts(shelf).find((r) => r.name === 'Post').qty, 4);
+  assert.equal(model.parts(shelf).find((r) => r.name === 'Shelf').qty, shelf.shelves - 1, 'bottom and between; the top is a separate board');
+  assert.equal(model.clean({ template: 'bookshelf', style: 'wobbly' }).style, 'framed');
+});
+
+test('framed posts and rails are cut from timber lengths and the skins from sheets', () => {
+  const l = model.layout(model.defaults('bookshelf'));
+  assert.ok(l.timber.some((g) => g.width === 44 && g.thickness === 44));
+  assert.ok(l.sheets.some((s) => s.thickness === 12), 'plywood skins');
+  assert.equal(l.tooBig.length, 0);
+  const big = model.clean({ template: 'bookshelf', height: 2400, frame: 94 });
+  assert.ok(model.layout(big).timber.every((g) => g.width <= 100));
+  const m = model.materials(model.defaults('bookshelf')).map((x) => x.key);
+  assert.ok(m.includes('timber-44x44') && m.includes('sheet-12') && m.includes('screws'));
+});
+
+test('no board sticks out of the frame, and rails sit between the posts rather than through them', () => {
+  for (const id of model.IDS) {
+    const d = model.defaults(id);
+    const size = model.size(d);
+    const boards = model.solids(d);
+    for (const b of boards) assert.ok(b.x >= 0 && b.y >= 0 && b.z >= 0 && b.x + b.w <= size.width && b.y + b.d <= size.depth && b.z + b.h <= size.height, `${id} ${b.name}`);
+    const posts = boards.filter((b) => b.name === 'Post' || b.name === 'Leg');
+    const rails = boards.filter((b) => /rail|stretcher|apron/i.test(b.name));
+    const hits = (a, c) => a.x < c.x + c.w && c.x < a.x + a.w && a.y < c.y + c.d && c.y < a.y + a.d && a.z < c.z + c.h && c.z < a.z + a.h;
+    for (const r of rails) for (const p of posts) assert.ok(!hits(r, p), `${id}: ${r.name} runs through a ${p.name}`);
+  }
+});
+
+test('tip-over and sagging checks: tall panel pieces are warned about, framed ones are told to fix to the wall', () => {
+  const tallPanel = model.checks(model.clean({ template: 'bookshelf', style: 'panel', height: 2000, depth: 300 }));
+  assert.ok(tallPanel.some((c) => c.level === 'warn' && c.tip && /Framed/.test(c.text)));
+  const tallFramed = model.checks(model.clean({ template: 'bookshelf', height: 2000, depth: 300 }));
+  assert.ok(tallFramed.some((c) => c.level === 'note' && c.tip));
+  assert.ok(model.materials(model.clean({ template: 'bookshelf', height: 2000, depth: 300 })).some((m) => m.key === 'antitip'));
+  const absurd = model.checks(model.clean({ template: 'bookshelf', height: 2400, depth: 200 }));
+  assert.ok(absurd.some((c) => c.level === 'warn' && /tip easily/.test(c.text)));
+  assert.deepEqual(model.checks(model.clean({ template: 'bookshelf', height: 900, depth: 350 })).filter((c) => c.tip), []);
+  assert.deepEqual(model.checks(model.defaults('table')), []);
+  assert.ok(model.checks(model.clean({ template: 'bookshelf', width: 2000, thickness: 12 })).some((c) => /sag/.test(c.text)));
 });
