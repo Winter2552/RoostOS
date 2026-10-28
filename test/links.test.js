@@ -3,6 +3,7 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 const { createServer } = require('../src/server');
@@ -165,4 +166,18 @@ test('invites and reset links show in the activity log', async () => {
     assert.ok(types.includes(t), `missing ${t}`);
   }
   assert.equal(body.entries.find((e) => e.type === 'user-joined').actor, 'mum');
+});
+
+test('one invite link makes only one account, even when used twice at the same moment', async () => {
+  const made = await call('POST', '/api/admin/invites', { label: 'Race', role: 'admin' }, adminCookie);
+  // Every request opens the link first and sends its body afterwards, so all of them hold the link at once.
+  const send = (username) => new Promise((resolve, reject) => {
+    const req = http.request(`${base}/api/links/${made.body.token}`, { method: 'POST', headers: { 'Content-Type': 'application/json' } }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
+    req.on('error', reject);
+    req.flushHeaders();
+    setTimeout(() => req.end(JSON.stringify({ username, password: 'long enough' })), 150);
+  });
+  const codes = await Promise.all(['racer1', 'racer2', 'racer3'].map(send));
+  assert.equal(codes.filter((c) => c === 201).length, 1);
+  assert.equal(readDb().users.filter((u) => u.username.startsWith('racer')).length, 1);
 });
