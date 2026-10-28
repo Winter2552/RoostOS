@@ -297,3 +297,16 @@ test('tip-over and sagging checks: tall panel pieces are warned about, framed on
   assert.deepEqual(model.checks(model.defaults('table')), []);
   assert.ok(model.checks(model.clean({ template: 'bookshelf', width: 2000, thickness: 12 })).some((c) => /sag/.test(c.text)));
 });
+
+test('a stool is a project, and new project words are known', () => {
+  assert.equal(model.parse('a stool 450 high', null).template, 'stool');
+  assert.equal(model.parse('a barstool', null).template, 'stool');
+  assert.equal(model.parse('a nightstand 500 tall', null).template, 'cabinet');
+  assert.equal(model.parse('a workbench 1800 x 600 x 900', null).template, 'desk');
+  for (const style of ['framed', 'panel']) {
+    const d = model.clean({ template: 'stool', style });
+    assert.equal(model.layout(d).tooBig.length, 0);
+    assert.equal(model.parts(d).find((r) => r.name === 'Leg').qty, 4);
+  }
+  assert.ok(model.parts(model.defaults('stool')).some((r) => r.name === 'Low stretcher'));
+});

@@ -584,6 +584,8 @@
   function readSentence(text, current) {
     const p = model.parse(text, current);
     if (!p.template && !Object.keys(p.set).length && !p.unused.length) return null;
+    // Starting a project with no project word in it: don't guess one.
+    if (!current && !p.template) return { unknown: true };
     const id = p.template || current || 'bookshelf';
     const d = model.clean({ ...(current && id === S.d.template ? S.d : model.defaults(id)), template: id, ...p.set });
     const t = model.TEMPLATES[id];
@@ -728,6 +730,7 @@ My idea: ${idea.trim() || '(describe what you want to build)'}`;
       e.preventDefault();
       const r = readSentence(ask.querySelector('input').value, null);
       if (!r) { flashHome('Try: bookshelf 1800 tall, 800 wide, 5 shelves'); return; }
+      if (r.unknown) { flashHome(`I don’t know that project yet. I can plan a ${model.IDS.map((id) => model.TEMPLATES[id].name.toLowerCase()).join(', ')}. Tap one, or use Ask Claude to turn your idea into the closest.`); return; }
       newPlan(r.d, null);
     });
     const starters = h('ul', { class: 'bh-starters' }, ...model.IDS.map((id) => h('li', {}, h('button', { type: 'button', class: 'bh-starter', 'aria-label': `New ${model.TEMPLATES[id].name.toLowerCase()}`, onclick: () => newPlan(model.defaults(id), null) },

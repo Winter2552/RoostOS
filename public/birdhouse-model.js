@@ -131,6 +131,38 @@
       },
     },
 
+    stool: {
+      name: 'Stool',
+      limits: { height: range(200, 800, 10, 'Height'), width: range(200, 500, 10, 'Seat width'), depth: range(200, 500, 10, 'Seat depth'), thickness: range(15, 40, 1, 'Seat thickness'), leg: range(30, 80, 1, 'Leg size') },
+      defaults: { height: 450, width: 320, depth: 320, thickness: 25, leg: 44 },
+      words: { height: ['tall', 'high', 'height'], width: ['wide', 'width'], depth: ['deep', 'depth'], thickness: ['thick', 'thickness', 'seat'], leg: ['leg', 'legs'] },
+      order: ['width', 'depth', 'height'],
+      fit(d) { d.leg = Math.min(d.leg, Math.floor((Math.min(d.width, d.depth) - 50) / 3)); d.thickness = Math.min(d.thickness, Math.floor(d.height / 4)); },
+      chips: (d, f = String) => [`W ${f(d.width)}`, `D ${f(d.depth)}`, `H ${f(d.height)}`, `Seat ${f(d.thickness)}`, `Legs ${f(d.leg)}`],
+      framed: (d) => TEMPLATES.stool.solids(d, true),
+      // Four legs tied by aprons under the seat; framed adds low stretchers so it cannot wobble.
+      solids(d, braced) {
+        const ov = 15;
+        const lg = d.leg;
+        const at = 20;
+        const lh = d.height - d.thickness;
+        const apron = Math.min(60, Math.floor(lh / 5));
+        const run = d.width - 2 * ov - 2 * lg;
+        const gap = d.depth - 2 * ov - 2 * lg;
+        const out = [{ name: 'Seat', x: 0, y: 0, z: lh, w: d.width, d: d.depth, h: d.thickness }];
+        for (const x of [ov, d.width - ov - lg]) for (const y of [ov, d.depth - ov - lg]) out.push({ name: 'Leg', x, y, z: 0, w: lg, d: lg, h: lh });
+        for (const y of [ov, d.depth - ov - at]) out.push({ name: 'Long apron', x: ov + lg, y, z: lh - apron, w: run, d: at, h: apron });
+        for (const x of [ov, d.width - ov - at]) out.push({ name: 'Short apron', x, y: ov + lg, z: lh - apron, w: at, d: gap, h: apron });
+        if (braced) {
+          const sz = Math.min(30, lg);
+          const bz = Math.min(150, Math.floor(lh / 4));
+          for (const y of [ov + lg / 2 - sz / 2, d.depth - ov - lg / 2 - sz / 2]) out.push(B('Low stretcher', ov + lg, Math.round(y), bz, run, sz, sz, JOIN.rail));
+          for (const x of [ov + lg / 2 - sz / 2, d.width - ov - lg / 2 - sz / 2]) out.push(B('Low stretcher', Math.round(x), ov + lg, bz, sz, gap, sz, JOIN.rail));
+        }
+        return out;
+      },
+    },
+
     box: {
       name: 'Box',
       limits: { width: range(100, 1200, 10, 'Width'), depth: range(100, 900, 10, 'Depth'), height: range(50, 800, 10, 'Height'), thickness: range(4, 30, 1, 'Board thickness'), frame: range(34, 94, 1, 'Frame timber') },
@@ -559,10 +591,11 @@
   const KINDS = {
     bookshelf: ['bookshelf', 'bookcase', 'shelf', 'shelves', 'shelving'],
     table: ['table'],
-    desk: ['desk', 'workstation'],
-    cabinet: ['cabinet', 'cupboard', 'sideboard', 'unit'],
-    box: ['box', 'crate', 'chest'],
-    bench: ['bench', 'seat'],
+    desk: ['desk', 'workstation', 'workbench'],
+    cabinet: ['cabinet', 'cupboard', 'sideboard', 'unit', 'wardrobe', 'nightstand', 'bedside'],
+    box: ['box', 'crate', 'chest', 'trunk'],
+    bench: ['bench', 'pew'],
+    stool: ['stool', 'footstool', 'barstool'],
   };
   const MM = { mm: 1, cm: 10, m: 1000, in: 25.4, inch: 25.4, inches: 25.4, '"': 25.4 };
   const NUM = String.raw`(\d+(?:[.,]\d+)?)\s*(mm|cm|m|inches|inch|in|")?`;
