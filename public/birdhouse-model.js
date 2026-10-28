@@ -447,6 +447,20 @@ Rules for custom designs:
 - "notes" is 2 to 5 sentences: why it is built this way and anything to watch for.`;
   }
 
+  // A design as the JSON a designer replies with, so it can be sent back for changes.
+  function describeDesign(d, name) {
+    const t = TEMPLATES[d.template];
+    if (t.custom) return JSON.stringify({ template: 'custom', name, notes: d.notes || '', boards: d.boards.map((b) => ({ name: b.name, x: b.x, y: b.y, z: b.z, w: b.w, d: b.d, h: b.h, join: b.join })) });
+    const sizes = {};
+    for (const k of Object.keys(t.limits)) sizes[k] = d[k];
+    return JSON.stringify({ template: d.template, name, sizes });
+  }
+
+  // The request that goes with a design for changing it.
+  function reviseRequest(d, name, change) {
+    return `Here is the current design:\n\`\`\`json\n${describeDesign(d, name)}\n\`\`\`\n\nChange it like this: ${String(change).trim()}\n\nReply with the complete updated design in the same format. Keep everything I did not ask to change, and keep it buildable (nothing floating or passing through other boards).`;
+  }
+
   // Reads a designer's reply: the built-in kind or a custom design.
   //   -> { ok: true, d, name, notes, problems } | { ok: false, error }
   function readDesign(reply) {
@@ -782,7 +796,7 @@ Rules for custom designs:
     return { template, set, unused };
   }
 
-  const exported = { TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, layout, materials, project, parse, ownedStock, checks, sanitizeBoards, boardProblems, designInstructions, readDesign };
+  const exported = { TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, layout, materials, project, parse, ownedStock, checks, sanitizeBoards, boardProblems, designInstructions, readDesign, describeDesign, reviseRequest };
   if (typeof module !== 'undefined' && module.exports) module.exports = exported;
   else window.birdhouseModel = exported;
 })();
