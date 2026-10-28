@@ -1,0 +1,13 @@
+{
+  "version": "0.1.25",
+  "date": "2026-10-28",
+  "title": "Birdhouse designs anything",
+  "summary": "Free-form Custom designs, a Stool, and optional Design with Claude with Quick to Deep tiers.",
+  "items": [
+    {
+      "title": "Birdhouse can design anything",
+      "text": "Ask Claude now makes a free-form design when none of the built-in projects fit: every board is placed individually, with how it joins and a note on why it is built that way. Birdhouse checks the boards don't pass through each other or float. Pick Quick, Balanced, Creative or Deep to choose how hard Claude thinks, each with its rough cost shown first. It needs an API key saved under Admin → Server (kept encrypted, with monthly and daily limits). Without a key you can still paste from your own Claude chat.",
+      "image": "birdhouse-claude.png"
+    }
+  ]
+}
