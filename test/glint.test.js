@@ -354,3 +354,12 @@ test('a photo and a short clip with the same name are one Live Photo', async () 
   trash = (await call('GET', '/api/glint/trash', null, liv)).body.items;
   assert.equal(trash.length, 0);
 });
+
+test('"Only Nest photos" shows just the photos that live elsewhere in Nest', async () => {
+  const nest = await photos(sam, '?own=nest');
+  const names = nest.items.map((i) => i.name);
+  assert.ok(names.includes('old.jpg') && !names.includes('IMG_own.jpg'));
+  const all = await photos(sam);
+  const own = await photos(sam, '?own=1');
+  assert.equal(nest.total + own.total, all.total);
+});
