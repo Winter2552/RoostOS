@@ -308,7 +308,7 @@
   function renderTools() {
     const tools = $('#glint-tools');
     const note = (text) => el('span', { class: 'mono muted glint-count', text });
-    if (G.mode === 'photos') tools.replaceChildren(note(G.total ? plural(G.total, 'item') : ''), zoomButtons());
+    if (G.mode === 'photos') tools.replaceChildren(note(G.total ? plural(G.total, 'item') : ''), zoomButtons(), yearFinder());
     else if (G.mode === 'undated') {
       tools.replaceChildren(note(G.total ? plural(G.total, 'photo') : ''),
         G.items.length ? el('button', { type: 'button', class: 'btn ghost small', text: 'Use file names', onclick: () => dateFromNames(G.items) }) : '');
@@ -417,6 +417,12 @@
   body.addEventListener('click', (e) => {
     const t = e.target.closest('.gtile');
     if (!t) {
+      // In year view, a tap on a year label opens the list of years to jump to.
+      if (G.zoom === ZOOM_MAX && e.target.closest('.glint-month') && zoomable()) {
+        const btn = document.querySelector('.glint-years-btn');
+        if (btn && !yearsOpen) openYears(btn);
+        return;
+      }
       // A tap anywhere else in a zoomed-out grid (a month heading, a gap) zooms in there too.
       if (G.zoom > 0 && coarse.matches && zoomable() && !e.target.closest('a, button')) setZoom(G.zoom - 1, e.clientX, e.clientY);
       return;
@@ -464,6 +470,79 @@
     // Fingers lifting off after a pinch are not a tap.
     else if (Date.now() - zoomedAt < 400) { e.stopImmediatePropagation(); e.preventDefault(); }
   }, true);
+
+  // ---------- jump to year ----------
+  // A calendar button next to the zoom buttons opens a short list of the years that have photos.
+  // The list is fetched when it opens (nothing runs in the background). Picking a year loads
+  // pages until that year is in the timeline, then scrolls to it.
+  let yearsOpen = null; // the open popover, if any
+
+  function closeYears() {
+    if (!yearsOpen) return;
+    yearsOpen.remove();
+    yearsOpen = null;
+    document.removeEventListener('pointerdown', outsideYears, true);
+    document.removeEventListener('keydown', escYears, true);
+  }
+  const outsideYears = (e) => { if (!e.target.closest('.glint-years, .glint-years-btn')) closeYears(); };
+  const escYears = (e) => { if (e.key === 'Escape') closeYears(); };
+
+  function yearFinder() {
+    const btn = el('button', { type: 'button', class: 'glint-zoom-btn glint-years-btn', 'aria-label': 'Jump to year', title: 'Jump to year', 'aria-haspopup': 'true', onclick: () => (yearsOpen ? closeYears() : openYears(btn)) }, gi('calendar'));
+    return el('span', { class: 'glint-years-wrap' }, btn);
+  }
+
+  async function openYears(btn) {
+    const pop = el('div', { class: 'glint-years', role: 'menu', 'aria-label': 'Jump to year' }, el('span', { class: 'muted glint-years-note', text: 'Loading…' }));
+    yearsOpen = pop;
+    btn.parentNode.append(pop);
+    document.addEventListener('pointerdown', outsideYears, true);
+    document.addEventListener('keydown', escYears, true);
+    try {
+      const { years } = await gapi('GET', `/api/glint/years?tz=${tzOffset()}${G.hideNest ? '&own=1' : ''}`);
+      if (yearsOpen !== pop) return;
+      if (!years.length) { pop.replaceChildren(el('span', { class: 'muted glint-years-note', text: 'No photos yet' })); return; }
+      pop.replaceChildren(...years.map((y) => el('button', {
+        type: 'button', role: 'menuitem', class: 'glint-year', title: plural(y.count, 'item'), onclick: () => { closeYears(); jumpToYear(y.year); },
+      }, String(y.year))));
+      pop.querySelector('button').focus({ preventScroll: true });
+    } catch (err) {
+      if (yearsOpen === pop) pop.replaceChildren(el('span', { class: 'muted glint-years-note', text: err.message }));
+    }
+  }
+
+  const yearOf = (p) => new Date(p.taken).getFullYear();
+  const yearHead = (year) => body.querySelector(`.glint-month[data-year="${year}"]`);
+
+  async function jumpToYear(year) {
+    if (G.mode !== 'photos') return;
+    if (!yearHead(year)) {
+      // Photos are newest first: keep adding pages until one is from this year or older.
+      const token = G.token;
+      toast(`Going to ${year}…`);
+      while (G.next && !G.items.some((p) => yearOf(p) <= year)) {
+        if (G.loading) { await sleep(60); if (token !== G.token) return; continue; }
+        G.loading = true;
+        try {
+          const q = new URLSearchParams({ before: G.next });
+          if (G.hideNest) q.set('own', '1');
+          const d = await gapi('GET', `/api/glint/photos?${q}`);
+          if (token !== G.token) return;
+          G.items = G.items.concat(d.items);
+          G.next = d.next;
+        } catch (err) {
+          if (token === G.token) { G.loading = false; toast(err.message); }
+          return;
+        }
+        G.loading = false;
+      }
+      if (token !== G.token) return;
+      render();
+    }
+    const head = yearHead(year) || [...body.querySelectorAll('.glint-month.yr')].filter((h) => Number(h.dataset.year) < year)[0];
+    if (head) head.scrollIntoView({ block: 'start', behavior: 'auto' });
+    watchEnd();
+  }
 
   // ---------- zoom ----------
   // Pinch two fingers together for a denser grid, apart for a roomier one (like

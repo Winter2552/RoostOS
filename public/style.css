@@ -1373,6 +1373,12 @@ button.restore-name:hover { text-decoration: underline; text-underline-offset: 3
 .glint-zoom-btn:disabled { opacity: 0.35; cursor: default; }
 .glint-zoom-btn .ni svg { width: 16px; height: 16px; }
 @media (pointer: coarse) { .glint-zoom { display: none; } }
+.glint-years-wrap { position: relative; display: inline-block; margin-left: 6px; vertical-align: middle; }
+.glint-years { position: fixed; left: 50%; top: 15vh; transform: translateX(-50%); z-index: 60; width: min(264px, calc(100vw - 32px)); max-height: min(60vh, 360px); overflow-y: auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18); }
+.glint-year { min-height: 40px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: none; color: var(--ink); font: inherit; font-size: 14px; cursor: pointer; }
+.glint-year:hover, .glint-year:focus-visible { background: var(--ink); color: var(--bg); }
+.glint-years-note { grid-column: 1 / -1; padding: 6px; font-size: 13px; }
+.glint-month { scroll-margin-top: 100px; }
 @media (max-width: 600px) { #glint-body[data-zoom="3"]:has(> .glint-grid) { grid-template-columns: repeat(var(--gcols), minmax(0, 1fr)); } }
 .gtile { position: relative; aspect-ratio: 1; overflow: hidden; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; outline: none; }
 .gtile img { width: 100%; height: 100%; object-fit: cover; display: block; }

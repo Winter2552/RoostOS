@@ -133,6 +133,11 @@ test('moves a Takeout: right dates, albums, favourites, no repeats, no trash', a
   assert.equal(byName['b-edited.jpg'].taken, Date.UTC(2020, 2, 9, 12)); // edited copies share the original's JSON
   assert.equal(byName['clip.mp4'].video, true);
   assert.equal(byName['clip.mp4'].taken, Date.UTC(2020, 4, 1, 12));
+
+  // The jump-to-year list: only years with photos, newest first, counted in the viewer's own time zone.
+  const yrs = (await call('GET', '/api/glint/years?tz=0', null, mia)).body.years;
+  assert.deepEqual(yrs.map((y) => y.year), [...new Set(page.items.map((p) => new Date(p.taken).getUTCFullYear()))].sort((x, y) => y - x));
+  assert.equal(yrs.reduce((n, y) => n + y.count, 0), page.total);
   assert.equal(byName['IMG_9(1).jpg'].taken, Date.UTC(2021, 0, 2, 12));
   assert.ok(!byName['gone.jpg'] && !byName['old.jpg'] && !byName['broken.jpg']);
   assert.ok(fs.existsSync(path.join(miaHome(), 'files', 'Photos', '2019', 'IMG_1.jpg')));
