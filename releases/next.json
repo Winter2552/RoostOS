@@ -1,9 +1,3 @@
 {
-  "items": [
-    {
-      "title": "Only Nest photos in Glint",
-      "text": "A new switch in Glint shows just the photos that live elsewhere in Nest, like ones moved in from Google Drive. It's the opposite of Hide Nest photos, and the two can't be on together.",
-      "image": "glint-nest-only.png"
-    }
-  ]
+  "items": []
 }
