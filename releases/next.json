@@ -1,9 +1,3 @@
 {
-  "items": [
-    {
-      "title": "Photos only in Nest",
-      "text": "Tap the picture button in Nest to see every photo and video in the folder you're in, and the folders inside it, as one grid. Tap it again to go back.",
-      "image": "nest-photos.png"
-    }
-  ]
+  "items": []
 }
