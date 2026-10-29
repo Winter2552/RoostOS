@@ -1030,6 +1030,15 @@ a.watch-card:focus-visible { transform: translate(4px, 4px); box-shadow: 3px 3px
 .nest-list.grid .nname { width: 100%; }
 .nest-list.grid .nsub { display: block; width: 100%; }
 .nest-list.grid .ndate, .nest-list.grid .nsize { display: none; }
+/* Photos only: edge-to-edge square pictures, name underneath */
+.nest-list.grid.photos { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.nest-list.grid.photos .nrow { padding: 0; border: 0; gap: 4px; border-radius: 12px; }
+.nest-list.grid.photos .ntype { position: relative; width: 100%; height: auto; aspect-ratio: 1; margin: 0; border: 1.5px solid var(--line); border-radius: 12px; overflow: hidden; }
+.nest-list.grid.photos .ntype img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: var(--bg); }
+.nest-list.grid.photos .nname { font-size: 12px; }
+.nest-list.grid.photos .nsub { display: none; }
+.nest-list.grid.photos .nrow.sel .ntype { border-color: var(--ink); box-shadow: 0 0 0 2px var(--ink); }
+.nest-list.grid.photos .nmore { top: 6px; right: 4px; background: var(--bg); border-radius: 999px; }
 .nest-list.grid .nmore { position: absolute; top: 10px; right: 8px; }
 
 .nest-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 72px 16px; text-align: center; border: 1.5px dashed var(--line); border-radius: var(--radius); margin-top: 8px; }
@@ -1096,6 +1105,7 @@ a.watch-card:focus-visible { transform: translate(4px, 4px); box-shadow: 3px 3px
   .nrow:hover { background: rgba(242, 239, 233, 0.05); }
   .nrow.sel:hover { background: rgba(242, 239, 233, 0.14); }
   .nmore:hover, .nup-x:hover, .nest-icon-btn:hover { color: var(--ink); border-color: var(--ink); }
+  .nest-icon-btn[aria-pressed='true']:hover { color: var(--bg); }
   .nmore:hover, .nup-x:hover { background: rgba(242, 239, 233, 0.08); }
   .nest-places a:not(.active):hover, .nest-crumbs .crumb:hover, .nest-cols button:hover { color: var(--ink); }
   .nmenu button:hover, .nmove-item:hover { background: rgba(242, 239, 233, 0.1); }

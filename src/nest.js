@@ -52,6 +52,10 @@ function viewOf(name) {
   return null;
 }
 
+// Pictures and video by type, or by ending when the browser gave no type.
+const PHOTO_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'bmp', 'tif', 'tiff', 'mp4', 'mov', 'm4v', 'webm', '3gp'];
+const PHOTO_TEST = `(mime LIKE 'image/%' OR mime LIKE 'video/%' OR ${PHOTO_EXTS.map((e) => `name LIKE '%.${e}'`).join(' OR ')})`;
+
 const SORTS = { name: 'name COLLATE NOCASE', modified: 'modified', size: 'size' };
 
 const SCHEMA = `
@@ -307,8 +311,9 @@ class Nest {
 
   // ---------- folders ----------
 
-  list(user, id, { sort = 'name', dir = 'asc', offset = 0, foldersOnly = false } = {}) {
+  list(user, id, { sort = 'name', dir = 'asc', offset = 0, foldersOnly = false, photos = false } = {}) {
     const folder = this.folder(user, id);
+    if (photos) return this.listPhotos(user, folder, sort, dir, offset);
     const col = SORTS[sort] || SORTS.name;
     const order = dir === 'desc' ? 'DESC' : 'ASC';
     const key = `${col}|${order}|${foldersOnly}`;
@@ -326,6 +331,32 @@ class Nest {
       items: rows.slice(0, PAGE).map(item),
       more: rows.length > PAGE,
       total: this.q.count.get(user.id, folder.id).n,
+      storage: this.storage(user),
+    };
+  }
+
+  // Photos-only view: every picture and video in this folder and the folders
+  // under it, as one flat list (no folders), so a trip can be browsed as a grid.
+  listPhotos(user, folder, sort, dir, offset) {
+    const col = SORTS[sort] || SORTS.name;
+    const order = dir === 'desc' ? 'DESC' : 'ASC';
+    const key = `photos|${col}|${order}`;
+    if (!this.pages.has(key)) {
+      this.pages.set(key, this.db.prepare(`WITH RECURSIVE d(id) AS (
+          SELECT ?2 UNION ALL SELECT n.id FROM nodes n JOIN d ON n.parent = d.id
+          WHERE n.owner = ?1 AND n.kind = 'folder' AND n.trash_root IS NULL)
+        SELECT * FROM nodes WHERE owner = ?1 AND kind = 'file' AND trash_root IS NULL
+          AND parent IN (SELECT id FROM d) AND ${PHOTO_TEST}
+        ORDER BY ${col} ${order}, name COLLATE NOCASE ${order} LIMIT ?3 OFFSET ?4`));
+    }
+    const rows = this.pages.get(key).all(user.id, folder.id, PAGE + 1, Math.max(0, offset | 0));
+    const crumbs = folder.id ? this.q.chain.all(folder.id).map((c) => ({ id: c.id, name: c.name })) : [];
+    return {
+      folder: { id: folder.id || 'root', name: folder.name },
+      path: crumbs,
+      items: rows.slice(0, PAGE).map(item),
+      more: rows.length > PAGE,
+      total: rows.length > PAGE ? PAGE + 1 : offset + rows.length,
       storage: this.storage(user),
     };
   }
@@ -893,6 +924,7 @@ class Nest {
         dir: params.get('dir'),
         offset: Number(params.get('offset')) || 0,
         foldersOnly: params.get('folders') === '1',
+        photos: params.get('photos') === '1',
       }));
     }
     if (method === 'POST' && pathname === '/api/nest/folders') {

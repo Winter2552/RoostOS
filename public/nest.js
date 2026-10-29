@@ -80,7 +80,7 @@
 
   // ---------- state ----------
 
-  const prefs = { view: 'list', sort: 'name', dir: 'asc' };
+  const prefs = { view: 'list', sort: 'name', dir: 'asc', photos: false };
   try { Object.assign(prefs, JSON.parse(localStorage.getItem('nest.prefs') || '{}')); } catch { /* private mode */ }
   const savePrefs = () => { try { localStorage.setItem('nest.prefs', JSON.stringify(prefs)); } catch { /* ignore */ } };
 
@@ -153,8 +153,11 @@
     return space ? `${url}${url.includes('?') ? '&' : '?'}space=${space}` : url;
   }
 
+  // Photos-only view: one grid of every picture and video in this folder and below.
+  const photosOnly = () => prefs.photos && N.mode === 'drive';
+
   async function fetchPage(offset) {
-    return api('GET', sp(`/api/nest/folders/${N.folderId}?sort=${prefs.sort}&dir=${prefs.dir}&offset=${offset}`));
+    return api('GET', sp(`/api/nest/folders/${N.folderId}?sort=${prefs.sort}&dir=${prefs.dir}&offset=${offset}${photosOnly() ? '&photos=1' : ''}`));
   }
 
   // Loads the folder again, keeping at least `keep` items so the scroll position holds.
@@ -306,10 +309,15 @@
     $('#nest-dir').setAttribute('aria-label', prefs.dir === 'asc' ? 'Ascending, tap to reverse' : 'Descending, tap to reverse');
     document.querySelectorAll('[data-view-mode]').forEach((b) => {
       b.replaceChildren(ni(b.dataset.viewMode));
-      b.setAttribute('aria-pressed', String(prefs.view === b.dataset.viewMode));
+      b.setAttribute('aria-pressed', String((photosOnly() ? 'grid' : prefs.view) === b.dataset.viewMode));
     });
-    const grid = prefs.view === 'grid' && N.mode === 'drive';
+    const ph = $('#nest-photos');
+    ph.replaceChildren(ni('image'));
+    ph.setAttribute('aria-pressed', String(photosOnly()));
+    ph.classList.toggle('hidden', N.mode !== 'drive');
+    const grid = (prefs.view === 'grid' || photosOnly()) && N.mode === 'drive';
     list.classList.toggle('grid', grid);
+    list.classList.toggle('photos', photosOnly());
     const cols = $('#nest-cols');
     cols.classList.toggle('hidden', grid || !N.items.length);
     const head = (key, text) => (N.mode === 'drive'
@@ -332,6 +340,20 @@
     load();
   }
 
+  // Photos-only tiles show the Glint thumbnail when there is one, else the picture itself;
+  // anything the browser can't draw (HEIC on Windows, video) keeps its icon.
+  function tileImage(it) {
+    const kind = kindIcon(it);
+    const img = el('img', { alt: '', loading: 'lazy', decoding: 'async', draggable: 'false' });
+    let tried = 0;
+    img.addEventListener('error', () => {
+      if (!tried++ && kind === 'image' && !/\.(heic|heif|tiff?)$/i.test(it.name)) img.src = viewUrl(it);
+      else img.remove();
+    });
+    img.src = sp(`/api/glint/thumbs/${it.id}`);
+    return img;
+  }
+
   function rowFor(it) {
     const trash = N.mode === 'trash';
     const size = it.kind === 'folder' ? '—' : bytes(it.size);
@@ -344,7 +366,7 @@
       draggable: !trash && !coarse.matches ? 'true' : null,
       'data-drop': it.kind === 'folder' && !trash ? it.id : null,
     },
-    el('span', { class: 'ntype' }, ni(kindIcon(it)), ni('check', 'ntick')),
+    el('span', { class: 'ntype' }, ni(kindIcon(it)), photosOnly() ? tileImage(it) : null, ni('check', 'ntick')),
     el('span', { class: 'nname', text: it.name, title: it.name }),
     el('span', { class: 'nsub mono muted', text: it.kind === 'folder' ? date : `${date} · ${size}` }),
     el('span', { class: 'ndate mono muted', text: date }),
@@ -367,7 +389,9 @@
       return;
     }
     if (!N.items.length) {
-      const msg = N.mode === 'trash'
+      const msg = photosOnly()
+        ? ['No photos here', 'Pictures and videos in this folder and the ones inside it show up here.']
+        : N.mode === 'trash'
         ? ['Trash is empty', `Items in the trash are deleted forever after ${N.days} days.`]
         : N.folderId === 'root'
           ? ['Your drive is empty', coarse.matches ? 'Tap + to upload files or make a folder.' : 'Drop files and folders here, or use New.']
@@ -891,6 +915,13 @@
   });
 
   $('#nest-sort').addEventListener('change', (e) => sortBy(e.target.value));
+  $('#nest-photos').addEventListener('click', () => {
+    prefs.photos = !prefs.photos;
+    savePrefs();
+    N.sel.clear();
+    renderTools();
+    load();
+  });
   $('#nest-dir').addEventListener('click', () => sortBy(prefs.sort));
   document.querySelectorAll('[data-view-mode]').forEach((b) => b.addEventListener('click', () => {
     prefs.view = b.dataset.viewMode;
