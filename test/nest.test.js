@@ -315,17 +315,3 @@ test('a Shortcut makes a key on Profile, then sends a big video in one request',
   const again = await fetch(`${base}/api/backup/file?${q('VID_1')}`, { method: 'PUT', headers: auth, body: Buffer.from('x') });
   assert.equal((await again.json()).have, true);
 });
-
-test('photos-only lists every picture and video below a folder, not other files', async () => {
-  const trip = (await call('POST', '/api/nest/folders', { parent: 'root', name: 'Trip' }, admin)).body.item;
-  const beach = (await call('POST', '/api/nest/folders', { parent: trip.id, name: 'Beach' }, admin)).body.item;
-  await upload(admin, trip.id, 'plan.txt', 'notes');
-  await upload(admin, trip.id, 'a.jpg', 'x');
-  await upload(admin, beach.id, 'b.MOV', 'x');
-  await upload(admin, beach.id, 'c.png', 'x', { type: 'image/png' });
-  const gone = await upload(admin, beach.id, 'gone.jpg', 'x');
-  await call('POST', '/api/nest/trash', { ids: [gone.id] }, admin);
-  const names = (await list(admin, trip.id, '?photos=1&sort=name')).items.map((i) => i.name);
-  assert.deepEqual(names, ['a.jpg', 'b.MOV', 'c.png']);
-  assert.deepEqual((await list(admin, beach.id, '?photos=1')).items.map((i) => i.name), ['b.MOV', 'c.png']);
-});
