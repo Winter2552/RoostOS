@@ -39,6 +39,11 @@ const MEDIA = `n.kind = 'file' AND n.mime != 'image/svg+xml' AND (n.mime LIKE 'i
 
 // Photos and videos with no date taken inside them (screenshots, messaging apps, scans, clips): still dated by their file.
 // Photos the browser hasn't looked at yet are left out until it has.
+// Photos Glint put in Photos/ (and Photos/<year>); `which` is true for those, or 'nest' for all the others.
+const ownFilter = (which) => `AND n.parent ${which === 'nest' ? 'NOT IN' : 'IN'} (SELECT f.id FROM nodes f WHERE f.owner = :owner AND f.kind = 'folder'
+          AND f.trash_root IS NULL AND (f.id = :photos OR f.parent = :photos))`;
+const ownParam = (v) => (v === 'nest' ? 'nest' : v === '1');
+
 const UNDATED = `AND p.date_src = 0 AND p.exif = 0 AND p.thumb != 0`;
 
 const SCHEMA = `
@@ -226,8 +231,8 @@ class Glint {
     if (album && !this.q.album.get(album, user.id)) throw new HttpError(404, 'That album no longer exists');
     const key = `${Boolean(before)}|${Boolean(album)}|${favourites}|${own}|${undated}|${Boolean(person)}`;
     // "Own" shows only what Glint put in Photos/ (and Photos/<year>), not photos that live elsewhere in Nest.
-    const ownSql = own ? `AND n.parent IN (SELECT f.id FROM nodes f WHERE f.owner = :owner AND f.kind = 'folder'
-          AND f.trash_root IS NULL AND (f.id = :photos OR f.parent = :photos))` : '';
+    // "Nest" is the reverse: only photos that live elsewhere in Nest.
+    const ownSql = own ? ownFilter(own) : '';
     if (!this.pages.has(key)) {
       this.pages.set(key, this.db.prepare(`SELECT p.*, n.name, n.mime, n.size FROM photos p
         JOIN nodes n ON n.id = p.id
@@ -521,8 +526,7 @@ class Glint {
     let ownSql = '';
     if (own) {
       params.photos = (this.nest.q.findFolder.get(user.id, '', 'Photos') || { id: '-' }).id;
-      ownSql = `AND n.parent IN (SELECT f.id FROM nodes f WHERE f.owner = :owner AND f.kind = 'folder'
-          AND f.trash_root IS NULL AND (f.id = :photos OR f.parent = :photos))`;
+      ownSql = ownFilter(own);
     }
     return this.db.prepare(`SELECT CAST(strftime('%Y', (p.taken - :tz * 60000) / 1000, 'unixepoch') AS INTEGER) AS year, COUNT(*) AS count
       FROM photos p JOIN nodes n ON n.id = p.id
@@ -540,13 +544,13 @@ class Glint {
 
     if (method === 'GET' && pathname === '/api/glint/photos') {
       return send(res, 200, {
-        ...this.timeline(user, { before: str(params.get('before'), 80), album: str(params.get('album'), 40), person: this.person(user, params.get('person')), favourites: params.get('fav') === '1', own: params.get('own') === '1', undated: params.get('undated') === '1' }),
+        ...this.timeline(user, { before: str(params.get('before'), 80), album: str(params.get('album'), 40), person: this.person(user, params.get('person')), favourites: params.get('fav') === '1', own: ownParam(params.get('own')), undated: params.get('undated') === '1' }),
         storage: nest.storage(user),
       });
     }
     if (method === 'GET' && pathname === '/api/glint/years') {
       const tz = Number(params.get('tz')) || 0;
-      return send(res, 200, { years: this.years(user, { tz: Math.max(-840, Math.min(840, Math.trunc(tz))), own: params.get('own') === '1' }) });
+      return send(res, 200, { years: this.years(user, { tz: Math.max(-840, Math.min(840, Math.trunc(tz))), own: ownParam(params.get('own')) }) });
     }
     if (method === 'GET' && (r = m(/^\/api\/glint\/info\/([\w-]+)$/))) {
       return send(res, 200, { info: nest.info(user, this.photo(user, r[1]).id) });

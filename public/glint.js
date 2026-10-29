@@ -69,6 +69,7 @@
 
   const G = {
     space: '',
+    nestOnly: false, // show only photos that live elsewhere in Nest, not the ones added through Glint
     hideNest: false, // show only photos added through Glint, not ones that live elsewhere in Nest
     mode: 'photos', // photos | favourites | undated | albums | album | memory | people | person | trash | move
     album: null, // { id, name } when mode is 'album'
@@ -89,18 +90,33 @@
     zoom: 0, // 0 is the roomy grid (3 across on a phone); higher is denser
   };
 
-  try { G.hideNest = localStorage.getItem('glint.hideNest') === '1'; } catch { /* private mode */ }
-  // Show only photos added through Glint, not ones that live elsewhere in Nest (e.g. moved in from Google Drive).
+  try {
+    G.hideNest = localStorage.getItem('glint.hideNest') === '1';
+    G.nestOnly = !G.hideNest && localStorage.getItem('glint.nestOnly') === '1';
+  } catch { /* private mode */ }
+  // Two ways to split Glint's own photos from the rest of Nest (e.g. moved in from Google Drive): hide the
+  // rest, or show only the rest. They exclude each other.
   const hideNest = $('#glint-hide-nest');
+  const nestOnly = $('#glint-nest-only');
   hideNest.checked = G.hideNest;
-  hideNest.addEventListener('change', () => {
+  nestOnly.checked = G.nestOnly;
+  const ownParam = () => (G.hideNest ? '1' : G.nestOnly ? 'nest' : '');
+  function nestFilterChanged(changed) {
+    if (changed === hideNest && hideNest.checked) nestOnly.checked = false;
+    if (changed === nestOnly && nestOnly.checked) hideNest.checked = false;
     G.hideNest = hideNest.checked;
-    try { localStorage.setItem('glint.hideNest', G.hideNest ? '1' : '0'); } catch { /* private mode */ }
+    G.nestOnly = nestOnly.checked;
+    try {
+      localStorage.setItem('glint.hideNest', G.hideNest ? '1' : '0');
+      localStorage.setItem('glint.nestOnly', G.nestOnly ? '1' : '0');
+    } catch { /* private mode */ }
     if (G.mode !== 'photos' && G.mode !== 'favourites') return;
     G.items = []; G.next = null; G.total = 0; G.sel.clear();
     render();
     load(true);
-  });
+  }
+  hideNest.addEventListener('change', () => nestFilterChanged(hideNest));
+  nestOnly.addEventListener('change', () => nestFilterChanged(nestOnly));
   const body = $('#glint-body');
   const view = $('#view-glint');
   const byId = (id) => G.items.find((i) => i.id === id);
@@ -175,7 +191,7 @@
         if (!first && G.next) q.set('before', G.next);
         if (G.mode === 'favourites') q.set('fav', '1');
         if (G.mode === 'undated') q.set('undated', '1');
-        if (G.hideNest && (G.mode === 'photos' || G.mode === 'favourites')) q.set('own', '1');
+        if (ownParam() && (G.mode === 'photos' || G.mode === 'favourites')) q.set('own', ownParam());
         if (G.mode === 'album') q.set('album', G.album.id);
         if (G.mode === 'person') q.set('person', G.person.id);
         const d = await gapi('GET', `/api/glint/photos?${q}`);
@@ -499,7 +515,7 @@
     document.addEventListener('pointerdown', outsideYears, true);
     document.addEventListener('keydown', escYears, true);
     try {
-      const { years } = await gapi('GET', `/api/glint/years?tz=${tzOffset()}${G.hideNest ? '&own=1' : ''}`);
+      const { years } = await gapi('GET', `/api/glint/years?tz=${tzOffset()}${ownParam() ? `&own=${ownParam()}` : ''}`);
       if (yearsOpen !== pop) return;
       if (!years.length) { pop.replaceChildren(el('span', { class: 'muted glint-years-note', text: 'No photos yet' })); return; }
       pop.replaceChildren(...years.map((y) => el('button', {
@@ -525,7 +541,7 @@
         G.loading = true;
         try {
           const q = new URLSearchParams({ before: G.next });
-          if (G.hideNest) q.set('own', '1');
+          if (ownParam()) q.set('own', ownParam());
           const d = await gapi('GET', `/api/glint/photos?${q}`);
           if (token !== G.token) return;
           G.items = G.items.concat(d.items);
