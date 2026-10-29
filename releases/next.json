@@ -1,9 +1,3 @@
 {
-  "items": [
-    {
-      "title": "Jump to a year in Glint",
-      "text": "Tap the calendar button, or a year label when you zoom out to years, and pick a year to go straight to its first photos. Only years that have photos are listed.",
-      "image": "glint-years.png"
-    }
-  ]
+  "items": []
 }
