@@ -90,7 +90,7 @@
 
   function empty(d) {
     if (!d.enabled) return el('div', { class: 'cx-empty' }, el('strong', { text: 'Cockerel is not linked yet' }), el('p', { text: 'Set up his VM, then link him under Admin → Server → Cockerel.' }));
-    return el('div', { class: 'cx-empty' }, el('strong', { text: 'What can I do for you?' }), el('p', { text: 'Ask me to check Roostflix, explain an alert, or find an open-licensed film.' }),
+    return el('div', { class: 'cx-empty' }, el('strong', { text: 'Hi Raven, what can I help with?' }), el('p', { text: 'I can check Roostflix, explain an alert, or hunt down an open-licensed film. Just ask!' }),
       el('div', { class: 'cx-ideas' }, IDEAS.map((t) => el('button', { type: 'button', class: 'cx-idea', text: t, onclick: () => send(t) }))));
   }
 
