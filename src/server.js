@@ -3167,6 +3167,18 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
           pushNotify({ title: 'Cockerel asks', body: text.slice(0, 120), tag: `cockerel-${askId}`, url: '/#/cockerel' });
           return send(res, 200, { ok: true });
         }
+        case 'library': {
+          // Is it on Roostflix already? Matches by title, newest first.
+          if (!jellyfin.enabled()) return send(res, 200, { found: [], note: 'Roostflix is not linked' });
+          const term = str(body.term, 120);
+          if (!term) throw new HttpError(400, 'Say what to look for');
+          const out = await jellyfin.call('GET', `/Items?Recursive=true&IncludeItemTypes=Movie,Series&Limit=10&searchTerm=${encodeURIComponent(term)}`);
+          return send(res, 200, { found: ((out && out.Items) || []).map((i) => ({ name: i.Name, year: i.ProductionYear || null, type: i.Type })) });
+        }
+        case 'refresh':
+          // After he files a new download in the Roostflix folders.
+          if (jellyfin.enabled()) await jellyfin.call('POST', '/Library/Refresh');
+          return send(res, 200, { ok: true });
         case 'ready': {
           // Tell whoever asked for it, by name, that it is on Roostflix.
           const who = db().users.find((u) => u.username === str(body.requester, 60));
