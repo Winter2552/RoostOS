@@ -52,6 +52,16 @@ const DEFAULT_APPS = [
     icon: 'house',
     adminOnly: true, // admins only while it is being tried out
   },
+  {
+    id: 'cockerel',
+    name: 'Cockerel',
+    tagline: 'Agent',
+    description: 'Your personal agent: ask him to do jobs and watch what he is doing.',
+    // Built into Roost: the link opens the chat panel.
+    url: '#/cockerel',
+    icon: 'chat',
+    adminOnly: true, // only ever for the person who set him up
+  },
 ];
 
 function emptyDb() {

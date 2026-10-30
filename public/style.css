@@ -1984,3 +1984,30 @@ a.bh-btn { text-decoration: none; display: inline-block; }
 .bh-aihead { font-size: 13px; }
 .bh-paste { margin-top: 8px; }
 .bh-paste summary { cursor: pointer; font-size: 13px; }
+
+/* ---------- Cockerel ---------- */
+.cockerel { padding: 16px; }
+.cx-page { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; min-height: calc(100dvh - 180px); }
+.cx-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.cx-head h2 { margin: 0; font-size: 28px; font-weight: 500; letter-spacing: -0.02em; }
+#cx-status { margin: 0; }
+.cx-jobs { display: grid; gap: 10px; }
+.cx-job { border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; display: grid; gap: 8px; }
+.cx-job.failed { border-color: var(--bad); }
+.cx-steps { display: flex; gap: 6px; flex-wrap: wrap; font-family: var(--mono); font-size: 12px; }
+.cx-steps span { padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); }
+.cx-steps span.on { color: var(--bg); background: var(--ink); border-color: var(--ink); }
+.cx-bar { height: 4px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.cx-bar i { display: block; height: 100%; background: var(--ink); }
+.cx-feed { flex: 1; min-height: 240px; max-height: 58dvh; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
+.cx-msg { max-width: 86%; padding: 10px 14px; border-radius: 16px; border: 1px solid var(--line); display: grid; gap: 6px; }
+.cx-msg p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cx-msg time, .cx-step time { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.cx-msg.you { align-self: flex-end; background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.cx-msg.you time { color: inherit; opacity: 0.6; }
+.cx-msg.cockerel { align-self: flex-start; }
+.cx-step { display: flex; gap: 10px; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.cx-typing { margin: 0; }
+.cx-form { display: flex; gap: 10px; }
+.cx-form input { flex: 1; min-width: 0; }
+.cx-all { font-size: 14px; color: var(--muted); }

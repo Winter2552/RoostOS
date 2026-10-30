@@ -8,6 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Store, DEFAULT_APPS } = require('./store');
+const { Cockerel, CockerelError, GB: COCKEREL_GB } = require('./cockerel');
 const birdhouse = require('./birdhouse');
 const birdhouseAi = require('./birdhouse-ai');
 const secrets = require('./secrets');
@@ -39,7 +40,7 @@ const { CertManager, validDomain } = require('./tls');
 const twoStep = require('./twostep');
 const { qrSvg } = require('./qr');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
-const { HttpError, send, readJson, str } = require('./http');
+const { HttpError, send, readJson, readRaw, str } = require('./http');
 const { Nest, disposition } = require('./nest');
 const family = require('./family');
 const releases = require('./releases');
@@ -314,6 +315,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     if (!store.db.apps.some((a) => a.id === 'birdhouse')) store.db.apps.push({ ...DEFAULT_APPS.find((a) => a.id === 'birdhouse') });
     linked = true;
   }
+  // Cockerel too (admins only, and only Raven can ever be an admin of him).
+  if (!store.db.settings.cockerelAdded) {
+    store.db.settings.cockerelAdded = true;
+    if (!store.db.apps.some((a) => a.id === 'cockerel')) store.db.apps.push({ ...DEFAULT_APPS.find((a) => a.id === 'cockerel') });
+    linked = true;
+  }
   if (linked) store.save();
   let designing = false; // one Claude design at a time
   const priceAsked = new Map(); // when each person last pressed Fetch price
@@ -506,6 +513,13 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     subject: () => (/^https:\/\//.test(db().settings.publicUrl || '') ? db().settings.publicUrl : undefined),
     ...pushOptions,
   });
+  const cockerel = new Cockerel({ store, newId: () => store.newId(), fetchImpl: coffeeOptions.fetchImpl || fetch, seal: (t) => secrets.seal(dataDir, t), open: (b) => secrets.open(dataDir, b) });
+  // Cockerel hears what the admin's phone hears: movie requests and Sentinel alerts.
+  const pushNotify = push.notify.bind(push);
+  push.notify = (message, userId = null, opts) => {
+    pushNotify(message, userId, opts);
+    if (!userId) cockerel.event(message);
+  };
   const secWatch = new SecurityWatch({ store, push, newId: () => store.newId() });
   const sentinel = new Sentinel({
     dataDir,
@@ -923,7 +937,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // Settings for the admin page. The mail password never leaves the server.
   function settingsView() {
     // The Cloudflare token (in tls) stays on the server.
-    const { mail: _mail, jellyfin: _jellyfin, tls: _tls, coffee: _coffee, wireguard: _wireguard, galaxies: _galaxies, birdhouseAi: _birdhouseAi, ...rest } = db().settings;
+    const { mail: _mail, jellyfin: _jellyfin, tls: _tls, coffee: _coffee, wireguard: _wireguard, galaxies: _galaxies, birdhouseAi: _birdhouseAi, cockerel: _cockerel, ...rest } = db().settings;
     return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()), publicLinks: rest.publicLinks !== false, birdhouseFetch: rest.birdhouseFetch === true, birdhouseAi: aiView(), ...energyView() };
   }
 
@@ -3040,6 +3054,128 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       store.save();
       record(req, 'storage-requested', { actor: user.username, detail: `${gbText(current)} → ${gbText(requestedGb)}` });
       send(res, 201, { request });
+    },
+
+    // ---------- Cockerel: Raven's personal agent ----------
+    // Only admins, and the VM itself (signed). The chat and feed are the panel;
+    // Admin holds the link, limits and Pause.
+    'GET /api/cockerel': async (req, res) => {
+      requireAdmin(req);
+      const c = cockerel.data();
+      send(res, 200, {
+        enabled: cockerel.enabled(),
+        ...cockerel.view(),
+        log: c.log.slice(-100),
+        jobs: c.jobs.slice(-10).reverse(),
+        todayGb: Math.round((cockerel.dayBytes() / COCKEREL_GB) * 10) / 10,
+        status: cockerel.enabled() ? await cockerel.status() : null,
+      });
+    },
+
+    'POST /api/cockerel/chat': async (req, res) => {
+      const admin = requireAdmin(req);
+      if (cockerel.config().paused) throw new HttpError(409, 'Cockerel is paused. Press Resume first');
+      const text = str((await readJson(req)).text, 2000);
+      if (!text) throw new HttpError(400, 'Type a message');
+      cockerel.add({ kind: 'you', text });
+      try {
+        const out = await cockerel.call('POST', '/chat', { text, from: admin.username }, 5 * 60 * 1000);
+        const reply = cockerel.add({ kind: 'cockerel', text: str(out.reply, 4000) || 'Done.' });
+        send(res, 200, { reply });
+      } catch (err) {
+        if (!(err instanceof CockerelError)) throw err;
+        throw new HttpError(err.status, err.message);
+      }
+    },
+
+    // Raven's answer to a question Cockerel asked ("find it?" and so on).
+    'POST /api/cockerel/answer': async (req, res) => {
+      requireAdmin(req);
+      const body = await readJson(req);
+      const ask = cockerel.data().log.find((e) => e.id === body.id && e.kind === 'ask');
+      if (!ask) throw new HttpError(404, 'That question is gone');
+      if (ask.answer) throw new HttpError(409, 'Already answered');
+      const choice = str(body.choice, 40);
+      if (!ask.options.includes(choice)) throw new HttpError(400, 'Pick one of the answers');
+      try {
+        await cockerel.call('POST', '/answer', { askId: ask.askId, choice });
+      } catch (err) {
+        if (!(err instanceof CockerelError)) throw err;
+        throw new HttpError(err.status, err.message);
+      }
+      ask.answer = choice;
+      store.save();
+      cockerel.add({ kind: 'you', text: choice });
+      send(res, 200, { ok: true });
+    },
+
+    'GET /api/admin/cockerel': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, cockerel.view());
+    },
+
+    'PUT /api/admin/cockerel': async (req, res) => {
+      requireAdmin(req);
+      const body = await readJson(req);
+      const changes = {};
+      if (body.url !== undefined) {
+        const url = str(body.url, 200);
+        if (url && !/^http:\/\/(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)[\d.]+(:\d{2,5})?\/?$/.test(url)) throw new HttpError(400, 'Use the VM\'s home-network address, like http://192.168.4.40:7070');
+        changes.url = url.replace(/\/+$/, '');
+      }
+      if (body.secret !== undefined) {
+        const secret = str(body.secret, 200);
+        if (secret && secret.length < 24) throw new HttpError(400, 'The shared secret needs at least 24 characters');
+        changes.secret = secret;
+      }
+      for (const [k, max] of [['sizeGb', 500], ['dayGb', 2000]]) {
+        if (body[k] === undefined) continue;
+        const n = Number(body[k]);
+        if (!Number.isFinite(n) || n <= 0 || n > max) throw new HttpError(400, `Limits are between 1 and ${max} GB`);
+        changes[k] = Math.round(n * 10) / 10;
+      }
+      if (body.paused !== undefined) changes.paused = body.paused === true;
+      cockerel.save(changes);
+      if ('paused' in changes) cockerel.add({ kind: 'note', text: changes.paused ? 'Paused by Raven' : 'Resumed' });
+      send(res, 200, cockerel.view());
+    },
+
+    // From the VM, signed. No session: the signature is the sign-in.
+    'POST /api/cockerel/hook': async (req, res) => {
+      const raw = await readRaw(req);
+      if (!cockerel.verify(req.headers, raw)) throw new HttpError(401, 'Not signed');
+      let body;
+      try { body = JSON.parse(raw || '{}'); } catch { throw new HttpError(400, 'Invalid JSON'); }
+      if (cockerel.config().paused && body.type !== 'log') throw new HttpError(409, 'Cockerel is paused');
+      switch (body.type) {
+        case 'log':
+          cockerel.add({ kind: 'note', text: str(body.text, 2000) });
+          return send(res, 200, { ok: true });
+        case 'job':
+          return send(res, 200, { job: cockerel.setJob(body) });
+        case 'check':
+          return send(res, 200, cockerel.check(Number(body.bytes)));
+        case 'spend':
+          cockerel.spend(Number(body.bytes) || 0);
+          return send(res, 200, { ok: true });
+        case 'ask': {
+          const options = Array.isArray(body.options) && body.options.length ? body.options : ['Yes', 'No'];
+          const askId = str(body.askId, 60);
+          const text = str(body.text, 1000);
+          if (!askId || !text) throw new HttpError(400, 'A question needs an id and text');
+          cockerel.add({ kind: 'ask', text, options, askId });
+          pushNotify({ title: 'Cockerel asks', body: text.slice(0, 120), tag: `cockerel-${askId}`, url: '/#/cockerel' });
+          return send(res, 200, { ok: true });
+        }
+        case 'ready': {
+          // Tell whoever asked for it, by name, that it is on Roostflix.
+          const who = db().users.find((u) => u.username === str(body.requester, 60));
+          if (who) push.notify({ title: 'Now on Roostflix', body: str(body.title, 120), tag: `cockerel-${str(body.jobId, 40)}`, url: `${JELLYFIN_PREFIX}/` }, who.id);
+          return send(res, 200, { ok: true });
+        }
+        default:
+          throw new HttpError(400, 'Unknown message');
+      }
     },
 
     // Roostflix "Request a movie": people ask, the admin gets a phone alert and

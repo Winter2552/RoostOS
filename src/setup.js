@@ -427,6 +427,22 @@ const STEPS = [
     check: (ctx) => Boolean(ctx.db.settings.birdhouseAi && ctx.db.settings.birdhouseAi.key),
   },
   {
+    id: 'cockerel',
+    section: 'server',
+    group: 'Cockerel',
+    title: 'Link Cockerel, your personal agent',
+    why: 'Optional. Cockerel runs in his own virtual machine, reads your Roostflix and Sentinel alerts and does jobs for you, like adding a film you ask for to Roostflix. Only you can use him.',
+    how: [
+      'Set up his VM on the server by following cockerel-vm/README.md; it ends by printing the address and a shared secret.',
+      'Under Admin → Server → Cockerel, paste the address and the secret and save.',
+      'Choose the size limits: under them he acts alone, above them he asks you first.',
+    ],
+    action: { label: 'Link Cockerel', view: 'admin', focus: 'cockerel-admin' },
+    optional: true,
+    covers: ['cockerel'],
+    check: (ctx) => Boolean(ctx.db.settings.cockerel && ctx.db.settings.cockerel.url && ctx.db.settings.cockerel.secret),
+  },
+  {
     id: 'admin-email',
     section: 'server',
     group: 'Email',
@@ -666,6 +682,7 @@ const NO_STEP = {
   defaultLimitGb: 'starts at 50 GB, changed under Admin → Server',
   birdhouseFetch: 'off by default, switched under Admin → Server (Birdhouse may read a shop page when asked)',
   birdhouseAdded: 'Roost\'s own record that the Birdhouse app was added once',
+  cockerelAdded: 'Roost\'s own record that the Cockerel app was added once',
   setupTicked: 'this checklist\'s own record',
   notice: 'optional, posted under Admin → Notice',
 };
