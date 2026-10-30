@@ -245,6 +245,32 @@
       <input type="file" id="nest-pick-folder" webkitdirectory multiple hidden>
     </section>
 
+    <!-- Cockerel: your personal agent (public/cockerel.js) -->
+    <section id="view-cockerel" class="cockerel hidden">
+      <div class="cx-page">
+        <header class="cx-head">
+          <div class="cx-who">
+            <span class="cx-logo" id="cx-logo"></span>
+            <h2>Cockerel</h2>
+            <button class="cx-pill" type="button" id="cx-pill" aria-expanded="false" aria-controls="cx-more"><span class="cx-dot" id="cx-dot"></span><span id="cx-state">Checking…</span></button>
+          </div>
+          <div class="cx-tools">
+            <button class="cx-icon" type="button" id="cx-steps" aria-pressed="false" title="Show every step he takes">Steps</button>
+            <button class="cx-icon" type="button" id="cx-pause" hidden>Pause</button>
+          </div>
+        </header>
+        <p class="cx-more mono muted" id="cx-more" hidden></p>
+        <div class="cx-jobs" id="cx-jobs" hidden></div>
+        <div class="cx-feed" id="cx-feed" aria-live="polite"></div>
+        <div class="cx-typing" id="cx-typing" hidden aria-label="Cockerel is working"><i></i><i></i><i></i></div>
+        <form class="cx-form" id="cx-form" autocomplete="off" hidden>
+          <label class="sr" for="cx-text">Message Cockerel</label>
+          <input type="text" id="cx-text" maxlength="2000" placeholder="Ask me anything" enterkeyhint="send">
+          <button class="cx-send" type="submit" id="cx-send" aria-label="Send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+        </form>
+      </div>
+    </section>
+
     <!-- Birdhouse: woodworking plans (public/birdhouse.js) -->
     <section id="view-birdhouse" class="birdhouse hidden">
       <div class="bh-page">
@@ -736,6 +762,19 @@
         <div class="msg" role="status"></div>
       </form>
 
+      <form class="card panel" id="cockerel-admin" data-sec="server">
+        <h3>Cockerel</h3><span class="mono muted">Optional. Your personal agent, in his own virtual machine. Only admins can open him</span>
+        <div class="form-grid">
+          <label class="field"><span>His address</span><input type="text" name="url" placeholder="http://192.168.4.40:7070" autocapitalize="none" spellcheck="false"></label>
+          <label class="field"><span>Shared secret</span><input type="password" name="secret" autocomplete="off" spellcheck="false"></label>
+          <label class="field"><span>One download up to (GB)</span><input type="number" name="sizeGb" min="1" max="500" step="0.5"></label>
+          <label class="field"><span>Downloads per day up to (GB)</span><input type="number" name="dayGb" min="1" max="2000" step="1"></label>
+        </div>
+        <p class="muted">Under these limits he acts alone. Over them, or if he is unsure, he asks you in his chat first. The secret is kept encrypted. Pause him any time from his chat page.</p>
+        <div class="row"><button class="btn" type="submit">Save</button></div>
+        <div class="msg" role="status"></div>
+      </form>
+
       <form class="card panel" id="birdhouse-ai" data-sec="server">
         <h3>Birdhouse and Claude</h3><span class="mono muted">Optional. Lets Birdhouse design projects with Claude's API, in Quick, Balanced, Creative and Deep tiers</span>
         <p class="muted" id="bhai-state"></p>
@@ -902,6 +941,7 @@
   <script src="/glint.js"></script>
   <script src="/birdhouse-model.js"></script>
   <script src="/birdhouse.js"></script>
+  <script src="/cockerel.js"></script>
   <script src="/whatsnew.js"></script>
   <script src="/search.js"></script>
   <script src="/motion.js"></script>

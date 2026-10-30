@@ -1,0 +1,20 @@
+[Unit]
+Description=Cockerel, Raven's personal agent
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target
+
+[Service]
+User=cockerel
+EnvironmentFile=/etc/cockerel/env
+ExecStart=/usr/bin/node /opt/cockerel/service.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindPaths=/home/cockerel
+ReadWritePaths=/home/cockerel /srv/media
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

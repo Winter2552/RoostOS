@@ -59,8 +59,20 @@ async function readJson(req, max = 64 * 1024) {
   }
 }
 
+// The body exactly as sent, for checking a signature before parsing it.
+async function readRaw(req, max = 64 * 1024) {
+  let size = 0;
+  const chunks = [];
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > max) throw new HttpError(413, 'Body too large');
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 function str(v, max = 200) {
   return typeof v === 'string' ? v.trim().slice(0, max) : '';
 }
 
-module.exports = { HttpError, send, readJson, str, pickEncoding };
+module.exports = { HttpError, send, readJson, readRaw, str, pickEncoding };

@@ -10,19 +10,21 @@
   const CHEV = '<path class="chev" d="M22 48 L42 68 L22 88" fill="none" stroke="currentColor" stroke-width="13"/>';
   const BODY = '<path class="body" d="M58 92 V44 H76 A26 26 0 0 1 102 70 V92 Z" fill="currentColor"/>';
   const EYE = '<circle class="eye" cx="86" cy="60" r="4.5" fill="var(--bg)"/>';
-  const draw = (extra) => `<svg viewBox="0 8 120 120" aria-hidden="true">${extra.under || ''}${CHEV}<g class="mark">${BODY}${extra.eye === false ? '' : EYE}</g>${extra.over || ''}</svg>`;
+  const draw = (extra) => `<svg viewBox="0 8 120 120" aria-hidden="true">${extra.under || ''}${CHEV}<g class="mark">${BODY}${extra.eye === false ? '' : EYE}${extra.onBird || ''}</g>${extra.over || ''}</svg>`;
 
   // Every app builds the same way (chevron, then the bird) and adds one detail of its own.
   const APPS = {
     roost: { name: 'Roost', svg: draw({}) },
     nest: { name: 'Nest', svg: draw({ under: '<path class="bowl" pathLength="1" d="M48 98 Q80 130 112 98 M60 108 Q80 124 100 108" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>' }) },
     glint: { name: 'Glint', svg: draw({ eye: false, over: '<path class="star" d="M86 49 L88.8 57.2 L97 60 L88.8 62.8 L86 71 L83.2 62.8 L75 60 L83.2 57.2 Z" fill="var(--bg)"/><path class="star2" d="M110 30 L111.8 35.2 L117 37 L111.8 38.8 L110 44 L108.2 38.8 L103 37 L108.2 35.2 Z" fill="currentColor"/>' }) },
+    // Cockerel is the Roost bird with a comb and a beak.
+    cockerel: { name: 'Cockerel', svg: draw({ onBird: '<circle cx="63" cy="40" r="5" fill="currentColor"/><circle cx="71" cy="36" r="6" fill="currentColor"/><circle cx="79" cy="40" r="5" fill="currentColor"/><rect x="58" y="38" width="21" height="8" fill="currentColor"/><path d="M101 60l14 4-14 3z" fill="currentColor"/>' }) },
     nova: { name: 'Nova', svg: draw({ over: '<ellipse class="ringbg" pathLength="1" cx="80" cy="70" rx="44" ry="13" transform="rotate(-22 80 70)" fill="none" stroke="var(--bg)" stroke-width="9"/><ellipse class="ring" pathLength="1" cx="80" cy="70" rx="44" ry="13" transform="rotate(-22 80 70)" fill="none" stroke="currentColor" stroke-width="3"/><circle class="planet" cx="116" cy="54" r="5" fill="currentColor"/>' }) },
   };
 
   const appOf = () => {
     const first = location.hash.replace(/^#\/?/, '').split('/')[0];
-    return first === 'nest' ? 'nest' : first === 'glint' ? 'glint' : first === 'galaxies' ? 'nova' : 'roost';
+    return first === 'nest' ? 'nest' : first === 'glint' ? 'glint' : first === 'galaxies' ? 'nova' : first === 'cockerel' ? 'cockerel' : 'roost';
   };
 
   let overlay = null;

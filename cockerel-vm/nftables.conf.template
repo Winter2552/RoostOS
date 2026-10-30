@@ -1,0 +1,35 @@
+#!/usr/sbin/nft -f
+# Cockerel's kill switch. Everything he sends goes through the Windscribe
+# tunnel (wg0). If the tunnel is down, nothing leaves except local traffic to
+# Roost and the tunnel's own handshake, so downloads and Claude simply stop.
+# Filled in by vpn-killswitch.sh: @LAN@, @ROOST@, @ENDPOINT@.
+
+flush ruleset
+
+table inet cockerel {
+  chain input {
+    type filter hook input priority 0; policy drop;
+    iif lo accept
+    ct state established,related accept
+    # Roost talks to the service; you can SSH in from the home network.
+    ip saddr @ROOST@ tcp dport 7070 accept
+    ip saddr @LAN@ tcp dport 22 accept
+    ip saddr @LAN@ icmp type echo-request accept
+  }
+  chain forward {
+    type filter hook forward priority 0; policy drop;
+  }
+  chain output {
+    type filter hook output priority 0; policy drop;
+    oif lo accept
+    oif "wg0" accept
+    # Replies to people on the home network only. Never "any established
+    # connection": that would let an old download leak out when the tunnel drops.
+    ip daddr @LAN@ ct state established,related accept
+    # Local: Roost's address (reports, and the shared media folders).
+    ip daddr @ROOST@ tcp dport { 80, 8080, 8443, 139, 445, 2049 } accept
+    udp dport { 67, 68 } accept
+    # The tunnel's own handshake, to Windscribe's endpoint only.
+    ip daddr @ENDPOINT@ udp accept
+  }
+}

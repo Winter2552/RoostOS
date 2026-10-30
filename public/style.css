@@ -1984,3 +1984,84 @@ a.bh-btn { text-decoration: none; display: inline-block; }
 .bh-aihead { font-size: 13px; }
 .bh-paste { margin-top: 8px; }
 .bh-paste summary { cursor: pointer; font-size: 13px; }
+
+/* ---------- Cockerel ---------- */
+.cockerel { padding: 0 16px; }
+.cx-page { max-width: 680px; margin: 0 auto; display: flex; flex-direction: column; height: calc(100dvh - 130px); min-height: 420px; padding: 18px 0 14px; gap: 12px; }
+.cx-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.cx-who { display: flex; align-items: center; gap: 12px; min-width: 0; flex-wrap: wrap; }
+.cx-who h2 { margin: 0; font-size: 26px; font-weight: 500; letter-spacing: -0.02em; }
+.cx-pill { display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font: 12px var(--mono); cursor: pointer; }
+.cx-pill:hover, .cx-pill[aria-expanded='true'] { color: var(--ink); border-color: var(--ink); }
+.cx-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.cx-dot.ok { background: var(--ok); }
+.cx-dot.bad { background: var(--bad); }
+.cx-dot.busy { background: var(--ink); animation: cx-pulse 1.2s ease-in-out infinite; }
+.cx-tools { display: flex; gap: 6px; flex: none; }
+.cx-icon { padding: 6px 12px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font: 13px var(--grotesk); cursor: pointer; }
+.cx-icon:hover, .cx-icon[aria-pressed='true'] { color: var(--ink); background: rgba(242, 239, 233, 0.1); }
+.cx-more { margin: -4px 0 0; font-size: 12px; }
+.cx-jobs { display: grid; gap: 8px; }
+.cx-job { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; }
+.cx-job-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cx-job-state { font: 12px var(--mono); color: var(--muted); align-self: center; }
+.cx-track { grid-column: 1 / -1; height: 3px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.cx-track i { display: block; height: 100%; background: var(--ink); border-radius: 3px; transition: width 0.6s ease; }
+.cx-job.done .cx-job-state { color: var(--ok); }
+.cx-job.failed { border-color: var(--bad); }
+.cx-job.failed .cx-job-state { color: var(--bad); }
+.cx-job.failed .cx-track i { background: var(--bad); }
+.cx-feed { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 6px 0; scroll-behavior: smooth; }
+.cx-msg { max-width: 82%; padding: 10px 16px; border-radius: 20px; line-height: 1.4; animation: cx-in 0.2s ease-out; }
+.cx-msg p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cx-msg.you { align-self: flex-end; background: var(--ink); color: var(--bg); border-bottom-right-radius: 6px; }
+.cx-msg.cockerel { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); border-bottom-left-radius: 6px; }
+.cx-ask { align-self: flex-start; max-width: 92%; padding: 14px 16px; border: 1px solid var(--ink); border-radius: 18px; display: grid; gap: 12px; animation: cx-in 0.2s ease-out; }
+.cx-ask p { margin: 0; }
+.cx-ask.answered { border-color: var(--line); color: var(--muted); }
+.cx-choices { display: flex; gap: 8px; flex-wrap: wrap; }
+.cx-choice { flex: 1 1 120px; padding: 10px 16px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--ink); font: 500 15px var(--grotesk); cursor: pointer; }
+.cx-choice.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.cx-choice:disabled { opacity: 0.5; }
+.cx-answered { font: 12px var(--mono); }
+.cx-step { display: flex; gap: 10px; font-size: 12px; color: var(--muted); padding: 0 6px; overflow-wrap: anywhere; }
+.cx-step time { font-family: var(--mono); flex: none; }
+.cx-empty { margin: auto; text-align: center; display: grid; gap: 8px; justify-items: center; padding: 20px; }
+.cx-empty strong { font-size: 20px; font-weight: 500; }
+.cx-empty p { margin: 0; color: var(--muted); max-width: 34ch; }
+.cx-ideas { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 8px; }
+.cx-idea { padding: 8px 14px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--ink); font: 14px var(--grotesk); cursor: pointer; }
+.cx-idea:hover { border-color: var(--ink); }
+.cx-typing { align-self: flex-start; display: flex; gap: 5px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 20px; border-bottom-left-radius: 6px; }
+.cx-typing[hidden] { display: none; }
+.cx-typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: cx-bounce 1.2s ease-in-out infinite; }
+.cx-typing i:nth-child(2) { animation-delay: 0.15s; }
+.cx-typing i:nth-child(3) { animation-delay: 0.3s; }
+.cx-form { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 18px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); }
+.cx-form:focus-within { border-color: var(--ink); }
+.cx-form[hidden] { display: none; }
+.cx-form input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: 16px var(--grotesk); padding: 8px 0; }
+.cx-send { width: 40px; height: 40px; flex: none; border: 0; border-radius: 50%; background: var(--ink); color: var(--bg); display: grid; place-items: center; cursor: pointer; }
+.cx-send svg { width: 20px; height: 20px; }
+.cx-send:disabled { opacity: 0.35; }
+@keyframes cx-in { from { opacity: 0; transform: translateY(6px); } }
+@keyframes cx-pulse { 50% { opacity: 0.3; } }
+@keyframes cx-bounce { 40% { transform: translateY(-4px); background: var(--ink); } }
+@media (prefers-reduced-motion: reduce) { .cx-msg, .cx-ask, .cx-dot.busy, .cx-typing i { animation: none; } }
+
+/* Cockerel's identity: the Roost bird with a comb. Beak and bob animate while he speaks. */
+.cx-logo { display: inline-grid; flex: none; }
+.cx-logo .cx-avatar { width: 40px; height: 40px; }
+.cx-avatar { width: 30px; height: 30px; flex: none; display: grid; place-items: center; border-radius: 50%; background: var(--panel); border: 1px solid var(--line); color: var(--ink); }
+.cx-avatar.gap { visibility: hidden; }
+.cx-mark { width: 78%; height: 78%; overflow: visible; }
+.cx-row { display: flex; align-items: flex-end; gap: 8px; max-width: 92%; align-self: flex-start; }
+.cx-row .cx-msg { max-width: none; }
+.cx-eye { transform-box: fill-box; transform-origin: center; animation: cx-blink 5.5s infinite; }
+.cx-beak-low { transform-origin: 47px 43px; }
+.cx-avatar.speaking .cx-beak-low, .cx-logo.speaking .cx-beak-low { animation: cx-chirp 0.26s ease-in-out infinite alternate; }
+.cx-avatar.speaking .cx-bird, .cx-logo.speaking .cx-bird { animation: cx-bob 0.52s ease-in-out infinite; transform-origin: 32px 54px; }
+@keyframes cx-blink { 0%, 94%, 100% { transform: scaleY(1); } 97% { transform: scaleY(0.1); } }
+@keyframes cx-chirp { to { transform: rotate(16deg); } }
+@keyframes cx-bob { 50% { transform: translateY(-1.6px) rotate(-2deg); } }
+@media (prefers-reduced-motion: reduce) { .cx-eye, .cx-avatar.speaking .cx-beak-low, .cx-logo.speaking .cx-beak-low, .cx-avatar.speaking .cx-bird, .cx-logo.speaking .cx-bird { animation: none; } }
