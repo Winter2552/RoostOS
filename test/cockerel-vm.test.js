@@ -140,7 +140,6 @@ test('the tool files a finished download, and asks before an unusual source or a
     seen.length = 0;
     await tool('done', 'j3');
     assert.equal(seen.length, 0, 'finishing twice does nothing');
-    void spawnSync;
   } finally {
     roost.close();
     fs.rmSync(root, { recursive: true, force: true });

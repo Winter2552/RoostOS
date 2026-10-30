@@ -29,7 +29,7 @@
     return el('div', { class: `cx-job${j.state === 'Failed' ? ' failed' : ''}` },
       el('strong', { text: j.title || 'Job' }),
       el('div', { class: 'cx-steps', 'aria-label': j.state }, STEPS.map((s, i) => el('span', { class: i <= at ? 'on' : '', text: s }))),
-      j.state === 'Downloading' ? el('div', { class: 'cx-bar' }, el('i', { style: `width:${j.progress}%` })) : null,
+      j.state === 'Downloading' && j.progress > 0 ? el('div', { class: 'cx-bar' }, el('i', { style: `width:${j.progress}%` })) : null,
       j.state === 'Failed' ? el('span', { class: 'muted', text: 'Failed' }) : null);
   }
 

@@ -1,3 +1,10 @@
 {
-  "items": []
+  "items": [
+    {
+      "title": "Cockerel, your personal agent",
+      "text": "Cockerel lives in his own virtual machine and does jobs for you. Chat with him, watch every step he takes, and when someone asks for a film he asks you first, then finds an open-licensed copy and adds it to Roostflix. Only you can use him, and a Pause button stops him at once.",
+      "image": "cockerel.png",
+      "admin": true
+    }
+  ]
 }

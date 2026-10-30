@@ -170,6 +170,7 @@ test('paused, he hears nothing and does nothing', async () => {
   await new Promise((r) => setTimeout(r, 50));
   assert.equal(sent.length, 0);
   assert.equal((await call('POST', '/api/cockerel/chat', { text: 'hi' }, cookie)).status, 409);
-  assert.equal((await hook({ type: 'job', id: 'j2', title: 'x' })).status, 409);
+  assert.equal((await hook({ type: 'check', bytes: 1 })).status, 409, 'nothing new starts');
+  assert.equal((await hook({ type: 'job', id: 'j2', title: 'x' })).status, 200, 'a running download can still be filed');
   await call('PUT', '/api/admin/cockerel', { paused: false }, cookie);
 });

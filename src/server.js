@@ -3146,7 +3146,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (!cockerel.verify(req.headers, raw)) throw new HttpError(401, 'Not signed');
       let body;
       try { body = JSON.parse(raw || '{}'); } catch { throw new HttpError(400, 'Invalid JSON'); }
-      if (cockerel.config().paused && body.type !== 'log') throw new HttpError(409, 'Cockerel is paused');
+      // Paused, he can't start anything new, but a download already running can still be filed.
+      if (cockerel.config().paused && !['log', 'job', 'refresh', 'ready'].includes(body.type)) throw new HttpError(409, 'Cockerel is paused');
       switch (body.type) {
         case 'log':
           cockerel.add({ kind: 'note', text: str(body.text, 2000) });
