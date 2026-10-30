@@ -5,84 +5,153 @@
 
 (() => {
   const REFRESH_MS = 6000;
-  const S = { built: false, timer: null, busy: false, all: false, last: '' };
-  const STEPS = ['Requested', 'Finding', 'Downloading', 'Added'];
+  const S = { built: false, timer: null, busy: false, steps: false, last: '', open: false, d: null, seen: null, typing: false, again: false };
+  const STAGES = ['Requested', 'Finding', 'Downloading', 'Added'];
+  const IDEAS = ["What's new on Roostflix?", 'Any alerts today?', 'Find a film for me'];
+
+  // His mark: the Roost bird with a comb, a two-part beak and a wattle. The
+  // beak and a small bob are what animate when he speaks (see style.css).
+  const MARK = '<svg class="cx-mark" viewBox="0 0 64 64" aria-hidden="true"><g transform="translate(-4 -3)"><g class="cx-bird"><path d="M14 54V26h16a18 18 0 0 1 18 18v10z" fill="currentColor"/><circle cx="19" cy="23" r="4.2" fill="currentColor"/><circle cx="26" cy="20.5" r="5" fill="currentColor"/><circle cx="33" cy="23" r="4.2" fill="currentColor"/><rect x="14" y="22" width="19" height="6"/><path class="cx-beak-up" d="M47 36l11 3.5-11 2.5z" fill="currentColor"/><path class="cx-beak-low" d="M47 43l9 3-9 2.5z" fill="currentColor"/><circle cx="50.5" cy="50.5" r="2.6" fill="currentColor"/><circle class="cx-eye" cx="37" cy="35" r="3" fill="var(--bg)"/></g></g></svg>';
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+  function avatar(cls = '') {
+    const a = el('span', { class: `cx-avatar ${cls}`.trim() });
+    a.innerHTML = MARK; // code-check: ok (Roost's own mark, fixed markup)
+    return a;
+  }
 
   const when = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  function statusLine(d) {
-    if (!d.enabled) return 'Not linked yet. Link him under Admin → Server → Cockerel.';
-    if (d.paused) return 'Paused. He is not listening and will not act.';
+  // One word for how he is, one dot for the colour.
+  function health(d) {
+    if (!d.enabled) return { dot: 'off', text: 'Not linked yet', more: 'Link him under Admin → Server → Cockerel.' };
+    if (d.paused) return { dot: 'off', text: 'Paused', more: 'He is not listening and will not start anything new.' };
     const s = d.status || {};
-    if (!s.reachable) return "Not answering. Check that his VM is running.";
-    const bits = ['Running'];
-    if (s.vpn) bits.push(s.vpn === 'up' ? 'VPN on' : 'VPN OFF, downloads stopped');
+    if (!s.reachable) return { dot: 'bad', text: 'Not answering', more: "Check that his VM is running." };
+    if (s.vpn === 'down') return { dot: 'bad', text: 'VPN is down', more: 'Downloads are stopped until it is back.' };
+    const bits = [];
+    if (s.vpn === 'up') bits.push('VPN on');
     if (Number.isFinite(s.cpu)) bits.push(`CPU ${s.cpu}%`);
     if (Number.isFinite(s.memMb)) bits.push(`RAM ${Math.round(s.memMb)} MB`);
     if (Number.isFinite(s.diskPct)) bits.push(`disk ${s.diskPct}%`);
-    bits.push(`${d.todayGb} of ${d.dayGb} GB today`);
-    return bits.join(' · ');
+    bits.push(`${d.todayGb} of ${d.dayGb} GB downloaded today`);
+    return { dot: s.busy ? 'busy' : 'ok', text: s.busy ? 'Working…' : 'Online', more: bits.join(' · ') };
   }
 
-  function jobCard(j) {
-    const at = STEPS.indexOf(j.state);
-    return el('div', { class: `cx-job${j.state === 'Failed' ? ' failed' : ''}` },
-      el('strong', { text: j.title || 'Job' }),
-      el('div', { class: 'cx-steps', 'aria-label': j.state }, STEPS.map((s, i) => el('span', { class: i <= at ? 'on' : '', text: s }))),
-      j.state === 'Downloading' && j.progress > 0 ? el('div', { class: 'cx-bar' }, el('i', { style: `width:${j.progress}%` })) : null,
-      j.state === 'Failed' ? el('span', { class: 'muted', text: 'Failed' }) : null);
+  function job(j) {
+    const at = STAGES.indexOf(j.state);
+    const failed = j.state === 'Failed';
+    const pct = failed ? 100 : Math.round(((at + (j.state === 'Downloading' && j.progress ? j.progress / 100 : 0.5)) / STAGES.length) * 100);
+    return el('div', { class: `cx-job${failed ? ' failed' : ''}${j.state === 'Added' ? ' done' : ''}` },
+      el('span', { class: 'cx-job-name', text: j.title || 'Job' }),
+      el('span', { class: 'cx-job-state', text: failed ? 'Failed' : j.state }),
+      el('span', { class: 'cx-track' }, el('i', { style: `width:${j.state === 'Added' ? 100 : pct}%` })));
   }
 
-  function entry(e, answer) {
-    if (e.kind === 'you' || e.kind === 'cockerel') return el('div', { class: `cx-msg ${e.kind}` }, el('p', { text: e.text }), el('time', { text: when(e.at) }));
+  // His words appear as if he is saying them, with his beak moving. Only for a
+  // reply that arrives while the page is open; history shows straight away.
+  function speak(row, text) {
+    const p = row.querySelector('p');
+    const bird = row.querySelector('.cx-avatar');
+    if (reduceMotion.matches || !p) return;
+    const step = Math.max(1, Math.ceil(text.length / 70));
+    let n = 0;
+    p.textContent = '';
+    S.typing = true;
+    bird.classList.add('speaking');
+    const tickText = () => {
+      n = Math.min(text.length, n + step);
+      p.textContent = text.slice(0, n);
+      const feed = $('#cx-feed');
+      feed.scrollTop = feed.scrollHeight;
+      if (n < text.length && !$('#view-cockerel').classList.contains('hidden')) return setTimeout(tickText, 22);
+      p.textContent = text;
+      bird.classList.remove('speaking');
+      S.typing = false;
+      if (S.again) { S.again = false; load({ force: true }); }
+    };
+    tickText();
+  }
+
+  function entry(e, answer, first, fresh) {
+    if (e.kind === 'you') return el('div', { class: 'cx-msg you', title: when(e.at) }, el('p', { text: e.text }));
+    if (e.kind === 'cockerel') {
+      const row = el('div', { class: 'cx-row', title: when(e.at) }, first ? avatar() : el('span', { class: 'cx-avatar gap' }), el('div', { class: 'cx-msg cockerel' }, el('p', { text: e.text })));
+      if (fresh) requestAnimationFrame(() => speak(row, e.text));
+      return row;
+    }
     if (e.kind === 'ask') {
-      return el('div', { class: 'cx-msg cockerel ask' }, el('p', { text: e.text }),
-        e.answer ? el('span', { class: 'muted', text: `You said ${e.answer}` })
-          : el('div', { class: 'row' }, e.options.map((o, i) => el('button', { class: `btn small${i ? ' ghost' : ''}`, type: 'button', text: o, onclick: () => answer(e, o) }))));
+      return el('div', { class: `cx-ask${e.answer ? ' answered' : ''}` }, el('p', { text: e.text }),
+        e.answer ? el('span', { class: 'cx-answered', text: `You chose: ${e.answer}` })
+          : el('div', { class: 'cx-choices' }, e.options.map((o, i) => el('button', { class: `cx-choice${i ? '' : ' primary'}`, type: 'button', text: o, onclick: (ev) => { ev.currentTarget.parentNode.querySelectorAll('button').forEach((b) => { b.disabled = true; }); answer(e, o); } }))));
     }
     return el('div', { class: 'cx-step' }, el('time', { text: when(e.at) }), el('span', { text: e.text }));
   }
 
+  function empty(d) {
+    if (!d.enabled) return el('div', { class: 'cx-empty' }, el('strong', { text: 'Cockerel is not linked yet' }), el('p', { text: 'Set up his VM, then link him under Admin → Server → Cockerel.' }));
+    return el('div', { class: 'cx-empty' }, el('strong', { text: 'What can I do for you?' }), el('p', { text: 'Ask me to check Roostflix, explain an alert, or find an open-licensed film.' }),
+      el('div', { class: 'cx-ideas' }, IDEAS.map((t) => el('button', { type: 'button', class: 'cx-idea', text: t, onclick: () => send(t) }))));
+  }
+
   async function load(opts = {}) {
     let d;
-    try { d = await api('GET', '/api/cockerel'); } catch (err) { $('#cx-status').textContent = err.message; return; }
-    const key = JSON.stringify([d.log.slice(-1), d.jobs, d.paused, d.status, S.all]);
-    $('#cx-status').textContent = statusLine(d);
+    try { d = await api('GET', '/api/cockerel'); } catch (err) { $('#cx-state').textContent = err.message; $('#cx-dot').className = 'cx-dot bad'; return; }
+    S.d = d;
+    const h = health(d);
+    $('#cx-state').textContent = h.text;
+    $('#cx-dot').className = `cx-dot ${h.dot}`;
+    $('#cx-logo').classList.toggle('speaking', S.busy || Boolean(d.status && d.status.busy));
+    $('#cx-more').textContent = h.more;
     $('#cx-pause').textContent = d.paused ? 'Resume' : 'Pause';
     $('#cx-pause').hidden = !d.enabled;
     $('#cx-form').hidden = !d.enabled || d.paused;
+    const key = JSON.stringify([d.log.slice(-1), d.log.length, d.jobs, d.paused, d.enabled, S.steps]);
     if (key === S.last && !opts.force) return;
+    if (S.typing) { S.again = true; return; } // let him finish the sentence
     S.last = key;
     const jobs = $('#cx-jobs');
-    jobs.replaceChildren(...d.jobs.slice(0, 4).map(jobCard));
-    jobs.hidden = !d.jobs.length;
+    const live = d.jobs.filter((j) => j.state !== 'Added' || Date.now() - Date.parse(j.updatedAt || j.at) < 3600e3).slice(0, 4);
+    jobs.replaceChildren(...live.map(job));
+    jobs.hidden = !live.length;
     const feed = $('#cx-feed');
     const stick = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
-    const shown = d.log.filter((e) => S.all || e.kind !== 'note' && e.kind !== 'event');
-    feed.replaceChildren(...(shown.length ? shown.map((e) => entry(e, answer)) : [el('p', { class: 'muted', text: d.enabled ? 'Say hello, or ask him to find something for Roostflix.' : 'Once he is linked, you can talk to him here.' })]));
+    const shown = d.log.filter((e) => S.steps || (e.kind !== 'note' && e.kind !== 'event'));
+    // The first look at the page shows history as it is; later replies are spoken.
+    const known = S.seen;
+    S.seen = new Set(d.log.map((e) => e.id));
+    let prev = null;
+    feed.replaceChildren(...(shown.length ? shown.map((e) => {
+      const node = entry(e, answer, !prev || prev.kind !== 'cockerel', known && !known.has(e.id) && e.kind === 'cockerel');
+      prev = e;
+      return node;
+    }) : [empty(d)]));
     if (stick || opts.force) feed.scrollTop = feed.scrollHeight;
   }
 
   async function answer(e, choice) {
-    try { await api('POST', '/api/cockerel/answer', { id: e.id, choice }); } catch (err) { $('#cx-status').textContent = err.message; }
+    try { await api('POST', '/api/cockerel/answer', { id: e.id, choice }); } catch (err) { $('#cx-more').hidden = false; $('#cx-more').textContent = err.message; }
     load({ force: true });
   }
 
   async function send(text) {
-    if (S.busy || !text.trim()) return;
+    text = String(text || '').trim();
+    if (S.busy || !text) return;
     S.busy = true;
-    const box = $('#cx-text');
-    box.value = '';
+    $('#cx-text').value = '';
     $('#cx-send').disabled = true;
     $('#cx-typing').hidden = false;
-    // The message shows at once; his reply arrives when he finishes.
+    $('#cx-logo').classList.add('speaking');
+    // His reply arrives when he finishes; the message shows straight away.
     const sent = api('POST', '/api/cockerel/chat', { text });
-    setTimeout(() => load({ force: true }), 300);
-    try { await sent; } catch (err) { $('#cx-status').textContent = err.message; }
+    setTimeout(() => load({ force: true }), 250);
+    try { await sent; } catch (err) { $('#cx-more').hidden = false; $('#cx-more').textContent = err.message; }
     S.busy = false;
     $('#cx-send').disabled = false;
     $('#cx-typing').hidden = true;
+    $('#cx-logo').classList.remove('speaking');
     load({ force: true });
+    $('#cx-text').focus({ preventScroll: true });
   }
 
   function tick() {
@@ -96,15 +165,27 @@
 
   window.cockerelOpen = () => {
     document.title = 'Cockerel';
+    S.seen = null;
+    S.last = '';
     if (!S.built) {
       S.built = true;
+      $('#cx-logo').append(avatar());
       $('#cx-form').addEventListener('submit', (e) => { e.preventDefault(); send($('#cx-text').value); });
       $('#cx-pause').addEventListener('click', async () => {
         const paused = $('#cx-pause').textContent === 'Pause';
-        try { await api('PUT', '/api/admin/cockerel', { paused }); } catch (err) { $('#cx-status').textContent = err.message; }
+        try { await api('PUT', '/api/admin/cockerel', { paused }); } catch (err) { $('#cx-more').hidden = false; $('#cx-more').textContent = err.message; }
         load({ force: true });
       });
-      $('#cx-all').addEventListener('change', (e) => { S.all = e.target.checked; load({ force: true }); });
+      $('#cx-steps').addEventListener('click', (e) => {
+        S.steps = !S.steps;
+        e.currentTarget.setAttribute('aria-pressed', String(S.steps));
+        load({ force: true });
+      });
+      $('#cx-pill').addEventListener('click', (e) => {
+        S.open = !S.open;
+        e.currentTarget.setAttribute('aria-expanded', String(S.open));
+        $('#cx-more').hidden = !S.open;
+      });
     }
     load({ force: true });
     tick();
