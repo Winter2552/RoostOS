@@ -10,7 +10,7 @@
   const ROTATE_MS = 8000;
   const CLIP_SECONDS = 15;
   const COUNT = 6;
-  const CACHE_KEY = 'roostflix_hero';
+  const CACHE_KEY = 'roostflix_hero2';
   const CACHE_MS = 10 * 60 * 1000;
   const DIRECT = /^(mp4|m4v|mov)$/i;
 
@@ -50,7 +50,7 @@
       const hit = JSON.parse(sessionStorage.getItem(CACHE_KEY) || 'null');
       if (hit && hit.user === s.userId && hit.until > Date.now()) return hit.items;
     } catch { /* no cache */ }
-    const q = `Recursive=true&IncludeItemTypes=Movie,Series&SortBy=Random&Limit=24&ImageTypeLimit=1&EnableImageTypes=Backdrop,Logo&Fields=Overview,MediaSources,RemoteTrailers,LocalTrailerCount,RunTimeTicks`;
+    const q = `Recursive=true&IncludeItemTypes=Movie,Series&SortBy=Random&Limit=24&ImageTypeLimit=1&EnableImageTypes=Backdrop,Logo&Fields=Overview,MediaSources,RemoteTrailers,LocalTrailerCount,RunTimeTicks,Genres,OfficialRating`;
     const res = await get(s, `/Users/${s.userId}/Items?${q}`);
     const items = (res.Items || [])
       .filter((it) => safe(it.Id) && (it.BackdropImageTags || []).length && safe(it.BackdropImageTags[0]))
@@ -63,6 +63,9 @@
           name: String(it.Name || ''),
           overview: String(it.Overview || ''),
           year: it.ProductionYear || '',
+          genre: (it.Genres || [])[0] || '',
+          rating: it.OfficialRating || '',
+          poster: (it.ImageTags || {}).Primary || null,
           kind: it.Type,
           backdrop: it.BackdropImageTags[0],
           logo: (it.ImageTags || {}).Logo || null,
@@ -112,6 +115,61 @@
     return e;
   };
 
+  // ---------- Featured and My List rows ----------
+  const tile = (s, it, wide) => {
+    const a = h('a', `rf-tile ${wide ? 'rf-wide' : 'rf-tall'}`);
+    a.href = `#/details?id=${it.id}`;
+    const img = h('img');
+    img.alt = '';
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    img.src = wide
+      ? `${s.base}/Items/${it.id}/Images/Backdrop/0?maxWidth=600&quality=70&tag=${it.backdrop}`
+      : `${s.base}/Items/${it.id}/Images/Primary?maxHeight=420&quality=70${it.poster ? `&tag=${it.poster}` : ''}`;
+    a.append(img);
+    if (wide) a.append(h('span', 'rf-tile-name', it.name));
+    else a.setAttribute('aria-label', it.name);
+    return a;
+  };
+  const fillList = async (s, section) => {
+    try {
+      const res = await get(s, `/Users/${s.userId}/Items?Recursive=true&IncludeItemTypes=Movie,Series&Filters=IsFavorite&SortBy=DateCreated&SortOrder=Descending&Limit=24&ImageTypeLimit=1&EnableImageTypes=Primary`);
+      const mine = (res.Items || []).filter((it) => safe(it.Id)).map((it) => ({ id: it.Id, name: String(it.Name || ''), poster: (it.ImageTags || {}).Primary || null }));
+      section.hidden = !mine.length;
+      section.querySelector('.rf-track').replaceChildren(...mine.map((it) => tile(s, it, false)));
+    } catch { section.hidden = true; }
+  };
+  let listSection = null;
+  function buildRows(s, items, onPick) {
+    const rows = h('div', 'rf-rows');
+    const feat = h('section', 'rf-shelf rf-feat');
+    feat.append(h('h2', 'rf-row-title', 'Featured'));
+    const track = h('div', 'rf-track');
+    items.forEach((it, i) => {
+      const t = tile(s, it, true);
+      // On a computer, a first click shows it in the big picture; a second opens it.
+      t.addEventListener('click', (e) => {
+        if (matchMedia('(hover: hover)').matches && !t.classList.contains('rf-now')) { e.preventDefault(); onPick(i); }
+      });
+      track.append(t);
+    });
+    feat.append(track);
+    const mine = h('section', 'rf-shelf rf-mine');
+    mine.hidden = true;
+    mine.append(h('h2', 'rf-row-title', 'My List'), h('div', 'rf-track'));
+    rows.append(feat, mine);
+    listSection = mine;
+    fillList(s, mine);
+    return rows;
+  }
+  // Favourites change on the details page; refresh when Home shows again.
+  document.addEventListener('viewshow', (e) => {
+    if (e.target && e.target.classList && e.target.classList.contains('homePage') && listSection && listSection.isConnected) {
+      const s = session();
+      if (s) fillList(s, listSection);
+    }
+  });
+
   let hero = null;
 
   function stop() {
@@ -127,7 +185,7 @@
     let items;
     try { items = await pick(s); } catch { return; }
     if (!items.length || !host.isConnected) return;
-    document.querySelectorAll('.rf-hero').forEach((e) => e.remove());
+    document.querySelectorAll('.rf-hero, .rf-rows').forEach((e) => e.remove());
 
     const el = h('section', 'rf-hero');
     el.setAttribute('aria-roledescription', 'carousel');
@@ -149,11 +207,19 @@
       } else {
         body.append(h('h2', 'rf-title', it.name));
       }
-      body.append(h('p', 'rf-meta', [it.kind === 'Series' ? 'Series' : 'Film', it.year].filter(Boolean).join(' \u00B7 ')));
+      const meta = h('p', 'rf-meta', [it.genre || (it.kind === 'Series' ? 'Series' : 'Film'), it.year].filter(Boolean).join(' \u00B7 '));
+      if (it.rating) meta.append(h('i', 'rf-rating', it.rating));
+      body.append(meta);
       body.append(h('p', 'rf-overview', it.overview));
       const play = h('a', 'rf-play', '\u25B6\u2002Play');
       play.href = `#/details?id=${it.id}`;
-      body.append(play);
+      // A film starts straight away; a series opens its page to pick an episode.
+      if (it.kind === 'Movie' && window.RF) {
+        play.addEventListener('click', (e) => { e.preventDefault(); window.RF.playNow(it.id, 0).catch(() => { location.hash = `#/details?id=${it.id}`; }); });
+      }
+      const more = h('a', 'rf-more', 'More info');
+      more.href = `#/details?id=${it.id}`;
+      body.append(play, more);
       a.append(img, shade, body);
       el.append(a);
       return a;
@@ -168,6 +234,8 @@
     });
     el.append(dots);
     host.parentNode.insertBefore(el, host);
+    const rows = buildRows(s, items, (i) => show(i));
+    host.parentNode.insertBefore(rows, host);
 
     stop();
     const state = { index: -1, timer: 0, paused: false, stopped: false, video: null };
@@ -203,9 +271,12 @@
       slides.forEach((sl, n) => {
         sl.classList.toggle('rf-active', n === state.index);
         sl.setAttribute('aria-hidden', n === state.index ? 'false' : 'true');
-        sl.querySelector('.rf-play').tabIndex = n === state.index ? 0 : -1;
+        const on = n === state.index ? 0 : -1;
+        sl.querySelector('.rf-play').tabIndex = on;
+        sl.querySelector('.rf-more').tabIndex = on;
       });
       [...dots.children].forEach((d, n) => d.classList.toggle('rf-current', n === state.index));
+      rows.querySelectorAll('.rf-feat .rf-tile').forEach((t, n) => t.classList.toggle('rf-now', n === state.index));
       // The next picture is fetched before it is needed.
       const next = slides[(state.index + 1) % slides.length].querySelector('.rf-back');
       if (next) next.loading = 'eager';
@@ -263,7 +334,7 @@
       return;
     }
     tries = 0;
-    if (host.previousElementSibling && host.previousElementSibling.classList.contains('rf-hero')) return;
+    if (host.parentNode.querySelector('.rf-hero')) return;
     build(host);
   }
   document.addEventListener('viewshow', (e) => {
@@ -351,27 +422,124 @@
       openRequest();
     });
     host.append(a);
+    if (canPlayClips()) {
+      const t = el('a', 'navMenuOption rf-hoverswitch');
+      t.href = '#';
+      t.setAttribute('role', 'button');
+      const ti = el('span', 'material-icons navMenuOptionIcon', 'play_circle');
+      ti.setAttribute('aria-hidden', 'true');
+      const tt = el('span', 'navMenuOptionText');
+      const paint = () => { tt.textContent = `Hover trailers: ${hoverOn() ? 'on' : 'off'}`; };
+      paint();
+      t.append(ti, tt);
+      t.addEventListener('click', (e) => {
+        e.preventDefault();
+        try { localStorage.setItem('rf_hover', hoverOn() ? 'off' : 'on'); } catch { /* stays off */ }
+        endHover();
+        paint();
+      });
+      host.append(t);
+    }
     return true;
   }
 
-  // ---------- Save to Files ----------
+  // ---------- buttons on a film's or show's page: My List, Start over, Save to Files ----------
   async function mountSave() {
     const page = document.querySelector('#itemDetailPage:not(.hide)');
     const m = /[?&]id=([\w-]+)/.exec(location.hash);
     const s = session();
     if (!page || !m || !s || !safe(m[1])) return;
+    const id = m[1];
     const bar = page.querySelector('.mainDetailButtons');
-    if (!bar || bar.querySelector('.rf-save')) return;
+    if (!bar || bar.dataset.rf === id) return;
     try {
-      const it = await get(s, `/Users/${s.userId}/Items/${m[1]}?Fields=MediaSources`);
-      if (!['Movie', 'Episode', 'Video'].includes(it.Type) || !(it.MediaSources || []).length || bar.querySelector('.rf-save')) return;
-      const a = el('a', 'rf-save', 'Save to Files');
-      a.href = `${s.base}/Items/${m[1]}/Download?api_key=${encodeURIComponent(s.token)}`;
-      a.setAttribute('download', '');
-      a.title = 'Download the original file to this device';
-      bar.append(a);
-    } catch { /* no button, nothing else changes */ }
+      const it = await get(s, `/Users/${s.userId}/Items/${id}?Fields=MediaSources`);
+      if (bar.dataset.rf === id || !new RegExp(`[?&]id=${id}`).test(location.hash)) return;
+      bar.querySelectorAll('.rf-xtra').forEach((e) => e.remove());
+      bar.dataset.rf = id;
+      const playable = ['Movie', 'Episode', 'Video'].includes(it.Type) && (it.MediaSources || []).length;
+      if (['Movie', 'Series'].includes(it.Type)) {
+        let fav = !!(it.UserData && it.UserData.IsFavorite);
+        const b = el('button', 'rf-save rf-xtra');
+        b.type = 'button';
+        const paint = () => { b.textContent = fav ? '✓ My List' : '+ My List'; b.setAttribute('aria-pressed', String(fav)); };
+        paint();
+        b.addEventListener('click', async () => {
+          b.disabled = true;
+          try {
+            await fetch(`${s.base}/Users/${s.userId}/FavoriteItems/${id}`, { method: fav ? 'DELETE' : 'POST', headers: { Authorization: `MediaBrowser Client="Roostflix", Device="Browser", DeviceId="roostflix", Version="1", Token="${s.token}"` } }).then((r) => { if (r.ok) fav = !fav; });
+          } catch { /* unchanged */ }
+          paint();
+          b.disabled = false;
+        });
+        bar.append(b);
+      }
+      if (playable && it.UserData && it.UserData.PlaybackPositionTicks > 0 && window.RF) {
+        const b = el('button', 'rf-save rf-xtra', 'Start over');
+        b.type = 'button';
+        b.addEventListener('click', () => window.RF.playNow(id, 0).catch(() => {}));
+        bar.append(b);
+      }
+      if (playable) {
+        const a = el('a', 'rf-save rf-xtra', 'Save to Files');
+        a.href = `${s.base}/Items/${id}/Download?api_key=${encodeURIComponent(s.token)}`;
+        a.setAttribute('download', '');
+        a.title = 'Download the original file to this device';
+        bar.append(a);
+      }
+    } catch { /* no buttons, nothing else changes */ }
   }
+
+  // ---------- trailers on hover (off until switched on in the menu) ----------
+  const hoverOn = () => { try { return localStorage.getItem('rf_hover') === 'on'; } catch { return false; } };
+  const clipCache = new Map();
+  let hoverTimer = 0;
+  let hoverVideo = null;
+  const endHover = () => { clearTimeout(hoverTimer); if (hoverVideo) { hoverVideo.remove(); hoverVideo = null; } };
+  async function hoverClip(s, id) {
+    if (clipCache.has(id)) return clipCache.get(id);
+    let clip = null;
+    try {
+      const it = await get(s, `/Users/${s.userId}/Items/${id}?Fields=MediaSources,LocalTrailerCount,RunTimeTicks`);
+      const src = (it.MediaSources || [])[0] || {};
+      const video = (src.MediaStreams || []).find((x) => x.Type === 'Video') || {};
+      clip = await clipFor(s, {
+        id, localTrailers: it.LocalTrailerCount || 0, ticks: it.RunTimeTicks || 0,
+        direct: it.Type === 'Movie' && DIRECT.test(src.Container || '') && /^h264$/i.test(video.Codec || '') && safe(src.Id) ? src.Id : null,
+      });
+    } catch { /* no preview */ }
+    clipCache.set(id, clip);
+    return clip;
+  }
+  document.addEventListener('mouseover', (e) => {
+    if (!hoverOn() || !canPlayClips()) return;
+    const card = e.target.closest && e.target.closest('.homePage .card[data-id]');
+    if (!card || card.contains(e.relatedTarget)) return;
+    const type = card.getAttribute('data-type');
+    const id = card.getAttribute('data-id');
+    if (!['Movie', 'Series'].includes(type) || !safe(id)) return;
+    endHover();
+    hoverTimer = setTimeout(async () => {
+      const s = session();
+      const box = card.querySelector('.cardImageContainer');
+      const clip = s && box && await hoverClip(s, id);
+      if (!clip || !card.matches(':hover') || hoverVideo) return;
+      const v = h('video', 'rf-hover');
+      v.muted = true;
+      v.playsInline = true;
+      v.preload = 'metadata';
+      v.src = clip.url;
+      v.addEventListener('loadedmetadata', () => { v.currentTime = clip.start; v.play().catch(endHover); }, { once: true });
+      v.addEventListener('timeupdate', () => { if (v.currentTime >= clip.start + CLIP_SECONDS) endHover(); });
+      v.addEventListener('error', endHover, { once: true });
+      box.append(v);
+      hoverVideo = v;
+    }, 700);
+  });
+  document.addEventListener('mouseout', (e) => {
+    const card = e.target.closest && e.target.closest('.card[data-id]');
+    if (card && !card.contains(e.relatedTarget)) endHover();
+  });
 
   const later = (fn) => { let n = 0; const t = () => { if (!fn() && n++ < 20) setTimeout(t, 250); }; t(); };
   const refreshExtras = () => { later(mountRequestButton); mountSave(); };
