@@ -211,7 +211,7 @@ test("Roostflix adds its skin to Jellyfin's page, and can be switched off", asyn
     const on = await call('GET', '/jellyfin/web/index.html', null, sam);
     assert.match(on.body, /<title>Roostflix<\/title>/);
     assert.match(on.body, /<link rel="stylesheet" href="\/roostflix\/skin\.css\?v=[\w-]{12}">/);
-    assert.match(on.body, /<script defer src="\/roostflix\/skin\.js\?v=[\w-]{12}"><\/script><\/head>/);
+    assert.match(on.body, /<script defer src="\/roostflix\/player\.js\?v=[\w-]{12}"><\/script><script defer src="\/roostflix\/skin\.js\?v=[\w-]{12}"><\/script><\/head>/);
     assert.ok(!on.body.includes('favicon.ico'));
     assert.equal(jf.seen.findLast((r) => r.url === '/web/index.html').enc, 'identity', 'Roost asks for the page uncompressed to add to it');
     assert.equal((await fetch(`${base}/roostflix/skin.css`)).status, 200);
@@ -392,6 +392,9 @@ test('the Roostflix script and stylesheet are served and the script parses', asy
   const js = await fetch(`${base}/roostflix/skin.js`);
   assert.equal(js.status, 200);
   new (require('vm').Script)(await js.text());
+  const player = await fetch(`${base}/roostflix/player.js`);
+  assert.equal(player.status, 200);
+  new (require('vm').Script)(await player.text());
   const css = await fetch(`${base}/roostflix/skin.css`);
   assert.match(await css.text(), /\.rf-hero/);
   assert.equal((await fetch(`${base}/roostflix/icon.svg`)).status, 200);

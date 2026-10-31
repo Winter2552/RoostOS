@@ -9,6 +9,7 @@
 const NAME = 'Roostflix';
 const CSS = '/roostflix/skin.css';
 const JS = '/roostflix/skin.js';
+const PLAYER = '/roostflix/player.js';
 const ICON = '/roostflix/icon.svg';
 
 // Jellyfin's page the browser asks for at the start (not its scripts or images).
@@ -23,6 +24,7 @@ function skinPage(html, version) {
   const head = [
     `<link rel="icon" type="image/svg+xml" href="${v(ICON)}">`,
     `<link rel="stylesheet" href="${v(CSS)}">`,
+    `<script defer src="${v(PLAYER)}"></script>`,
     `<script defer src="${v(JS)}"></script>`,
   ].join('');
   return html
