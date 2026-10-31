@@ -1,0 +1,18 @@
+{
+  "version": "0.1.29",
+  "date": "2026-10-31",
+  "title": "Roostflix, refreshed",
+  "summary": "A bolder Roostflix look, with smarter playback and My List.",
+  "items": [
+    {
+      "title": "Roostflix, refreshed",
+      "text": "A full-bleed hero with a big bold title, a Featured row of rounded tiles, and a floating pill menu, plus My List, Start over, and optional trailers on hover.",
+      "image": "roostflix-refresh.png"
+    },
+    {
+      "title": "Smarter playback",
+      "text": "Skip intro, recap and credits, a Next episode card, chapter marks on the scrubber, speed and sleep timer, J/K/L keys, double-tap to skip 10 seconds, and audio and subtitle language remembered per show.",
+      "image": "roostflix-refresh.png"
+    }
+  ]
+}
