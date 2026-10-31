@@ -23,10 +23,12 @@ case "$ENDPOINT" in
   *[a-zA-Z]*) ENDPOINT="$(getent ahostsv4 "$ENDPOINT" | awk '{print $1; exit}')" ;;
 esac
 [ -n "$ENDPOINT" ] || { echo "No Endpoint found in $CONF."; exit 1; }
+PORT="$(awk -F'[= :]+' '/^Endpoint/ {print $3; exit}' "$CONF")"
+case "$PORT" in ''|*[!0-9]*) echo "No port found on the Endpoint line in $CONF."; exit 1 ;; esac
 
 # Let the firewall's rules replace the file in place, and remember the old one.
 [ -f /etc/nftables.conf ] && cp -n /etc/nftables.conf /etc/nftables.conf.before-cockerel
-sed -e "s#@LAN@#$LAN#g" -e "s#@ROOST@#$ROOST#g" -e "s#@ENDPOINT@#$ENDPOINT#g" "$(dirname "$0")/nftables.conf.template" > /etc/nftables.conf
+sed -e "s#@LAN@#$LAN#g" -e "s#@ROOST@#$ROOST#g" -e "s#@ENDPOINT@#$ENDPOINT#g" -e "s#@PORT@#$PORT#g" "$(dirname "$0")/nftables.conf.template" > /etc/nftables.conf
 nft -c -f /etc/nftables.conf
 nft -f /etc/nftables.conf
 
