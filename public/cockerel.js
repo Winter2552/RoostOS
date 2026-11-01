@@ -12,7 +12,7 @@
   // His mark: the Roost bird with a comb, a two-part beak and a wattle. The
   // beak and a small bob are what animate when he speaks (see style.css).
   const MARK = '<svg class="cx-mark" viewBox="0 0 64 64" aria-hidden="true"><g transform="translate(-4 -3)"><g class="cx-bird"><path d="M14 54V26h16a18 18 0 0 1 18 18v10z" fill="currentColor"/><circle cx="19" cy="23" r="4.2" fill="currentColor"/><circle cx="26" cy="20.5" r="5" fill="currentColor"/><circle cx="33" cy="23" r="4.2" fill="currentColor"/><rect x="14" y="22" width="19" height="6"/><path class="cx-beak-up" d="M47 36l11 3.5-11 2.5z" fill="currentColor"/><path class="cx-beak-low" d="M47 43l9 3-9 2.5z" fill="currentColor"/><circle cx="50.5" cy="50.5" r="2.6" fill="currentColor"/><circle class="cx-eye" cx="37" cy="35" r="3" fill="var(--bg)"/></g></g></svg>';
-  const TOOL_GROUPS = ['web', 'files', 'memory', 'tasks', 'reminders', 'jobs', 'notify', 'calendar', 'email'];
+  const TOOL_GROUPS = ['web', 'files', 'memory', 'tasks', 'reminders', 'jobs', 'notify', 'calendar', 'email', 'roost'];
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
   function avatar(cls = '') {
