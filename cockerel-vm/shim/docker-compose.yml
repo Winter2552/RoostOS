@@ -1,0 +1,11 @@
+# Run once on the ZimaOS host:  sudo docker compose up -d --build
+# It restarts by itself after reboots and ZimaOS updates.
+services:
+  vmshim:
+    build: .
+    container_name: vmshim
+    network_mode: host
+    cap_add: [NET_ADMIN]
+    restart: unless-stopped
+    environment:
+      VM_IP: ${VM_IP:-192.168.4.148}

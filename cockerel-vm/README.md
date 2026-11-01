@@ -71,6 +71,16 @@ In Roost: **Admin → Server → Cockerel**. Address `http://<vm-address>:7070`,
 
 If `ROOST_URL` in `/etc/cockerel/env` is not Roost's address, fix it and `sudo systemctl restart cockerel`.
 
+## 6b. If Roost says "Not answering" (ZimaOS and its bridged VM)
+
+A bridged VM and its own ZimaOS host cannot talk directly, so Roost cannot reach him. A small always-on container on ZimaOS fixes that and survives reboots and updates. Run this once on ZimaOS (web terminal), after Roost has updated to this version:
+
+```
+cd /DATA/AppData/roost-src/cockerel-vm/shim && sudo docker compose up -d --build
+```
+
+Then point the VM at the host through that link: in `/etc/cockerel/env` set `ROOST_URL=http://192.168.7.250:8080`, mount the media share from `//192.168.7.250/media`, and restart him. The firewall template already allows `192.168.7.250`. If his VM is not at `192.168.4.148`, start it with `VM_IP=<his address> sudo -E docker compose up -d --build`.
+
 ## 7. Snapshots
 
 Snapshot the VM before big changes and weekly. Use the VM app's snapshot or backup button if ZimaOS has one; otherwise shut the VM down and copy its disk file to the data drive. A snapshot is the way back if he or the VM goes wrong. (Roost's **Pause** button stops him listening and acting without touching the VM.)
