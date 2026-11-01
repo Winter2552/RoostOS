@@ -50,7 +50,7 @@ He shares your Claude allowance. The service wakes Claude only for a chat messag
 
 ## 5. Share the media folders
 
-He needs read-write access to three folders on the data drive, and nothing else: `incoming`, `Movies` and `Shows` inside the Roostflix media folder (`/media/roosthdd/media`).
+He needs read-write access to three folders on the data drive, and nothing else: `incoming`, `Movies` and `Series` inside the Roostflix folder (`/media/roosthdd/media/roostflix`).
 
 1. In ZimaOS **Files**, share the folder as an SMB share (a user just for him, with a password).
 2. In the VM: put `username=…` and `password=…` in `/etc/cockerel/smb` (`chmod 600`), then add to `/etc/fstab`:

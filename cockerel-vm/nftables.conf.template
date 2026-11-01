@@ -31,6 +31,9 @@ table inet cockerel {
     ip daddr @LAN@ ct state established,related accept
     # Local: Roost's address (reports, and the shared media folders).
     ip daddr @ROOST@ tcp dport { 80, 8080, 8443, 139, 445, 2049 } accept
+    # Same services through the host shim, for a bridged VM that cannot reach
+    # its own host directly (see zimaos-vmshim.sh).
+    ip daddr 192.168.7.250 tcp dport { 80, 8080, 8443, 139, 445, 2049 } accept
     udp dport { 67, 68 } accept
     # The tunnel's own handshake, to Windscribe's endpoint only.
     ip daddr @ENDPOINT@ udp dport @PORT@ accept
