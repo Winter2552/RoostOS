@@ -13,6 +13,9 @@ table inet cockerel {
     ct state established,related accept
     # Roost talks to the service; you can SSH in from the home network.
     ip saddr @ROOST@ tcp dport 7070 accept
+    # ZimaOS cannot reach its own bridged VM directly; its "vmshim" link
+    # (see README) talks from this address instead.
+    ip saddr 192.168.7.250 tcp dport 7070 accept
     ip saddr @LAN@ tcp dport 22 accept
     ip saddr @LAN@ icmp type echo-request accept
   }
