@@ -20,6 +20,8 @@ const SECRET = process.env.COCKEREL_SECRET || '';
 const PORT = Number(process.env.PORT) || 7070;
 const BIND = process.env.BIND || '0.0.0.0';
 const MAX_RUNS = Number(process.env.MAX_RUNS_PER_DAY) || 60;
+// Sonnet by default: it uses much less of the Claude allowance than Opus.
+const MODEL = process.env.COCKEREL_MODEL || 'claude-sonnet-5-5';
 const RUN_TIMEOUT_MS = 4 * 60 * 1000;
 const TOOL = path.join(__dirname, 'tool.js');
 
@@ -41,7 +43,7 @@ function runClaude(prompt) {
     busy = true;
     try {
       return await new Promise((resolve) => {
-        const args = ['-p', prompt, '--output-format', 'json', '--max-turns', '15', '--allowedTools', 'Bash(cockerel-tool:*)', 'Read'];
+        const args = ['-p', prompt, '--model', MODEL, '--output-format', 'json', '--max-turns', '15', '--allowedTools', 'Bash(cockerel-tool:*)', 'Read'];
         const child = spawn('claude', args, { cwd: HOME, env: { ...process.env, PATH: `${path.dirname(TOOL)}:${process.env.PATH}` } });
         let out = '';
         let err = '';

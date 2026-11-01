@@ -34,7 +34,7 @@ test('files are named the way Jellyfin likes', () => {
   assert.equal(lib.moviePath('/m', 'What/If?: Part 1', '', '.mp4'), '/m/Movies/What If Part 1/What If Part 1.mp4');
   assert.equal(lib.moviePath('/m', '../../etc', 2000, '.mkv'), '/m/Movies/etc (2000)/etc (2000).mkv', 'no climbing out');
   assert.throws(() => lib.moviePath('/m', '  ', 2000, '.mkv'));
-  assert.equal(lib.episodePath('/m', 'Pioneers', 'pioneers.s01e02.720p.mkv'), '/m/Shows/Pioneers/Season 01/Pioneers - S01E02.mkv');
+  assert.equal(lib.episodePath('/m', 'Pioneers', 'pioneers.s01e02.720p.mkv'), '/m/Series/Pioneers/Season 01/Pioneers - S01E02.mkv');
   assert.equal(lib.episodePath('/m', 'Pioneers', 'extras.mkv'), null);
 });
 

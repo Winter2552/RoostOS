@@ -65,7 +65,7 @@ function moviePath(root, name, year, ext) {
   return path.join(root, 'Movies', label, `${label}${ext}`);
 }
 
-// Shows/Name/Season 01/Name - S01E02.ext, from a file called ...S01E02...
+// Series/Name/Season 01/Name - S01E02.ext, from a file called ...S01E02...
 function episodePath(root, show, file) {
   const m = /S(\d{1,2})[ ._-]*E(\d{1,3})/i.exec(file);
   if (!m) return null;
@@ -73,7 +73,7 @@ function episodePath(root, show, file) {
   if (!n) throw new Error('A show needs a name');
   const s = String(Number(m[1])).padStart(2, '0');
   const e = String(Number(m[2])).padStart(2, '0');
-  return path.join(root, 'Shows', n, `Season ${s}`, `${n} - S${s}E${e}${path.extname(file).toLowerCase()}`);
+  return path.join(root, 'Series', n, `Season ${s}`, `${n} - S${s}E${e}${path.extname(file).toLowerCase()}`);
 }
 
 // A job id from outside is a file name too, so keep it plain.
