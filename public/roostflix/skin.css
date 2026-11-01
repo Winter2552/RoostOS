@@ -118,7 +118,7 @@ a { color: var(--rf-cream); }
   position: relative;
   height: min(78vh, 760px);
   min-height: 460px;
-  margin: -5rem 0 0;
+  margin: -5rem 0 0; /* skin.js sets the exact pull-up so the artwork reaches the top */
   overflow: hidden;
   background: var(--rf-bg);
 }
@@ -194,6 +194,7 @@ a { color: var(--rf-cream); }
 /* ---- player: skip pill, next episode card, speed and sleep, chapters ---- */
 .rf-skip { position: fixed; right: 4%; bottom: 150px; z-index: 10001; padding: 0.75em 1.6em; border: 0; border-radius: 999px; background: var(--rf-cream); color: #000; font: 700 1rem var(--rf-sans); cursor: pointer; }
 .rf-skip[hidden], .rf-next[hidden] { display: none; }
+html.rf-own-next .upNextContainer { display: none !important; }
 .rf-next { position: fixed; right: 4%; bottom: 150px; z-index: 10001; width: min(300px, 88vw); padding: 16px; border-radius: 18px; background: var(--rf-glass); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); color: #fff; font-family: var(--rf-sans); }
 .rf-next-title { font-size: 0.8rem; color: var(--rf-dim); text-transform: uppercase; letter-spacing: 0.06em; }
 .rf-next-name { font-weight: 700; margin: 4px 0 12px; }
