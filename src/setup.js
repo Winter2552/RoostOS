@@ -443,6 +443,23 @@ const STEPS = [
     check: (ctx) => Boolean(ctx.db.settings.cockerel && ctx.db.settings.cockerel.url && ctx.db.settings.cockerel.secret),
   },
   {
+    id: 'cockerel-assistant',
+    section: 'server',
+    group: 'Cockerel',
+    title: 'Set your time zone and morning brief for Cockerel',
+    why: 'Optional. So his reminders land at the right hour and, if you want it, he sends a short brief each morning.',
+    how: [
+      'Under Admin → Server → Cockerel, enter your time zone (like Europe/London).',
+      'Tick "Send me a morning brief each day" and pick a time, if you want one.',
+      'Optional: add a secret calendar link and an email app password under "Cockerel\'s calendar and email" so he can read them (read-only).',
+      'Untick any tool you do not want him to use.',
+    ],
+    action: { label: 'Open Cockerel settings', view: 'admin', focus: 'cockerel-admin' },
+    optional: true,
+    covers: [],
+    check: (ctx) => Boolean(((((ctx.db.cockerel || {}).assistant) || {}).settings || {})['tz']),
+  },
+  {
     id: 'admin-email',
     section: 'server',
     group: 'Email',

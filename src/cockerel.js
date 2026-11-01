@@ -12,6 +12,7 @@ const LOG_MAX = 200;
 const JOB_MAX = 30;
 const SKEW_S = 120;
 const GB = 1024 ** 3;
+const FILE_MAX = 20 * 1024 * 1024; // the biggest file he may send to Nest
 
 const DEFAULTS = { sizeGb: 5, dayGb: 20 };
 
@@ -138,6 +139,7 @@ class Cockerel {
     const item = { id: this.newId(), at: new Date(this.now()).toISOString(), kind: clip(entry.kind, 12) || 'note', text: clip(entry.text, 2000) };
     if (entry.options) item.options = entry.options.slice(0, 3).map((o) => clip(o, 40));
     if (entry.askId) item.askId = clip(entry.askId, 60);
+    if (entry.file) item.file = { id: clip(entry.file.id, 60), name: clip(entry.file.name, 120), size: Math.max(0, Number(entry.file.size) || 0) };
     c.log.push(item);
     if (c.log.length > LOG_MAX) c.log.splice(0, c.log.length - LOG_MAX);
     this.store.save();
@@ -202,4 +204,4 @@ class CockerelError extends Error {
   }
 }
 
-module.exports = { Cockerel, CockerelError, DEFAULTS, STATES, GB };
+module.exports = { Cockerel, CockerelError, DEFAULTS, STATES, GB, FILE_MAX };

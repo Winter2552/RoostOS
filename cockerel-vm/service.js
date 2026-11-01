@@ -32,7 +32,40 @@ const write = (f, data) => { fs.mkdirSync(STATE, { recursive: true }); fs.writeF
 let chain = Promise.resolve();
 let busy = false;
 
-function runClaude(prompt) {
+// What each kind of run may do. Film jobs can download; research and
+// assistant runs can read the web but cannot download anything, so a hostile
+// web page has nothing dangerous to steer him towards. Claude gets no Read or
+// shell access in either mode (his settings file holds the shared secret).
+const WEB = ['WebSearch', 'WebFetch'];
+// Raven can switch a group of tools off in Admin (toolsOff).
+const GROUPS = {
+  web: ['browse'],
+  files: ['send'],
+  memory: ['remember', 'memories', 'forget'],
+  tasks: ['task', 'tasks', 'done'],
+  reminders: ['remind', 'reminders', 'cancel'],
+  jobs: ['schedule', 'schedules', 'unschedule'],
+  notify: ['notify'],
+  calendar: ['calendar'],
+  email: ['inbox', 'email'],
+  roost: ['roost'],
+  birdhouse: ['birdhouse'],
+};
+const TOOLS = {
+  media: ['events', 'library', 'find', 'fetch', 'ask', 'log', 'job'],
+  assistant: ['events', 'ask', 'log', 'send', 'remember', 'memories', 'forget', 'task', 'tasks', 'done', 'remind', 'reminders', 'cancel', 'schedule', 'schedules', 'unschedule', 'notify', 'calendar', 'inbox', 'roost', 'email', 'birdhouse', 'browse'],
+  // A job that runs by itself reads and reports, but cannot start new jobs or change his notes.
+  scheduled: ['events', 'log', 'send', 'notify', 'memories', 'tasks', 'reminders', 'schedules', 'calendar', 'inbox', 'roost', 'birdhouse', 'browse'],
+};
+const MEDIA_WORDS = /\b(movies?|films?|tv shows?|series|episodes?|roostflix|jellyfin|download|downloads|torrent)\b/i;
+const modeFor = (text) => (MEDIA_WORDS.test(text) ? 'media' : 'assistant');
+function allowedFor(mode, off = []) {
+  const blocked = new Set(off.flatMap((g) => GROUPS[g] || []));
+  const tools = TOOLS[mode].filter((c) => !blocked.has(c)).map((c) => `Bash(cockerel-tool ${c}:*)`);
+  return [...(mode !== 'media' && !off.includes('web') ? WEB : []), ...tools];
+}
+
+function runClaude(prompt, mode = 'media', off = []) {
   const job = chain.then(async () => {
     const day = new Date().toISOString().slice(0, 10);
     const usage = read('usage.json', { day, runs: 0 });
@@ -43,7 +76,7 @@ function runClaude(prompt) {
     busy = true;
     try {
       return await new Promise((resolve) => {
-        const args = ['-p', prompt, '--model', MODEL, '--output-format', 'json', '--max-turns', '15', '--allowedTools', 'Bash(cockerel-tool:*)', 'Read'];
+        const args = ['-p', prompt, '--model', MODEL, '--output-format', 'json', '--max-turns', '15', '--allowedTools', ...allowedFor(mode, off)];
         const child = spawn('claude', args, { cwd: HOME, env: { ...process.env, PATH: `${path.dirname(TOOL)}:${process.env.PATH}` } });
         let out = '';
         let err = '';
@@ -64,10 +97,11 @@ function runClaude(prompt) {
   return job;
 }
 
-function promptFor(task) {
+function promptFor(task, context = '') {
   const history = read('history.json', []).slice(-6).map((h) => `${h.role}: ${h.text}`).join('\n');
-  return `${task}${history ? `\n\nRecent conversation:\n${history}` : ''}`;
+  return `${task}${context ? `\n\n${String(context).slice(0, 4000)}` : ''}${history ? `\n\nRecent conversation:\n${history}` : ''}`;
 }
+const groupsOff = (v) => (Array.isArray(v) ? v.filter((g) => typeof g === 'string' && g in GROUPS) : []);
 
 const remember = (role, text) => write('history.json', [...read('history.json', []), { role, text: String(text).slice(0, 600) }].slice(-12));
 
@@ -129,6 +163,7 @@ function status() {
     memMb: Math.round((os.totalmem() - os.freemem()) / 1048576),
     diskPct: Number((df.match(/(\d+)%/) || [])[1]) || 0,
     runsToday: (read('usage.json', {}).runs) || 0,
+    maxRuns: MAX_RUNS,
   };
 }
 
@@ -147,8 +182,13 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/chat') {
       const text = String(data.text || '').slice(0, 2000);
       remember('Raven', text);
-      const out = await runClaude(promptFor(`Raven says: ${text}`));
+      const out = await runClaude(promptFor(`Raven says: ${text}`, data.context), modeFor(text), groupsOff(data.toolsOff));
       remember('Cockerel', out);
+      return reply(200, { reply: out });
+    }
+    if (req.url === '/run') {
+      // A job Roost woke him for (the morning brief, a repeating job). No chat history.
+      const out = await runClaude(`${String(data.prompt || '').slice(0, 3000)}${data.context ? `\n\n${String(data.context).slice(0, 4000)}` : ''}`, 'scheduled', groupsOff(data.toolsOff));
       return reply(200, { reply: out });
     }
     if (req.url === '/event') { reply(200, { ok: true }); return void onEvent(data).catch(() => {}); }
@@ -165,4 +205,4 @@ if (require.main === module) {
   server.listen(PORT, BIND, () => console.log(`Cockerel listening on ${BIND}:${PORT}`));
 }
 
-module.exports = { server };
+module.exports = { server, modeFor, allowedFor };

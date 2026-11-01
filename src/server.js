@@ -8,7 +8,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Store, DEFAULT_APPS } = require('./store');
-const { Cockerel, CockerelError, GB: COCKEREL_GB } = require('./cockerel');
+const { Assistant, AssistantError } = require('./assistant');
+const { Calendars } = require('./calendar');
+const mailbox = require('./mailbox');
+const { Cockerel, CockerelError, GB: COCKEREL_GB, FILE_MAX: COCKEREL_FILE_MAX } = require('./cockerel');
 const birdhouse = require('./birdhouse');
 const birdhouseAi = require('./birdhouse-ai');
 const secrets = require('./secrets');
@@ -41,7 +44,8 @@ const twoStep = require('./twostep');
 const { qrSvg } = require('./qr');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
 const { HttpError, send, readJson, readRaw, str } = require('./http');
-const { Nest, disposition } = require('./nest');
+const { Nest, disposition, CHUNK: NEST_CHUNK } = require('./nest');
+const { Readable } = require('stream');
 const family = require('./family');
 const releases = require('./releases');
 const zip = require('./zip');
@@ -514,6 +518,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     ...pushOptions,
   });
   const cockerel = new Cockerel({ store, newId: () => store.newId(), fetchImpl: coffeeOptions.fetchImpl || fetch, seal: (t) => secrets.seal(dataDir, t), open: (b) => secrets.open(dataDir, b) });
+  const assistant = new Assistant({ store, newId: () => store.newId() });
+  const calendars = new Calendars({ assistant, seal: (t) => secrets.seal(dataDir, t), open: (b) => secrets.open(dataDir, b), fetchImpl: coffeeOptions.calendarFetch || fetch });
   // Cockerel hears what the admin's phone hears: movie requests and Sentinel alerts.
   const pushNotify = push.notify.bind(push);
   push.notify = (message, userId = null, opts) => {
@@ -619,7 +625,90 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       );
     }
   };
-  const scheduleTimer = setInterval(runSchedules, scheduleCheckMs);
+  // Cockerel's notebook: reminders fire here, and a repeating job or the
+  // morning brief wakes him only when its minute comes.
+  const runCockerelJob = (prompt, label, { always = false } = {}) => {
+    cockerel.call('POST', '/run', { prompt, mode: 'scheduled', context: assistant.context(), toolsOff: assistant.settings().toolsOff }, 5 * 60 * 1000).then((out) => {
+      const text = str(out.reply, 4000);
+      if (!text || (!always && /^nothing\b/i.test(text))) return;
+      cockerel.add({ kind: 'cockerel', text });
+      pushNotify({ title: label, body: text.slice(0, 140), tag: `cockerel-job-${Date.now()}`, url: '/#/cockerel' });
+    }).catch((err) => cockerel.add({ kind: 'note', text: `${label} didn't run: ${err.message}` }));
+  };
+  async function briefFacts() {
+    const a = assistant.data();
+    const tz = assistant.tz();
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(Date.now());
+    const lines = [];
+    const open = a.tasks.filter((t) => !t.done);
+    lines.push(open.length ? `Open tasks: ${open.map((t) => `${t.text}${t.due ? ` (due ${t.due})` : ''}`).join('; ')}` : 'No open tasks.');
+    const today = a.reminders.filter((r) => !r.done && new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(Date.parse(r.at)) === day);
+    if (today.length) lines.push(`Reminders today: ${today.map((r) => r.text).join('; ')}`);
+    try {
+      const cal = await calendars.upcoming(0);
+      if (cal.lines.length) lines.push(`On the calendar today: ${cal.lines.join('; ')}`);
+    } catch { /* calendars are optional */ }
+    try {
+      if (jellyfin.enabled()) {
+        const out = await jellyfin.call('GET', '/Items?Recursive=true&IncludeItemTypes=Movie,Series&SortBy=DateCreated&SortOrder=Descending&Limit=6&Fields=DateCreated');
+        const fresh = ((out && out.Items) || []).filter((i) => Date.now() - Date.parse(i.DateCreated) < 26 * 3600e3).map((i) => i.Name);
+        if (fresh.length) lines.push(`New on Roostflix since yesterday: ${fresh.join(', ')}`);
+      }
+    } catch { /* Roostflix is optional */ }
+    return lines.join('\n');
+  }
+  // What Raven's yes does. Each one is checked again at the moment it runs.
+  async function performAction(act, req) {
+    const who = 'Cockerel (Raven said yes)';
+    if (act.kind === 'email') {
+      const c = cockerel.data();
+      const day = cockerel.today();
+      if (!c.emailed || c.emailed.day !== day) c.emailed = { day, n: 0 };
+      c.emailed.n += 1;
+      await deliver(act.to, act.subject, act.text);
+      record(req, 'settings-changed', { actor: who, detail: `email sent to ${act.to}: ${act.subject}` });
+      return `Sent the email to ${act.to}.`;
+    }
+    if (act.kind === 'restart') {
+      const app = db().apps.find((x) => x.id === act.app);
+      if (!app) return 'That app is gone.';
+      const names = await restartApp(app, 30 * 1000);
+      record(req, 'app-restarted', { actor: who, detail: `${app.name} (${names.join(', ')})` });
+      return `Restarted ${app.name}.`;
+    }
+    if (act.kind === 'backup') {
+      const { state, message } = backup.summarize(backup.readStatus(dataDir));
+      if (state === 'off' || state === 'stopped') return 'The backup service is not running.';
+      if (state === 'running') return 'A backup is already running.';
+      if (state === 'drive') return message || 'The backup drive was not found.';
+      backup.writeRequest(dataDir, 'run');
+      record(req, 'settings-changed', { actor: who, detail: 'backup started' });
+      return 'Backup started.';
+    }
+    if (act.kind === 'update') {
+      const summary = selfUpdate.summarize(selfUpdate.readStatus(dataDir));
+      if (selfUpdate.hasRequest(dataDir) || summary.state === 'applying') return 'An update is already on its way.';
+      if (summary.state !== 'available') return 'There is nothing new to update to.';
+      if (summary.conflicts.length) return `Not updating: you changed ${summary.conflicts.join(', ')} on the server.`;
+      selfUpdate.writeRequest(dataDir, 'apply');
+      record(req, 'settings-changed', { actor: who, detail: 'Roost update started' });
+      return 'Update started.';
+    }
+    return 'I did not recognise that action.';
+  }
+  const assistantTick = () => {
+    const now = new Date();
+    for (const r of assistant.dueReminders()) {
+      cockerel.add({ kind: 'cockerel', text: `Reminder: ${r.text}` });
+      pushNotify({ title: 'Reminder', body: r.text, tag: `cockerel-r-${r.id}`, url: '/#/cockerel' });
+    }
+    if (!cockerel.enabled() || cockerel.config().paused) return;
+    for (const j of assistant.dueJobs(now)) runCockerelJob(`Scheduled job. ${j.text}\n\nIf there is nothing worth telling Raven, reply with just the word NOTHING.`, 'Cockerel');
+    if (assistant.briefDue(now)) {
+      briefFacts().then((facts) => runCockerelJob(`Write Raven's morning brief, in short spoken sentences, under 120 words, no markdown. Facts from Roost:\n${facts}\nAlso run cockerel-tool events 15 for overnight alerts and mention anything that needs him. If your notes name where he lives, search the web for today's weather there. Say if anything needs a decision from him.`, 'Morning brief', { always: true }));
+    }
+  };
+  const scheduleTimer = setInterval(() => { runSchedules(); assistantTick(); }, scheduleCheckMs);
   scheduleTimer.unref();
 
   function currentUser(req) {
@@ -3079,7 +3168,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (!text) throw new HttpError(400, 'Type a message');
       cockerel.add({ kind: 'you', text });
       try {
-        const out = await cockerel.call('POST', '/chat', { text, from: admin.username }, 5 * 60 * 1000);
+        const out = await cockerel.call('POST', '/chat', { text, from: admin.username, context: assistant.context(), toolsOff: assistant.settings().toolsOff }, 5 * 60 * 1000);
         const reply = cockerel.add({ kind: 'cockerel', text: str(out.reply, 4000) || 'Done.' });
         send(res, 200, { reply });
       } catch (err) {
@@ -3097,6 +3186,32 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (ask.answer) throw new HttpError(409, 'Already answered');
       const choice = str(body.choice, 40);
       if (!ask.options.includes(choice)) throw new HttpError(400, 'Pick one of the answers');
+      const jobAsk = /^job-(.+)$/.exec(ask.askId);
+      if (jobAsk) {
+        // Roost's own question: a repeating job he proposed.
+        const job = assistant.job(jobAsk[1]);
+        if (job && /^yes/i.test(choice)) { job.approved = true; store.save(); } else if (job) assistant.remove('jobs', job.id);
+        ask.answer = choice;
+        store.save();
+        cockerel.add({ kind: 'you', text: choice });
+        return send(res, 200, { ok: true });
+      }
+      const actAsk = /^act-(.+)$/.exec(ask.askId);
+      if (actAsk) {
+        const list = assistant.data().actions || [];
+        const act = list.find((x) => x.id === actAsk[1]);
+        ask.answer = choice;
+        store.save();
+        cockerel.add({ kind: 'you', text: choice });
+        if (act) assistant.data().actions = list.filter((x) => x !== act);
+        let result = 'Okay, I did not do it.';
+        if (act && /^yes/i.test(choice)) {
+          try { result = await performAction(act, req); } catch (err) { result = `That did not work: ${err.message}`; }
+        }
+        cockerel.add({ kind: 'cockerel', text: result });
+        store.save();
+        return send(res, 200, { ok: true });
+      }
       try {
         await cockerel.call('POST', '/answer', { askId: ask.askId, choice });
       } catch (err) {
@@ -3111,7 +3226,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
 
     'GET /api/admin/cockerel': (req, res) => {
       requireAdmin(req);
-      send(res, 200, cockerel.view());
+      send(res, 200, { ...cockerel.view(), ...assistant.settings() });
     },
 
     'PUT /api/admin/cockerel': async (req, res) => {
@@ -3135,14 +3250,88 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         changes[k] = Math.round(n * 10) / 10;
       }
       if (body.paused !== undefined) changes.paused = body.paused === true;
+      const mine = {};
+      for (const k of ['tz', 'briefOn', 'briefTime', 'toolsOff']) if (body[k] !== undefined) mine[k] = k === 'tz' || k === 'briefTime' ? str(body[k], 40) : body[k];
+      try { if (Object.keys(mine).length) assistant.saveSettings(mine); } catch (err) {
+        if (err instanceof AssistantError) throw new HttpError(err.status, err.message);
+        throw err;
+      }
       cockerel.save(changes);
       if ('paused' in changes) cockerel.add({ kind: 'note', text: changes.paused ? 'Paused by Raven' : 'Resumed' });
-      send(res, 200, cockerel.view());
+      send(res, 200, { ...cockerel.view(), ...assistant.settings() });
+    },
+
+    // His notebook: memories, tasks, reminders and repeating jobs. Raven can
+    // see and change all of it.
+    'GET /api/cockerel/assistant': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, assistant.view());
+    },
+    'POST /api/cockerel/assistant': async (req, res) => {
+      requireAdmin(req);
+      const body = await readJson(req);
+      try {
+        const kinds = { memory: 'memories', task: 'tasks', reminder: 'reminders', job: 'jobs' };
+        const id = str(body.id, 60);
+        if (body.op === 'delete') assistant.remove(kinds[body.kind] || '', id);
+        else if (body.op === 'done') {
+          const t = assistant.data().tasks.find((x) => x.id === id);
+          if (!t) throw new HttpError(404, 'No such task');
+          t.done = body.done !== false;
+          store.save();
+        } else if (body.op === 'pause') {
+          const j = assistant.job(id);
+          if (!j) throw new HttpError(404, 'No such job');
+          j.paused = body.paused === true;
+          store.save();
+        } else if (body.op === 'addTask') assistant.addTask(body.text, body.due);
+        else if (body.op === 'remember') assistant.remember(body.text);
+        else throw new HttpError(400, 'Unknown change');
+      } catch (err) {
+        if (err instanceof AssistantError) throw new HttpError(err.status, err.message);
+        throw err;
+      }
+      send(res, 200, assistant.view());
+    },
+
+    // Calendars (secret iCal links) and the read-only mailbox.
+    'GET /api/admin/cockerel/connections': (req, res) => {
+      requireAdmin(req);
+      const box = assistant.data().mailbox;
+      send(res, 200, { calendars: calendars.view(), mailbox: box ? { host: box.host, port: box.port, user: box.user } : null });
+    },
+    'POST /api/admin/cockerel/connections': async (req, res) => {
+      requireAdmin(req);
+      const body = await readJson(req);
+      try {
+        if (body.op === 'addCalendar') await calendars.add(str(body.name, 40), str(body.url, 1000), () => store.newId());
+        else if (body.op === 'removeCalendar') calendars.remove(str(body.id, 60));
+        else if (body.op === 'setMailbox') {
+          const host = str(body.host, 120);
+          const port = Number(body.port) || 993;
+          const user = str(body.user, 200);
+          const pass = typeof body.pass === 'string' ? body.pass.slice(0, 200) : '';
+          const old = assistant.data().mailbox;
+          if (!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(host) || !user || (!pass && !old)) throw new HttpError(400, 'Enter the mail server (like imap.gmail.com), your address and an app password');
+          const sealed = pass ? secrets.seal(dataDir, pass) : old.pass;
+          // Prove it works before keeping it.
+          await mailbox.recent({ host, port, user, pass: pass || secrets.open(dataDir, old.pass), count: 1 });
+          assistant.data().mailbox = { host, port, user, pass: sealed };
+          store.save();
+        } else if (body.op === 'clearMailbox') { delete assistant.data().mailbox; store.save(); } else throw new HttpError(400, 'Unknown change');
+      } catch (err) {
+        if (err instanceof HttpError) throw err;
+        throw new HttpError(400, err.message);
+      }
+      const box = assistant.data().mailbox;
+      send(res, 200, { calendars: calendars.view(), mailbox: box ? { host: box.host, port: box.port, user: box.user } : null });
     },
 
     // From the VM, signed. No session: the signature is the sign-in.
     'POST /api/cockerel/hook': async (req, res) => {
-      const raw = await readRaw(req);
+      // Only a request that is signed in form may send a big body (a file for Nest).
+      if (!/^\d{9,12}$/.test(String(req.headers['x-roost-ts'] || '')) || !/^[0-9a-f]{64}$/.test(String(req.headers['x-roost-sig'] || ''))) throw new HttpError(401, 'Not signed');
+      const raw = await readRaw(req, Math.ceil(COCKEREL_FILE_MAX * 1.4));
       if (!cockerel.verify(req.headers, raw)) throw new HttpError(401, 'Not signed');
       let body;
       try { body = JSON.parse(raw || '{}'); } catch { throw new HttpError(400, 'Invalid JSON'); }
@@ -3175,6 +3364,136 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
           if (!term) throw new HttpError(400, 'Say what to look for');
           const out = await jellyfin.call('GET', `/Items?Recursive=true&IncludeItemTypes=Movie,Series&Limit=10&searchTerm=${encodeURIComponent(term)}`);
           return send(res, 200, { found: ((out && out.Items) || []).map((i) => ({ name: i.Name, year: i.ProductionYear || null, type: i.Type })) });
+        }
+        case 'file': {
+          // A file he made for Raven goes into Raven's Nest, under Cockerel/.
+          const owner = db().users.find((u) => u.role === 'admin');
+          if (!owner) throw new HttpError(409, 'No admin to send it to');
+          const data = Buffer.from(typeof body.data === 'string' ? body.data : '', 'base64');
+          if (!data.length || data.length > COCKEREL_FILE_MAX) throw new HttpError(413, 'Files up to 20 MB, and not empty');
+          const start = nest.startUpload(owner, { parent: 'root', path: 'Cockerel', name: str(body.name, 120), size: data.length, type: 'text/plain' });
+          let saved = start.item;
+          for (let offset = 0; !saved && offset < data.length; offset += NEST_CHUNK) {
+            const out = await nest.putChunk(owner, start.id, offset, Readable.from(data.subarray(offset, offset + NEST_CHUNK)));
+            if (out.done) saved = out.item;
+          }
+          if (!saved) throw new HttpError(500, 'The file did not finish saving');
+          cockerel.add({ kind: 'file', text: `Sent you ${saved.name}`, file: { id: saved.id, name: saved.name, size: data.length } });
+          pushNotify({ title: 'Cockerel sent you a file', body: saved.name, tag: `cockerel-file-${saved.id}`, url: '/#/cockerel' });
+          return send(res, 200, { ok: true, name: saved.name });
+        }
+        case 'remember':
+          return send(res, 200, { item: assistant.remember(body.text) });
+        case 'task':
+          return send(res, 200, { item: assistant.addTask(body.text, body.due) });
+        case 'remind':
+          return send(res, 200, { item: assistant.addReminder(str(body.at, 40), body.text), tz: assistant.tz() });
+        case 'schedule': {
+          // He proposes, Raven decides: it never runs before a yes.
+          const job = assistant.addJob({ text: body.text, every: body.every, time: body.time, day: body.day, tz: body.tz });
+          const when = job.schedule.every === 'week' ? `every week on day ${job.schedule.day} at ${job.schedule.time}` : `every day at ${job.schedule.time}`;
+          cockerel.add({ kind: 'ask', text: `I'd like to do this ${when}: ${job.text}. Is that OK?`, options: ['Yes, do it', 'No'], askId: `job-${job.id}` });
+          pushNotify({ title: 'Cockerel asks', body: `Repeat a job ${when}?`, tag: `cockerel-job-${job.id}`, url: '/#/cockerel' });
+          return send(res, 200, { item: job, note: 'Waiting for Raven to approve it.' });
+        }
+        case 'remove':
+          assistant.remove({ memory: 'memories', task: 'tasks', reminder: 'reminders', job: 'jobs' }[body.kind] || '', str(body.id, 60));
+          return send(res, 200, { ok: true });
+        case 'taskdone': {
+          const t = assistant.data().tasks.find((x) => x.id === str(body.id, 60));
+          if (!t) throw new HttpError(404, 'No such task');
+          t.done = true;
+          store.save();
+          return send(res, 200, { ok: true });
+        }
+        case 'list':
+          return send(res, 200, { lines: assistant.list({ memory: 'memories', task: 'tasks', reminder: 'reminders', job: 'jobs' }[body.kind] || '') });
+        case 'notify': {
+          // A short note to Raven's phone, at most 10 a day.
+          const c = cockerel.data();
+          const day = cockerel.today();
+          if (!c.notified || c.notified.day !== day) c.notified = { day, n: 0 };
+          if (c.notified.n >= 10) throw new HttpError(429, 'That is enough phone notes for today');
+          c.notified.n += 1;
+          pushNotify({ title: 'Cockerel', body: str(body.text, 200), tag: `cockerel-n-${Date.now()}`, url: '/#/cockerel' });
+          cockerel.add({ kind: 'note', text: `Phone note: ${str(body.text, 200)}` });
+          return send(res, 200, { ok: true });
+        }
+        case 'roost-status': {
+          const b = backup.summarize(backup.readStatus(dataDir));
+          const u = selfUpdate.summarize(selfUpdate.readStatus(dataDir));
+          const apps = db().apps.filter((a) => a.id !== 'cockerel').map((a) => a.name).join(', ');
+          return send(res, 200, { lines: [`Backups: ${b.state}${b.message ? ` (${b.message})` : ''}`, `Roost updates: ${u.state}${u.behind ? `, ${u.behind} change(s) waiting` : ''}`, `Apps on the home page: ${apps}`, `Time zone ${assistant.tz()}`] });
+        }
+        case 'action': {
+          // Anything that changes something outside his notebook waits for Raven's tap.
+          const a = assistant.data();
+          if (!Array.isArray(a.actions)) a.actions = [];
+          a.actions = a.actions.filter((x) => Date.now() - Date.parse(x.at) < 3 * 24 * 3600e3);
+          let act;
+          let text;
+          if (body.kind === 'email') {
+            const to = str(body.to, 254).toLowerCase();
+            if (!mail.validEmail(to)) throw new HttpError(400, "That doesn't look like an email address");
+            const subject = str(body.subject, 150);
+            const msg = typeof body.text === 'string' ? body.text.slice(0, 4000).trim() : '';
+            if (!subject || !msg) throw new HttpError(400, 'An email needs a subject and some text');
+            if (!mailReady()) throw new HttpError(409, 'Roost cannot send email yet (Admin → Server → Email)');
+            const c = cockerel.data();
+            const day = cockerel.today();
+            if (!c.emailed || c.emailed.day !== day) c.emailed = { day, n: 0 };
+            if (c.emailed.n >= 5) throw new HttpError(429, 'That is enough emails for today');
+            act = { kind: 'email', to, subject, text: msg };
+            text = `Send this email from ${db().settings.serverName || 'Roost'} to ${to}?\nSubject: ${subject}\n\n${msg.slice(0, 600)}${msg.length > 600 ? '…' : ''}`;
+          } else if (body.kind === 'restart') {
+            const app = db().apps.find((x) => x.id === str(body.app, 60));
+            if (!app) throw new HttpError(404, 'No such app');
+            act = { kind: 'restart', app: app.id };
+            text = `Restart ${app.name}?`;
+          } else if (body.kind === 'backup') {
+            act = { kind: 'backup' };
+            text = 'Start a backup now?';
+          } else if (body.kind === 'update') {
+            act = { kind: 'update' };
+            text = 'Update Roost now? The site is down for a minute.';
+          } else throw new HttpError(400, 'Unknown action');
+          if (a.actions.length >= 10) throw new HttpError(409, 'Too many actions are waiting for Raven');
+          act.id = store.newId();
+          act.at = new Date().toISOString();
+          a.actions.push(act);
+          store.save();
+          cockerel.add({ kind: 'ask', text, options: ['Yes, go ahead', 'No'], askId: `act-${act.id}` });
+          pushNotify({ title: 'Cockerel asks', body: text.split('\n')[0].slice(0, 120), tag: `cockerel-act-${act.id}`, url: '/#/cockerel' });
+          return send(res, 200, { note: 'Asked Raven. Stop here: nothing happens unless he says yes.' });
+        }
+        case 'birdhouse': {
+          // Raven's Birdhouse plans, read-only: the cut list and what to buy.
+          const owner = db().users.find((u) => u.role === 'admin');
+          const mine = owner ? birdhouse.mine(owner) : { plans: [], prices: {} };
+          const id = str(body.id, 60);
+          if (!id) return send(res, 200, { lines: mine.plans.map((p) => `${p.id}  ${p.name}`) });
+          const plan = mine.plans.find((p) => p.id === id);
+          if (!plan) throw new HttpError(404, 'No such plan');
+          const parts = birdhouseModel.parts(plan.plan).map((x) => `${x.qty} x ${x.name}: ${x.length} x ${x.width} x ${x.thickness} mm`);
+          const buy = birdhouseModel.materials(plan.plan).map((m) => {
+            const price = (mine.prices[m.key] || {}).p;
+            return `${m.qty} x ${m.label} (search: "${m.search}") ${price !== undefined ? `Raven's price £${price}` : `rough £${m.estimate}`}${m.have ? `, he has ${m.have}` : ''}`;
+          });
+          return send(res, 200, { lines: [`Plan: ${plan.name}`, 'Cut list:', ...parts, 'To buy:', ...buy] });
+        }
+        case 'calendar': {
+          const out = await calendars.upcoming(Number(body.days) || 0);
+          return send(res, 200, { lines: out.lines, problems: out.problems, linked: calendars.view().length });
+        }
+        case 'inbox': {
+          const box = assistant.data().mailbox;
+          if (!box) throw new HttpError(409, 'Raven has not linked his email yet (Admin → Server → Cockerel)');
+          try {
+            const mails = await mailbox.recent({ host: box.host, port: box.port, user: box.user, pass: secrets.open(dataDir, box.pass), count: Number(body.count) || 8, unreadOnly: body.unread !== false });
+            return send(res, 200, { mails });
+          } catch (err) {
+            throw new HttpError(502, err.message);
+          }
         }
         case 'refresh':
           // After he files a new download in the Roostflix folders.
