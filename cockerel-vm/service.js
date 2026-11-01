@@ -32,7 +32,20 @@ const write = (f, data) => { fs.mkdirSync(STATE, { recursive: true }); fs.writeF
 let chain = Promise.resolve();
 let busy = false;
 
-function runClaude(prompt) {
+// What each kind of run may do. Film jobs can download; research and
+// assistant runs can read the web but cannot download anything, so a hostile
+// web page has nothing dangerous to steer him towards. Claude gets no Read or
+// shell access in either mode (his settings file holds the shared secret).
+const WEB = ['WebSearch', 'WebFetch'];
+const TOOLS = {
+  media: ['events', 'library', 'find', 'fetch', 'ask', 'log', 'job'],
+  assistant: ['events', 'ask', 'log', 'send'],
+};
+const MEDIA_WORDS = /\b(movies?|films?|tv shows?|series|episodes?|roostflix|jellyfin|download|downloads|torrent)\b/i;
+const modeFor = (text) => (MEDIA_WORDS.test(text) ? 'media' : 'assistant');
+const allowedFor = (mode) => [...(mode === 'media' ? [] : WEB), ...TOOLS[mode].map((c) => `Bash(cockerel-tool ${c}:*)`)];
+
+function runClaude(prompt, mode = 'media') {
   const job = chain.then(async () => {
     const day = new Date().toISOString().slice(0, 10);
     const usage = read('usage.json', { day, runs: 0 });
@@ -43,7 +56,7 @@ function runClaude(prompt) {
     busy = true;
     try {
       return await new Promise((resolve) => {
-        const args = ['-p', prompt, '--model', MODEL, '--output-format', 'json', '--max-turns', '15', '--allowedTools', 'Bash(cockerel-tool:*)', 'Read'];
+        const args = ['-p', prompt, '--model', MODEL, '--output-format', 'json', '--max-turns', '15', '--allowedTools', ...allowedFor(mode)];
         const child = spawn('claude', args, { cwd: HOME, env: { ...process.env, PATH: `${path.dirname(TOOL)}:${process.env.PATH}` } });
         let out = '';
         let err = '';
@@ -147,7 +160,7 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/chat') {
       const text = String(data.text || '').slice(0, 2000);
       remember('Raven', text);
-      const out = await runClaude(promptFor(`Raven says: ${text}`));
+      const out = await runClaude(promptFor(`Raven says: ${text}`), modeFor(text));
       remember('Cockerel', out);
       return reply(200, { reply: out });
     }
@@ -165,4 +178,4 @@ if (require.main === module) {
   server.listen(PORT, BIND, () => console.log(`Cockerel listening on ${BIND}:${PORT}`));
 }
 
-module.exports = { server };
+module.exports = { server, modeFor, allowedFor };

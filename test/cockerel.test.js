@@ -81,8 +81,9 @@ before(async () => {
   await setUpTwoStep(call, cookie);
 });
 
-after(() => {
-  server.close();
+after(async () => {
+  server.closeAllConnections();
+  await new Promise((r) => server.close(r));
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
@@ -140,6 +141,18 @@ test('the VM can only report with a good signature', async () => {
   assert.equal((await hook({ type: 'check', bytes: 1 * GB })).body.decision, 'auto');
   assert.equal((await hook({ type: 'check', bytes: 9 * GB })).body.decision, 'ask');
   assert.equal((await hook({ type: 'nope' })).status, 400);
+});
+
+test('a file he sends lands in Nest under Cockerel and shows in the chat', async () => {
+  const data = Buffer.from('# Notes\nhello').toString('base64');
+  const r = await hook({ type: 'file', name: 'notes.md', data });
+  assert.equal(r.status, 200);
+  const entry = (await call('GET', '/api/cockerel', null, cookie)).body.log.find((e) => e.kind === 'file');
+  assert.equal(entry.file.name, 'notes.md');
+  const dl = await fetch(`${base}/api/nest/files/${entry.file.id}`, { headers: { cookie } });
+  assert.equal(dl.status, 200);
+  assert.equal(await dl.text(), '# Notes\nhello');
+  assert.equal((await hook({ type: 'file', name: 'x.md', data: '' })).status, 413, 'empty is refused');
 });
 
 test('his question reaches Raven and the answer goes back', async () => {

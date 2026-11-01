@@ -7,7 +7,7 @@
   const REFRESH_MS = 6000;
   const S = { built: false, timer: null, busy: false, steps: false, last: '', open: false, d: null, seen: null, typing: false, again: false };
   const STAGES = ['Requested', 'Finding', 'Downloading', 'Added'];
-  const IDEAS = ["What's new on Roostflix?", 'Any alerts today?', 'Find a film for me'];
+  const IDEAS = ["What's new on Roostflix?", 'Research something for me', 'Find a film for me'];
 
   // His mark: the Roost bird with a comb, a two-part beak and a wattle. The
   // beak and a small bob are what animate when he speaks (see style.css).
@@ -80,6 +80,11 @@
       if (fresh) requestAnimationFrame(() => speak(row, e.text));
       return row;
     }
+    if (e.kind === 'file' && e.file) {
+      const kb = e.file.size < 1024 * 1024 ? `${Math.max(1, Math.round(e.file.size / 1024))} KB` : `${(e.file.size / 1048576).toFixed(1)} MB`;
+      return el('a', { class: 'cx-file', href: `/api/nest/files/${encodeURIComponent(e.file.id)}`, download: e.file.name, title: `Saved in Nest, Cockerel folder · ${when(e.at)}` },
+        el('strong', { text: e.file.name }), el('span', { text: `${kb} · tap to download` }));
+    }
     if (e.kind === 'ask') {
       return el('div', { class: `cx-ask${e.answer ? ' answered' : ''}` }, el('p', { text: e.text }),
         e.answer ? el('span', { class: 'cx-answered', text: `You chose: ${e.answer}` })
@@ -90,7 +95,7 @@
 
   function empty(d) {
     if (!d.enabled) return el('div', { class: 'cx-empty' }, el('strong', { text: 'Cockerel is not linked yet' }), el('p', { text: 'Set up his VM, then link him under Admin → Server → Cockerel.' }));
-    return el('div', { class: 'cx-empty' }, el('strong', { text: 'Hi Raven, what can I help with?' }), el('p', { text: 'I can check Roostflix, explain an alert, or hunt down an open-licensed film. Just ask!' }),
+    return el('div', { class: 'cx-empty' }, el('strong', { text: 'Hi Raven, what can I help with?' }), el('p', { text: 'I can research things online, send you files, check Roostflix, explain an alert, or hunt down an open-licensed film. Just ask!' }),
       el('div', { class: 'cx-ideas' }, IDEAS.map((t) => el('button', { type: 'button', class: 'cx-idea', text: t, onclick: () => send(t) }))));
   }
 

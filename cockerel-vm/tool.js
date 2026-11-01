@@ -218,6 +218,21 @@ async function failed(id, why = 'the download failed') {
   await hook({ type: 'log', text: `${meta.name}: ${why}. The files stay in incoming/${id} for a look.` });
 }
 
+// ---------- sending Raven a file ----------
+// Text goes to Roost, which saves it in Raven's Nest under Cockerel/ and shows
+// a download card in the chat. Roost caps the size.
+const FILE_MAX = 20 * 1024 * 1024;
+async function send(opt) {
+  const name = lib.cleanName(opt.name);
+  const text = typeof opt.text === 'string' ? opt.text : '';
+  if (!name || !/\.(md|txt|csv|json|html)$/i.test(name)) fail('send --name "notes.md" --text "..." (a .md, .txt, .csv, .json or .html name)');
+  if (!text) fail('--text is empty');
+  const data = Buffer.from(text, 'utf8');
+  if (data.length > FILE_MAX) fail('That is too big to send (20 MB limit).');
+  const out = await hook({ type: 'file', name, data: data.toString('base64') });
+  console.log(`Saved ${out.name} to Raven's Nest (Cockerel folder) and showed it in the chat. Tell him it is there.`);
+}
+
 // ---------- the commands ----------
 const COMMANDS = {
   events: ([n]) => {
@@ -233,6 +248,7 @@ const COMMANDS = {
   },
   find: async ([title]) => { if (!title) fail('find "Title"'); await find(title); },
   fetch: async ([link], opt) => { if (!link) fail('fetch <link> --job ID --name "Name" [--year 2010] [--kind movie|show] [--requester username]'); await fetchJob(link, opt); },
+  send: async (_pos, opt) => { await send(opt); },
   done: async ([id]) => { await done(id); },
   failed: async ([id]) => { await failed(id); },
 };

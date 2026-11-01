@@ -8,7 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Store, DEFAULT_APPS } = require('./store');
-const { Cockerel, CockerelError, GB: COCKEREL_GB } = require('./cockerel');
+const { Cockerel, CockerelError, GB: COCKEREL_GB, FILE_MAX: COCKEREL_FILE_MAX } = require('./cockerel');
 const birdhouse = require('./birdhouse');
 const birdhouseAi = require('./birdhouse-ai');
 const secrets = require('./secrets');
@@ -41,7 +41,8 @@ const twoStep = require('./twostep');
 const { qrSvg } = require('./qr');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
 const { HttpError, send, readJson, readRaw, str } = require('./http');
-const { Nest, disposition } = require('./nest');
+const { Nest, disposition, CHUNK: NEST_CHUNK } = require('./nest');
+const { Readable } = require('stream');
 const family = require('./family');
 const releases = require('./releases');
 const zip = require('./zip');
@@ -3142,7 +3143,9 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
 
     // From the VM, signed. No session: the signature is the sign-in.
     'POST /api/cockerel/hook': async (req, res) => {
-      const raw = await readRaw(req);
+      // Only a request that is signed in form may send a big body (a file for Nest).
+      if (!/^\d{9,12}$/.test(String(req.headers['x-roost-ts'] || '')) || !/^[0-9a-f]{64}$/.test(String(req.headers['x-roost-sig'] || ''))) throw new HttpError(401, 'Not signed');
+      const raw = await readRaw(req, Math.ceil(COCKEREL_FILE_MAX * 1.4));
       if (!cockerel.verify(req.headers, raw)) throw new HttpError(401, 'Not signed');
       let body;
       try { body = JSON.parse(raw || '{}'); } catch { throw new HttpError(400, 'Invalid JSON'); }
@@ -3175,6 +3178,23 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
           if (!term) throw new HttpError(400, 'Say what to look for');
           const out = await jellyfin.call('GET', `/Items?Recursive=true&IncludeItemTypes=Movie,Series&Limit=10&searchTerm=${encodeURIComponent(term)}`);
           return send(res, 200, { found: ((out && out.Items) || []).map((i) => ({ name: i.Name, year: i.ProductionYear || null, type: i.Type })) });
+        }
+        case 'file': {
+          // A file he made for Raven goes into Raven's Nest, under Cockerel/.
+          const owner = db().users.find((u) => u.role === 'admin');
+          if (!owner) throw new HttpError(409, 'No admin to send it to');
+          const data = Buffer.from(typeof body.data === 'string' ? body.data : '', 'base64');
+          if (!data.length || data.length > COCKEREL_FILE_MAX) throw new HttpError(413, 'Files up to 20 MB, and not empty');
+          const start = nest.startUpload(owner, { parent: 'root', path: 'Cockerel', name: str(body.name, 120), size: data.length, type: 'text/plain' });
+          let saved = start.item;
+          for (let offset = 0; !saved && offset < data.length; offset += NEST_CHUNK) {
+            const out = await nest.putChunk(owner, start.id, offset, Readable.from(data.subarray(offset, offset + NEST_CHUNK)));
+            if (out.done) saved = out.item;
+          }
+          if (!saved) throw new HttpError(500, 'The file did not finish saving');
+          cockerel.add({ kind: 'file', text: `Sent you ${saved.name}`, file: { id: saved.id, name: saved.name, size: data.length } });
+          pushNotify({ title: 'Cockerel sent you a file', body: saved.name, tag: `cockerel-file-${saved.id}`, url: '/#/cockerel' });
+          return send(res, 200, { ok: true, name: saved.name });
         }
         case 'refresh':
           // After he files a new download in the Roostflix folders.
