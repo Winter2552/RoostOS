@@ -1,16 +1,3 @@
 {
-  "items": [
-    {
-      "title": "Cockerel, your personal assistant",
-      "text": "Ask him to research anything on the web and he sends the write-up to your Nest as a file. He asks first before he emails, restarts something or repeats a job, and he can read your calendar and unread email, but never change them.",
-      "image": "cockerel-assistant.png",
-      "admin": true
-    },
-    {
-      "title": "His notebook and morning brief",
-      "text": "He remembers what you tell him, keeps your tasks, sets reminders that buzz your phone, and can send a short brief each morning. You can see and edit all of it, and switch any tool off in Admin.",
-      "image": "cockerel-notebook.png",
-      "admin": true
-    }
-  ]
+  "items": []
 }
