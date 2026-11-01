@@ -145,3 +145,16 @@ test('the tool files a finished download, and asks before an unusual source or a
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('research runs read the web but cannot download; film runs cannot browse', () => {
+  const { modeFor, allowedFor } = require('../cockerel-vm/service');
+  assert.equal(modeFor('Find Sintel and add it to Roostflix'), 'media');
+  assert.equal(modeFor('Show me the best way to season a pan'), 'assistant');
+  const research = allowedFor('assistant');
+  assert.ok(research.includes('WebSearch') && research.includes('WebFetch'));
+  assert.ok(!research.some((t) => /fetch:|find:/.test(t) && t.startsWith('Bash')), 'no downloads in research');
+  assert.ok(research.includes('Bash(cockerel-tool send:*)'));
+  const film = allowedFor('media');
+  assert.ok(film.includes('Bash(cockerel-tool fetch:*)') && !film.includes('WebFetch'));
+  for (const t of [...research, ...film]) assert.notEqual(t, 'Read', 'no file reading');
+});

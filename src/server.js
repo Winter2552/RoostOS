@@ -8,7 +8,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Store, DEFAULT_APPS } = require('./store');
-const { Cockerel, CockerelError, GB: COCKEREL_GB } = require('./cockerel');
+const { Assistant, AssistantError } = require('./assistant');
+const { Cockerel, CockerelError, GB: COCKEREL_GB, FILE_MAX: COCKEREL_FILE_MAX } = require('./cockerel');
 const birdhouse = require('./birdhouse');
 const birdhouseAi = require('./birdhouse-ai');
 const secrets = require('./secrets');
@@ -41,7 +42,8 @@ const twoStep = require('./twostep');
 const { qrSvg } = require('./qr');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
 const { HttpError, send, readJson, readRaw, str } = require('./http');
-const { Nest, disposition } = require('./nest');
+const { Nest, disposition, CHUNK: NEST_CHUNK } = require('./nest');
+const { Readable } = require('stream');
 const family = require('./family');
 const releases = require('./releases');
 const zip = require('./zip');
@@ -514,6 +516,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     ...pushOptions,
   });
   const cockerel = new Cockerel({ store, newId: () => store.newId(), fetchImpl: coffeeOptions.fetchImpl || fetch, seal: (t) => secrets.seal(dataDir, t), open: (b) => secrets.open(dataDir, b) });
+  const assistant = new Assistant({ store, newId: () => store.newId() });
   // Cockerel hears what the admin's phone hears: movie requests and Sentinel alerts.
   const pushNotify = push.notify.bind(push);
   push.notify = (message, userId = null, opts) => {
@@ -619,7 +622,47 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       );
     }
   };
-  const scheduleTimer = setInterval(runSchedules, scheduleCheckMs);
+  // Cockerel's notebook: reminders fire here, and a repeating job or the
+  // morning brief wakes him only when its minute comes.
+  const runCockerelJob = (prompt, label, { always = false } = {}) => {
+    cockerel.call('POST', '/run', { prompt, mode: 'scheduled', context: assistant.context(), toolsOff: assistant.settings().toolsOff }, 5 * 60 * 1000).then((out) => {
+      const text = str(out.reply, 4000);
+      if (!text || (!always && /^nothing\b/i.test(text))) return;
+      cockerel.add({ kind: 'cockerel', text });
+      pushNotify({ title: label, body: text.slice(0, 140), tag: `cockerel-job-${Date.now()}`, url: '/#/cockerel' });
+    }).catch((err) => cockerel.add({ kind: 'note', text: `${label} didn't run: ${err.message}` }));
+  };
+  async function briefFacts() {
+    const a = assistant.data();
+    const tz = assistant.tz();
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(Date.now());
+    const lines = [];
+    const open = a.tasks.filter((t) => !t.done);
+    lines.push(open.length ? `Open tasks: ${open.map((t) => `${t.text}${t.due ? ` (due ${t.due})` : ''}`).join('; ')}` : 'No open tasks.');
+    const today = a.reminders.filter((r) => !r.done && new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(Date.parse(r.at)) === day);
+    if (today.length) lines.push(`Reminders today: ${today.map((r) => r.text).join('; ')}`);
+    try {
+      if (jellyfin.enabled()) {
+        const out = await jellyfin.call('GET', '/Items?Recursive=true&IncludeItemTypes=Movie,Series&SortBy=DateCreated&SortOrder=Descending&Limit=6&Fields=DateCreated');
+        const fresh = ((out && out.Items) || []).filter((i) => Date.now() - Date.parse(i.DateCreated) < 26 * 3600e3).map((i) => i.Name);
+        if (fresh.length) lines.push(`New on Roostflix since yesterday: ${fresh.join(', ')}`);
+      }
+    } catch { /* Roostflix is optional */ }
+    return lines.join('\n');
+  }
+  const assistantTick = () => {
+    const now = new Date();
+    for (const r of assistant.dueReminders()) {
+      cockerel.add({ kind: 'cockerel', text: `Reminder: ${r.text}` });
+      pushNotify({ title: 'Reminder', body: r.text, tag: `cockerel-r-${r.id}`, url: '/#/cockerel' });
+    }
+    if (!cockerel.enabled() || cockerel.config().paused) return;
+    for (const j of assistant.dueJobs(now)) runCockerelJob(`Scheduled job. ${j.text}\n\nIf there is nothing worth telling Raven, reply with just the word NOTHING.`, 'Cockerel');
+    if (assistant.briefDue(now)) {
+      briefFacts().then((facts) => runCockerelJob(`Write Raven's morning brief, in short spoken sentences, under 120 words, no markdown. Facts from Roost:\n${facts}\nAlso run cockerel-tool events 15 for overnight alerts and mention anything that needs him. If your notes name where he lives, search the web for today's weather there. Say if anything needs a decision from him.`, 'Morning brief', { always: true }));
+    }
+  };
+  const scheduleTimer = setInterval(() => { runSchedules(); assistantTick(); }, scheduleCheckMs);
   scheduleTimer.unref();
 
   function currentUser(req) {
@@ -3079,7 +3122,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (!text) throw new HttpError(400, 'Type a message');
       cockerel.add({ kind: 'you', text });
       try {
-        const out = await cockerel.call('POST', '/chat', { text, from: admin.username }, 5 * 60 * 1000);
+        const out = await cockerel.call('POST', '/chat', { text, from: admin.username, context: assistant.context(), toolsOff: assistant.settings().toolsOff }, 5 * 60 * 1000);
         const reply = cockerel.add({ kind: 'cockerel', text: str(out.reply, 4000) || 'Done.' });
         send(res, 200, { reply });
       } catch (err) {
@@ -3097,6 +3140,16 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (ask.answer) throw new HttpError(409, 'Already answered');
       const choice = str(body.choice, 40);
       if (!ask.options.includes(choice)) throw new HttpError(400, 'Pick one of the answers');
+      const jobAsk = /^job-(.+)$/.exec(ask.askId);
+      if (jobAsk) {
+        // Roost's own question: a repeating job he proposed.
+        const job = assistant.job(jobAsk[1]);
+        if (job && /^yes/i.test(choice)) { job.approved = true; store.save(); } else if (job) assistant.remove('jobs', job.id);
+        ask.answer = choice;
+        store.save();
+        cockerel.add({ kind: 'you', text: choice });
+        return send(res, 200, { ok: true });
+      }
       try {
         await cockerel.call('POST', '/answer', { askId: ask.askId, choice });
       } catch (err) {
@@ -3111,7 +3164,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
 
     'GET /api/admin/cockerel': (req, res) => {
       requireAdmin(req);
-      send(res, 200, cockerel.view());
+      send(res, 200, { ...cockerel.view(), ...assistant.settings() });
     },
 
     'PUT /api/admin/cockerel': async (req, res) => {
@@ -3135,14 +3188,55 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         changes[k] = Math.round(n * 10) / 10;
       }
       if (body.paused !== undefined) changes.paused = body.paused === true;
+      const mine = {};
+      for (const k of ['tz', 'briefOn', 'briefTime', 'toolsOff']) if (body[k] !== undefined) mine[k] = k === 'tz' || k === 'briefTime' ? str(body[k], 40) : body[k];
+      try { if (Object.keys(mine).length) assistant.saveSettings(mine); } catch (err) {
+        if (err instanceof AssistantError) throw new HttpError(err.status, err.message);
+        throw err;
+      }
       cockerel.save(changes);
       if ('paused' in changes) cockerel.add({ kind: 'note', text: changes.paused ? 'Paused by Raven' : 'Resumed' });
-      send(res, 200, cockerel.view());
+      send(res, 200, { ...cockerel.view(), ...assistant.settings() });
+    },
+
+    // His notebook: memories, tasks, reminders and repeating jobs. Raven can
+    // see and change all of it.
+    'GET /api/cockerel/assistant': (req, res) => {
+      requireAdmin(req);
+      send(res, 200, assistant.view());
+    },
+    'POST /api/cockerel/assistant': async (req, res) => {
+      requireAdmin(req);
+      const body = await readJson(req);
+      try {
+        const kinds = { memory: 'memories', task: 'tasks', reminder: 'reminders', job: 'jobs' };
+        const id = str(body.id, 60);
+        if (body.op === 'delete') assistant.remove(kinds[body.kind] || '', id);
+        else if (body.op === 'done') {
+          const t = assistant.data().tasks.find((x) => x.id === id);
+          if (!t) throw new HttpError(404, 'No such task');
+          t.done = body.done !== false;
+          store.save();
+        } else if (body.op === 'pause') {
+          const j = assistant.job(id);
+          if (!j) throw new HttpError(404, 'No such job');
+          j.paused = body.paused === true;
+          store.save();
+        } else if (body.op === 'addTask') assistant.addTask(body.text, body.due);
+        else if (body.op === 'remember') assistant.remember(body.text);
+        else throw new HttpError(400, 'Unknown change');
+      } catch (err) {
+        if (err instanceof AssistantError) throw new HttpError(err.status, err.message);
+        throw err;
+      }
+      send(res, 200, assistant.view());
     },
 
     // From the VM, signed. No session: the signature is the sign-in.
     'POST /api/cockerel/hook': async (req, res) => {
-      const raw = await readRaw(req);
+      // Only a request that is signed in form may send a big body (a file for Nest).
+      if (!/^\d{9,12}$/.test(String(req.headers['x-roost-ts'] || '')) || !/^[0-9a-f]{64}$/.test(String(req.headers['x-roost-sig'] || ''))) throw new HttpError(401, 'Not signed');
+      const raw = await readRaw(req, Math.ceil(COCKEREL_FILE_MAX * 1.4));
       if (!cockerel.verify(req.headers, raw)) throw new HttpError(401, 'Not signed');
       let body;
       try { body = JSON.parse(raw || '{}'); } catch { throw new HttpError(400, 'Invalid JSON'); }
@@ -3175,6 +3269,60 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
           if (!term) throw new HttpError(400, 'Say what to look for');
           const out = await jellyfin.call('GET', `/Items?Recursive=true&IncludeItemTypes=Movie,Series&Limit=10&searchTerm=${encodeURIComponent(term)}`);
           return send(res, 200, { found: ((out && out.Items) || []).map((i) => ({ name: i.Name, year: i.ProductionYear || null, type: i.Type })) });
+        }
+        case 'file': {
+          // A file he made for Raven goes into Raven's Nest, under Cockerel/.
+          const owner = db().users.find((u) => u.role === 'admin');
+          if (!owner) throw new HttpError(409, 'No admin to send it to');
+          const data = Buffer.from(typeof body.data === 'string' ? body.data : '', 'base64');
+          if (!data.length || data.length > COCKEREL_FILE_MAX) throw new HttpError(413, 'Files up to 20 MB, and not empty');
+          const start = nest.startUpload(owner, { parent: 'root', path: 'Cockerel', name: str(body.name, 120), size: data.length, type: 'text/plain' });
+          let saved = start.item;
+          for (let offset = 0; !saved && offset < data.length; offset += NEST_CHUNK) {
+            const out = await nest.putChunk(owner, start.id, offset, Readable.from(data.subarray(offset, offset + NEST_CHUNK)));
+            if (out.done) saved = out.item;
+          }
+          if (!saved) throw new HttpError(500, 'The file did not finish saving');
+          cockerel.add({ kind: 'file', text: `Sent you ${saved.name}`, file: { id: saved.id, name: saved.name, size: data.length } });
+          pushNotify({ title: 'Cockerel sent you a file', body: saved.name, tag: `cockerel-file-${saved.id}`, url: '/#/cockerel' });
+          return send(res, 200, { ok: true, name: saved.name });
+        }
+        case 'remember':
+          return send(res, 200, { item: assistant.remember(body.text) });
+        case 'task':
+          return send(res, 200, { item: assistant.addTask(body.text, body.due) });
+        case 'remind':
+          return send(res, 200, { item: assistant.addReminder(str(body.at, 40), body.text), tz: assistant.tz() });
+        case 'schedule': {
+          // He proposes, Raven decides: it never runs before a yes.
+          const job = assistant.addJob({ text: body.text, every: body.every, time: body.time, day: body.day, tz: body.tz });
+          const when = job.schedule.every === 'week' ? `every week on day ${job.schedule.day} at ${job.schedule.time}` : `every day at ${job.schedule.time}`;
+          cockerel.add({ kind: 'ask', text: `I'd like to do this ${when}: ${job.text}. Is that OK?`, options: ['Yes, do it', 'No'], askId: `job-${job.id}` });
+          pushNotify({ title: 'Cockerel asks', body: `Repeat a job ${when}?`, tag: `cockerel-job-${job.id}`, url: '/#/cockerel' });
+          return send(res, 200, { item: job, note: 'Waiting for Raven to approve it.' });
+        }
+        case 'remove':
+          assistant.remove({ memory: 'memories', task: 'tasks', reminder: 'reminders', job: 'jobs' }[body.kind] || '', str(body.id, 60));
+          return send(res, 200, { ok: true });
+        case 'taskdone': {
+          const t = assistant.data().tasks.find((x) => x.id === str(body.id, 60));
+          if (!t) throw new HttpError(404, 'No such task');
+          t.done = true;
+          store.save();
+          return send(res, 200, { ok: true });
+        }
+        case 'list':
+          return send(res, 200, { lines: assistant.list({ memory: 'memories', task: 'tasks', reminder: 'reminders', job: 'jobs' }[body.kind] || '') });
+        case 'notify': {
+          // A short note to Raven's phone, at most 10 a day.
+          const c = cockerel.data();
+          const day = cockerel.today();
+          if (!c.notified || c.notified.day !== day) c.notified = { day, n: 0 };
+          if (c.notified.n >= 10) throw new HttpError(429, 'That is enough phone notes for today');
+          c.notified.n += 1;
+          pushNotify({ title: 'Cockerel', body: str(body.text, 200), tag: `cockerel-n-${Date.now()}`, url: '/#/cockerel' });
+          cockerel.add({ kind: 'note', text: `Phone note: ${str(body.text, 200)}` });
+          return send(res, 200, { ok: true });
         }
         case 'refresh':
           // After he files a new download in the Roostflix folders.
