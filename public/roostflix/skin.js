@@ -26,6 +26,15 @@
   }
   document.documentElement.dataset.roostflix = '1';
 
+  // ---------- header: see-through at the top, hazed glass once scrolled ----------
+  // Scroll events are only used to flip one class, and only when it changes.
+  const scrollTop = (t) => (t && t !== document && t.scrollTop != null && t.scrollTop > 0 ? t.scrollTop : 0) || window.scrollY || 0;
+  let scrolled = false;
+  document.addEventListener('scroll', (e) => {
+    const now = scrollTop(e.target) > 60;
+    if (now !== scrolled) { scrolled = now; document.documentElement.classList.toggle('rf-scrolled', now); }
+  }, { capture: true, passive: true });
+
   // ---------- who is signed in ----------
   function session() {
     const c = window.ApiClient;
