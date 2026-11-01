@@ -9,6 +9,8 @@ const os = require('os');
 const path = require('path');
 const { Store, DEFAULT_APPS } = require('./store');
 const { Assistant, AssistantError } = require('./assistant');
+const { Calendars } = require('./calendar');
+const mailbox = require('./mailbox');
 const { Cockerel, CockerelError, GB: COCKEREL_GB, FILE_MAX: COCKEREL_FILE_MAX } = require('./cockerel');
 const birdhouse = require('./birdhouse');
 const birdhouseAi = require('./birdhouse-ai');
@@ -517,6 +519,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   });
   const cockerel = new Cockerel({ store, newId: () => store.newId(), fetchImpl: coffeeOptions.fetchImpl || fetch, seal: (t) => secrets.seal(dataDir, t), open: (b) => secrets.open(dataDir, b) });
   const assistant = new Assistant({ store, newId: () => store.newId() });
+  const calendars = new Calendars({ assistant, seal: (t) => secrets.seal(dataDir, t), open: (b) => secrets.open(dataDir, b), fetchImpl: coffeeOptions.calendarFetch || fetch });
   // Cockerel hears what the admin's phone hears: movie requests and Sentinel alerts.
   const pushNotify = push.notify.bind(push);
   push.notify = (message, userId = null, opts) => {
@@ -641,6 +644,10 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     lines.push(open.length ? `Open tasks: ${open.map((t) => `${t.text}${t.due ? ` (due ${t.due})` : ''}`).join('; ')}` : 'No open tasks.');
     const today = a.reminders.filter((r) => !r.done && new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(Date.parse(r.at)) === day);
     if (today.length) lines.push(`Reminders today: ${today.map((r) => r.text).join('; ')}`);
+    try {
+      const cal = await calendars.upcoming(0);
+      if (cal.lines.length) lines.push(`On the calendar today: ${cal.lines.join('; ')}`);
+    } catch { /* calendars are optional */ }
     try {
       if (jellyfin.enabled()) {
         const out = await jellyfin.call('GET', '/Items?Recursive=true&IncludeItemTypes=Movie,Series&SortBy=DateCreated&SortOrder=Descending&Limit=6&Fields=DateCreated');
@@ -3232,6 +3239,39 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 200, assistant.view());
     },
 
+    // Calendars (secret iCal links) and the read-only mailbox.
+    'GET /api/admin/cockerel/connections': (req, res) => {
+      requireAdmin(req);
+      const box = assistant.data().mailbox;
+      send(res, 200, { calendars: calendars.view(), mailbox: box ? { host: box.host, port: box.port, user: box.user } : null });
+    },
+    'POST /api/admin/cockerel/connections': async (req, res) => {
+      requireAdmin(req);
+      const body = await readJson(req);
+      try {
+        if (body.op === 'addCalendar') await calendars.add(str(body.name, 40), str(body.url, 1000), () => store.newId());
+        else if (body.op === 'removeCalendar') calendars.remove(str(body.id, 60));
+        else if (body.op === 'setMailbox') {
+          const host = str(body.host, 120);
+          const port = Number(body.port) || 993;
+          const user = str(body.user, 200);
+          const pass = typeof body.pass === 'string' ? body.pass.slice(0, 200) : '';
+          const old = assistant.data().mailbox;
+          if (!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(host) || !user || (!pass && !old)) throw new HttpError(400, 'Enter the mail server (like imap.gmail.com), your address and an app password');
+          const sealed = pass ? secrets.seal(dataDir, pass) : old.pass;
+          // Prove it works before keeping it.
+          await mailbox.recent({ host, port, user, pass: pass || secrets.open(dataDir, old.pass), count: 1 });
+          assistant.data().mailbox = { host, port, user, pass: sealed };
+          store.save();
+        } else if (body.op === 'clearMailbox') { delete assistant.data().mailbox; store.save(); } else throw new HttpError(400, 'Unknown change');
+      } catch (err) {
+        if (err instanceof HttpError) throw err;
+        throw new HttpError(400, err.message);
+      }
+      const box = assistant.data().mailbox;
+      send(res, 200, { calendars: calendars.view(), mailbox: box ? { host: box.host, port: box.port, user: box.user } : null });
+    },
+
     // From the VM, signed. No session: the signature is the sign-in.
     'POST /api/cockerel/hook': async (req, res) => {
       // Only a request that is signed in form may send a big body (a file for Nest).
@@ -3323,6 +3363,20 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
           pushNotify({ title: 'Cockerel', body: str(body.text, 200), tag: `cockerel-n-${Date.now()}`, url: '/#/cockerel' });
           cockerel.add({ kind: 'note', text: `Phone note: ${str(body.text, 200)}` });
           return send(res, 200, { ok: true });
+        }
+        case 'calendar': {
+          const out = await calendars.upcoming(Number(body.days) || 0);
+          return send(res, 200, { lines: out.lines, problems: out.problems, linked: calendars.view().length });
+        }
+        case 'inbox': {
+          const box = assistant.data().mailbox;
+          if (!box) throw new HttpError(409, 'Raven has not linked his email yet (Admin → Server → Cockerel)');
+          try {
+            const mails = await mailbox.recent({ host: box.host, port: box.port, user: box.user, pass: secrets.open(dataDir, box.pass), count: Number(body.count) || 8, unreadOnly: body.unread !== false });
+            return send(res, 200, { mails });
+          } catch (err) {
+            throw new HttpError(502, err.message);
+          }
         }
         case 'refresh':
           // After he files a new download in the Roostflix folders.

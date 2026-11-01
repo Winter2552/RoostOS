@@ -74,7 +74,7 @@ before(async () => {
     sent.push({ url, body: opts.body ? JSON.parse(opts.body) : null, headers: opts.headers });
     return new Response(JSON.stringify(url.endsWith('/chat') ? { reply: 'On it.' } : { ok: true }), { status: 200 });
   };
-  server = createServer({ dataDir, probeTimeoutMs: 200, dockerHost: 'tcp://127.0.0.1:1', coffeeOptions: { fetchImpl } });
+  server = createServer({ dataDir, probeTimeoutMs: 200, dockerHost: 'tcp://127.0.0.1:1', coffeeOptions: { fetchImpl, calendarFetch: async () => new Response('BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nSUMMARY:Dentist\r\nDTSTART:20300105T090000Z\r\nDTEND:20300105T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR', { status: 200 }) } });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
   cookie = (await call('POST', '/api/setup', { username: 'raven', password: 'correct horse' })).cookie;
@@ -177,6 +177,20 @@ test('his notebook: remember, tasks, reminders, and a job that waits for Raven',
   assert.equal((await call('POST', '/api/cockerel/assistant', { op: 'delete', kind: 'memory', id: view.body.memories[0].id }, cookie)).body.memories.length, 0);
   assert.equal((await call('PUT', '/api/admin/cockerel', { tz: 'Not/AZone' }, cookie)).status, 400);
   assert.equal((await call('PUT', '/api/admin/cockerel', { briefOn: true, briefTime: '06:45' }, cookie)).body.briefTime, '06:45');
+});
+
+test('calendar link and mailbox are set by Raven, and he can only read them', async () => {
+  assert.equal((await hook({ type: 'inbox' })).status, 409, 'no mailbox yet');
+  assert.equal((await hook({ type: 'calendar' })).body.linked, 0);
+  const bad = await call('POST', '/api/admin/cockerel/connections', { op: 'addCalendar', name: 'Home', url: 'http://x.example.com/a.ics' }, cookie);
+  assert.equal(bad.status, 400);
+  const ok = await call('POST', '/api/admin/cockerel/connections', { op: 'addCalendar', name: 'Home', url: 'https://calendar.example.com/secret.ics' }, cookie);
+  assert.equal(ok.status, 200);
+  assert.deepEqual(ok.body.calendars.map((c) => c.name), ['Home']);
+  assert.ok(!JSON.stringify(ok.body).includes('secret.ics'), 'the link is never shown again');
+  assert.ok(!fs.readFileSync(path.join(dataDir, 'roost.json'), 'utf8').includes('secret.ics'), 'kept encrypted');
+  assert.equal((await hook({ type: 'calendar', days: 7 })).body.linked, 1);
+  assert.equal((await call('GET', '/api/admin/cockerel/connections')).status, 401);
 });
 
 test('his question reaches Raven and the answer goes back', async () => {

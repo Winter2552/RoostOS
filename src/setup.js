@@ -451,6 +451,7 @@ const STEPS = [
     how: [
       'Under Admin → Server → Cockerel, enter your time zone (like Europe/London).',
       'Tick "Send me a morning brief each day" and pick a time, if you want one.',
+      'Optional: add a secret calendar link and an email app password under "Cockerel\'s calendar and email" so he can read them (read-only).',
       'Untick any tool you do not want him to use.',
     ],
     action: { label: 'Open Cockerel settings', view: 'admin', focus: 'cockerel-admin' },

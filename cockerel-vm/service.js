@@ -46,12 +46,14 @@ const GROUPS = {
   reminders: ['remind', 'reminders', 'cancel'],
   jobs: ['schedule', 'schedules', 'unschedule'],
   notify: ['notify'],
+  calendar: ['calendar'],
+  email: ['inbox'],
 };
 const TOOLS = {
   media: ['events', 'library', 'find', 'fetch', 'ask', 'log', 'job'],
-  assistant: ['events', 'ask', 'log', 'send', 'remember', 'memories', 'forget', 'task', 'tasks', 'done', 'remind', 'reminders', 'cancel', 'schedule', 'schedules', 'unschedule', 'notify'],
+  assistant: ['events', 'ask', 'log', 'send', 'remember', 'memories', 'forget', 'task', 'tasks', 'done', 'remind', 'reminders', 'cancel', 'schedule', 'schedules', 'unschedule', 'notify', 'calendar', 'inbox'],
   // A job that runs by itself reads and reports, but cannot start new jobs or change his notes.
-  scheduled: ['events', 'log', 'send', 'notify', 'memories', 'tasks', 'reminders', 'schedules'],
+  scheduled: ['events', 'log', 'send', 'notify', 'memories', 'tasks', 'reminders', 'schedules', 'calendar', 'inbox'],
 };
 const MEDIA_WORDS = /\b(movies?|films?|tv shows?|series|episodes?|roostflix|jellyfin|download|downloads|torrent)\b/i;
 const modeFor = (text) => (MEDIA_WORDS.test(text) ? 'media' : 'assistant');

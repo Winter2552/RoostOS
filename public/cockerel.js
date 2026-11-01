@@ -12,7 +12,7 @@
   // His mark: the Roost bird with a comb, a two-part beak and a wattle. The
   // beak and a small bob are what animate when he speaks (see style.css).
   const MARK = '<svg class="cx-mark" viewBox="0 0 64 64" aria-hidden="true"><g transform="translate(-4 -3)"><g class="cx-bird"><path d="M14 54V26h16a18 18 0 0 1 18 18v10z" fill="currentColor"/><circle cx="19" cy="23" r="4.2" fill="currentColor"/><circle cx="26" cy="20.5" r="5" fill="currentColor"/><circle cx="33" cy="23" r="4.2" fill="currentColor"/><rect x="14" y="22" width="19" height="6"/><path class="cx-beak-up" d="M47 36l11 3.5-11 2.5z" fill="currentColor"/><path class="cx-beak-low" d="M47 43l9 3-9 2.5z" fill="currentColor"/><circle cx="50.5" cy="50.5" r="2.6" fill="currentColor"/><circle class="cx-eye" cx="37" cy="35" r="3" fill="var(--bg)"/></g></g></svg>';
-  const TOOL_GROUPS = ['web', 'files', 'memory', 'tasks', 'reminders', 'jobs', 'notify'];
+  const TOOL_GROUPS = ['web', 'files', 'memory', 'tasks', 'reminders', 'jobs', 'notify', 'calendar', 'email'];
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
   function avatar(cls = '') {
@@ -231,6 +231,7 @@
   // Admin → Server → Cockerel
   const form = () => $('#cockerel-admin');
   window.cockerelAdminLoad = async () => {
+    window.cockerelConnectLoad();
     try {
       const c = await api('GET', '/api/admin/cockerel');
       const f = form();
@@ -245,6 +246,35 @@
       for (const g of TOOL_GROUPS) f[`tool-${g}`].checked = !c.toolsOff.includes(g);
     } catch { /* the Admin page shows its own errors */ }
   };
+  // Calendar links and the read-only mailbox.
+  const connect = () => $('#cockerel-connect');
+  function paintConnections(c) {
+    const cals = $('#cc-cals');
+    cals.replaceChildren(...c.calendars.map((cal) => el('div', { class: 'row' }, el('span', { text: cal.name }), el('button', { class: 'btn ghost', type: 'button', text: 'Remove', onclick: () => change({ op: 'removeCalendar', id: cal.id }) }))));
+    $('#cc-mail-state').textContent = c.mailbox ? `Linked: ${c.mailbox.user} on ${c.mailbox.host}. Leave the password empty to keep it.` : 'Not linked.';
+    $('#cc-mail-clear').hidden = !c.mailbox;
+    if (c.mailbox) { const f = $('#cc-mail-form'); f.host.value = c.mailbox.host; f.port.value = c.mailbox.port; f.user.value = c.mailbox.user; }
+  }
+  async function change(body) {
+    try { paintConnections(await api('POST', '/api/admin/cockerel/connections', body)); flash(connect(), 'Saved'); } catch (err) { flash(connect(), err.message, false); }
+  }
+  window.cockerelConnectLoad = async () => {
+    try { paintConnections(await api('GET', '/api/admin/cockerel/connections')); } catch { /* the Admin page shows its own errors */ }
+  };
+  document.addEventListener('submit', async (e) => {
+    if (e.target.id === 'cc-cal-form') {
+      e.preventDefault();
+      await change({ op: 'addCalendar', name: e.target.name.value, url: e.target.url.value });
+      e.target.url.value = '';
+    } else if (e.target.id === 'cc-mail-form') {
+      e.preventDefault();
+      const f = e.target;
+      await change({ op: 'setMailbox', host: f.host.value, port: f.port.value, user: f.user.value, pass: f.pass.value });
+      f.pass.value = '';
+    }
+  });
+  document.addEventListener('click', (e) => { if (e.target.id === 'cc-mail-clear') change({ op: 'clearMailbox' }); });
+
   document.addEventListener('submit', async (e) => {
     if (e.target !== form()) return;
     e.preventDefault();
