@@ -255,6 +255,7 @@
             <button class="cx-pill" type="button" id="cx-pill" aria-expanded="false" aria-controls="cx-more"><span class="cx-dot" id="cx-dot"></span><span id="cx-state">Checking…</span></button>
           </div>
           <div class="cx-tools">
+            <button class="cx-icon" type="button" id="cx-aloud" aria-pressed="false" title="Read his replies aloud" hidden>Read aloud</button>
             <button class="cx-icon" type="button" id="cx-book-btn" aria-pressed="false" title="His notebook: things to remember, tasks, reminders and repeating jobs">Notebook</button>
             <button class="cx-icon" type="button" id="cx-steps" aria-pressed="false" title="Show every step he takes">Steps</button>
             <button class="cx-icon" type="button" id="cx-pause" hidden>Pause</button>
@@ -268,6 +269,7 @@
         <form class="cx-form" id="cx-form" autocomplete="off" hidden>
           <label class="sr" for="cx-text">Message Cockerel</label>
           <input type="text" id="cx-text" maxlength="2000" placeholder="Ask me anything" enterkeyhint="send">
+          <button class="cx-mic" type="button" id="cx-mic" aria-label="Speak your message" aria-pressed="false" title="Speak (uses your browser's speech service)" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
           <button class="cx-send" type="submit" id="cx-send" aria-label="Send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
         </form>
       </div>
@@ -772,7 +774,7 @@
           <label class="field"><span>One download up to (GB)</span><input type="number" name="sizeGb" min="1" max="500" step="0.5"></label>
           <label class="field"><span>Downloads per day up to (GB)</span><input type="number" name="dayGb" min="1" max="2000" step="1"></label>
         </div>
-        <div class="form-grid">
+        <div class="form-grid" style="margin-top:14px">
           <label class="field"><span>Your time zone</span><input type="text" name="tz" placeholder="Europe/London" autocapitalize="none" spellcheck="false"></label>
           <label class="field"><span>Morning brief at</span><input type="time" name="briefTime"></label>
           <label class="check"><input type="checkbox" name="briefOn"> <span>Send me a morning brief each day</span></label>
@@ -785,11 +787,36 @@
           <label class="check"><input type="checkbox" name="tool-reminders"> <span>Reminders</span></label>
           <label class="check"><input type="checkbox" name="tool-jobs"> <span>Repeating jobs (you approve each one)</span></label>
           <label class="check"><input type="checkbox" name="tool-notify"> <span>Notes to my phone</span></label>
+          <label class="check"><input type="checkbox" name="tool-calendar"> <span>Read my calendar</span></label>
+          <label class="check"><input type="checkbox" name="tool-email"> <span>Read my unread email, and write emails (you approve each one)</span></label>
+          <label class="check"><input type="checkbox" name="tool-birdhouse"> <span>Read my Birdhouse plans</span></label>
+          <label class="check"><input type="checkbox" name="tool-roost"> <span>Check on Roost and propose a restart, backup or update (you approve each one)</span></label>
         </fieldset>
         <p class="muted">Under these limits he acts alone. Over them, or if he is unsure, he asks you in his chat first. The secret is kept encrypted. Pause him any time from his chat page.</p>
         <div class="row"><button class="btn" type="submit">Save</button></div>
         <div class="msg" role="status"></div>
       </form>
+
+      <div class="card panel" id="cockerel-connect" data-sec="server">
+        <h3>Cockerel's calendar and email</h3><span class="mono muted">Optional. He can read them; anything he writes or sends waits for your yes</span>
+        <p class="muted">Calendar: in Google Calendar open Settings → your calendar → "Secret address in iCal format" and paste it here (Apple and Outlook have the same). Roost keeps the link encrypted.</p>
+        <div id="cc-cals"></div>
+        <form class="form-grid" id="cc-cal-form" autocomplete="off">
+          <label class="field"><span>Name</span><input type="text" name="name" maxlength="40" placeholder="Home"></label>
+          <label class="field"><span>Secret iCal link</span><input type="password" name="url" autocomplete="off" spellcheck="false" placeholder="https://…/basic.ics"></label>
+          <div class="row"><button class="btn" type="submit">Add calendar</button></div>
+        </form>
+        <p class="muted">Email: use an app password, never your normal one (Gmail: Google account → Security → App passwords). He only lists unread mail (who, subject, a short snippet) and never marks or moves anything. If he writes an email, you see it and approve it first; it goes from your server's own address.</p>
+        <p class="muted" id="cc-mail-state"></p>
+        <form class="form-grid" id="cc-mail-form" autocomplete="off">
+          <label class="field"><span>Mail server</span><input type="text" name="host" placeholder="imap.gmail.com" autocapitalize="none" spellcheck="false"></label>
+          <label class="field"><span>Port</span><input type="number" name="port" value="993"></label>
+          <label class="field"><span>Email address</span><input type="text" name="user" autocapitalize="none" spellcheck="false"></label>
+          <label class="field"><span>App password</span><input type="password" name="pass" autocomplete="off" spellcheck="false"></label>
+          <div class="row"><button class="btn" type="submit">Save and test</button> <button class="btn ghost" type="button" id="cc-mail-clear" hidden>Unlink email</button></div>
+        </form>
+        <div class="msg" role="status"></div>
+      </div>
 
       <form class="card panel" id="birdhouse-ai" data-sec="server">
         <h3>Birdhouse and Claude</h3><span class="mono muted">Optional. Lets Birdhouse design projects with Claude's API, in Quick, Balanced, Creative and Deep tiers</span>

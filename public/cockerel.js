@@ -12,7 +12,7 @@
   // His mark: the Roost bird with a comb, a two-part beak and a wattle. The
   // beak and a small bob are what animate when he speaks (see style.css).
   const MARK = '<svg class="cx-mark" viewBox="0 0 64 64" aria-hidden="true"><g transform="translate(-4 -3)"><g class="cx-bird"><path d="M14 54V26h16a18 18 0 0 1 18 18v10z" fill="currentColor"/><circle cx="19" cy="23" r="4.2" fill="currentColor"/><circle cx="26" cy="20.5" r="5" fill="currentColor"/><circle cx="33" cy="23" r="4.2" fill="currentColor"/><rect x="14" y="22" width="19" height="6"/><path class="cx-beak-up" d="M47 36l11 3.5-11 2.5z" fill="currentColor"/><path class="cx-beak-low" d="M47 43l9 3-9 2.5z" fill="currentColor"/><circle cx="50.5" cy="50.5" r="2.6" fill="currentColor"/><circle class="cx-eye" cx="37" cy="35" r="3" fill="var(--bg)"/></g></g></svg>';
-  const TOOL_GROUPS = ['web', 'files', 'memory', 'tasks', 'reminders', 'jobs', 'notify'];
+  const TOOL_GROUPS = ['web', 'files', 'memory', 'tasks', 'reminders', 'jobs', 'notify', 'calendar', 'email', 'roost', 'birdhouse'];
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
   function avatar(cls = '') {
@@ -36,6 +36,7 @@
     if (Number.isFinite(s.memMb)) bits.push(`RAM ${Math.round(s.memMb)} MB`);
     if (Number.isFinite(s.diskPct)) bits.push(`disk ${s.diskPct}%`);
     bits.push(`${d.todayGb} of ${d.dayGb} GB downloaded today`);
+    if (Number.isFinite(s.runsToday) && s.maxRuns) bits.push(`${s.runsToday} of ${s.maxRuns} runs today`);
     return { dot: s.busy ? 'busy' : 'ok', text: s.busy ? 'Working…' : 'Online', more: bits.join(' · ') };
   }
 
@@ -47,6 +48,43 @@
       el('span', { class: 'cx-job-name', text: j.title || 'Job' }),
       el('span', { class: 'cx-job-state', text: failed ? 'Failed' : j.state }),
       el('span', { class: 'cx-track' }, el('i', { style: `width:${j.state === 'Added' ? 100 : pct}%` })));
+  }
+
+  // Reading his replies aloud, and talking to him: the browser's own speech
+  // features, nothing Roost sends anywhere itself.
+  const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private window */ } } };
+  const aloud = (text) => {
+    if (store.get('cx-aloud') !== '1' || !('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  };
+  function setupVoice() {
+    const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const mic = $('#cx-mic');
+    const speaker = $('#cx-aloud');
+    speaker.hidden = !('speechSynthesis' in window);
+    speaker.setAttribute('aria-pressed', String(store.get('cx-aloud') === '1'));
+    speaker.addEventListener('click', () => {
+      const on = store.get('cx-aloud') !== '1';
+      store.set('cx-aloud', on ? '1' : '0');
+      speaker.setAttribute('aria-pressed', String(on));
+      if (!on && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+    });
+    if (!Rec) return;
+    mic.hidden = false;
+    let rec = null;
+    mic.addEventListener('click', () => {
+      if (rec) { rec.stop(); return; }
+      rec = new Rec();
+      rec.lang = navigator.language || 'en-GB';
+      rec.interimResults = true;
+      rec.onresult = (ev) => { $('#cx-text').value = [...ev.results].map((r) => r[0].transcript).join(' '); };
+      rec.onend = () => { rec = null; mic.classList.remove('live'); mic.setAttribute('aria-pressed', 'false'); $('#cx-text').focus({ preventScroll: true }); };
+      rec.onerror = () => { rec = null; mic.classList.remove('live'); };
+      mic.classList.add('live');
+      mic.setAttribute('aria-pressed', 'true');
+      rec.start();
+    });
   }
 
   // His words appear as if he is saying them, with his beak moving. Only for a
@@ -78,7 +116,7 @@
     if (e.kind === 'you') return el('div', { class: 'cx-msg you', title: when(e.at) }, el('p', { text: e.text }));
     if (e.kind === 'cockerel') {
       const row = el('div', { class: 'cx-row', title: when(e.at) }, first ? avatar() : el('span', { class: 'cx-avatar gap' }), el('div', { class: 'cx-msg cockerel' }, el('p', { text: e.text })));
-      if (fresh) requestAnimationFrame(() => speak(row, e.text));
+      if (fresh) { aloud(e.text); requestAnimationFrame(() => speak(row, e.text)); }
       return row;
     }
     if (e.kind === 'file' && e.file) {
@@ -201,6 +239,7 @@
     if (!S.built) {
       S.built = true;
       $('#cx-logo').append(avatar());
+      setupVoice();
       $('#cx-form').addEventListener('submit', (e) => { e.preventDefault(); send($('#cx-text').value); });
       $('#cx-pause').addEventListener('click', async () => {
         const paused = $('#cx-pause').textContent === 'Pause';
@@ -210,6 +249,8 @@
       $('#cx-book-btn').addEventListener('click', (e) => {
         const open = $('#cx-book').hidden;
         $('#cx-book').hidden = !open;
+        $('#cx-feed').hidden = open;
+        $('#cx-jobs').hidden = open || $('#cx-jobs').children.length === 0;
         e.currentTarget.setAttribute('aria-pressed', String(open));
         if (open) book();
       });
@@ -231,6 +272,7 @@
   // Admin → Server → Cockerel
   const form = () => $('#cockerel-admin');
   window.cockerelAdminLoad = async () => {
+    window.cockerelConnectLoad();
     try {
       const c = await api('GET', '/api/admin/cockerel');
       const f = form();
@@ -245,6 +287,35 @@
       for (const g of TOOL_GROUPS) f[`tool-${g}`].checked = !c.toolsOff.includes(g);
     } catch { /* the Admin page shows its own errors */ }
   };
+  // Calendar links and the read-only mailbox.
+  const connect = () => $('#cockerel-connect');
+  function paintConnections(c) {
+    const cals = $('#cc-cals');
+    cals.replaceChildren(...c.calendars.map((cal) => el('div', { class: 'row' }, el('span', { text: cal.name }), el('button', { class: 'btn ghost', type: 'button', text: 'Remove', onclick: () => change({ op: 'removeCalendar', id: cal.id }) }))));
+    $('#cc-mail-state').textContent = c.mailbox ? `Linked: ${c.mailbox.user} on ${c.mailbox.host}. Leave the password empty to keep it.` : 'Not linked.';
+    $('#cc-mail-clear').hidden = !c.mailbox;
+    if (c.mailbox) { const f = $('#cc-mail-form'); f.host.value = c.mailbox.host; f.port.value = c.mailbox.port; f.user.value = c.mailbox.user; }
+  }
+  async function change(body) {
+    try { paintConnections(await api('POST', '/api/admin/cockerel/connections', body)); flash(connect(), 'Saved'); } catch (err) { flash(connect(), err.message, false); }
+  }
+  window.cockerelConnectLoad = async () => {
+    try { paintConnections(await api('GET', '/api/admin/cockerel/connections')); } catch { /* the Admin page shows its own errors */ }
+  };
+  document.addEventListener('submit', async (e) => {
+    if (e.target.id === 'cc-cal-form') {
+      e.preventDefault();
+      await change({ op: 'addCalendar', name: e.target.name.value, url: e.target.url.value });
+      e.target.url.value = '';
+    } else if (e.target.id === 'cc-mail-form') {
+      e.preventDefault();
+      const f = e.target;
+      await change({ op: 'setMailbox', host: f.host.value, port: f.port.value, user: f.user.value, pass: f.pass.value });
+      f.pass.value = '';
+    }
+  });
+  document.addEventListener('click', (e) => { if (e.target.id === 'cc-mail-clear') change({ op: 'clearMailbox' }); });
+
   document.addEventListener('submit', async (e) => {
     if (e.target !== form()) return;
     e.preventDefault();

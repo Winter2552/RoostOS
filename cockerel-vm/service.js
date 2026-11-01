@@ -39,19 +39,23 @@ let busy = false;
 const WEB = ['WebSearch', 'WebFetch'];
 // Raven can switch a group of tools off in Admin (toolsOff).
 const GROUPS = {
-  web: [],
+  web: ['browse'],
   files: ['send'],
   memory: ['remember', 'memories', 'forget'],
   tasks: ['task', 'tasks', 'done'],
   reminders: ['remind', 'reminders', 'cancel'],
   jobs: ['schedule', 'schedules', 'unschedule'],
   notify: ['notify'],
+  calendar: ['calendar'],
+  email: ['inbox', 'email'],
+  roost: ['roost'],
+  birdhouse: ['birdhouse'],
 };
 const TOOLS = {
   media: ['events', 'library', 'find', 'fetch', 'ask', 'log', 'job'],
-  assistant: ['events', 'ask', 'log', 'send', 'remember', 'memories', 'forget', 'task', 'tasks', 'done', 'remind', 'reminders', 'cancel', 'schedule', 'schedules', 'unschedule', 'notify'],
+  assistant: ['events', 'ask', 'log', 'send', 'remember', 'memories', 'forget', 'task', 'tasks', 'done', 'remind', 'reminders', 'cancel', 'schedule', 'schedules', 'unschedule', 'notify', 'calendar', 'inbox', 'roost', 'email', 'birdhouse', 'browse'],
   // A job that runs by itself reads and reports, but cannot start new jobs or change his notes.
-  scheduled: ['events', 'log', 'send', 'notify', 'memories', 'tasks', 'reminders', 'schedules'],
+  scheduled: ['events', 'log', 'send', 'notify', 'memories', 'tasks', 'reminders', 'schedules', 'calendar', 'inbox', 'roost', 'birdhouse', 'browse'],
 };
 const MEDIA_WORDS = /\b(movies?|films?|tv shows?|series|episodes?|roostflix|jellyfin|download|downloads|torrent)\b/i;
 const modeFor = (text) => (MEDIA_WORDS.test(text) ? 'media' : 'assistant');
@@ -159,6 +163,7 @@ function status() {
     memMb: Math.round((os.totalmem() - os.freemem()) / 1048576),
     diskPct: Number((df.match(/(\d+)%/) || [])[1]) || 0,
     runsToday: (read('usage.json', {}).runs) || 0,
+    maxRuns: MAX_RUNS,
   };
 }
 
