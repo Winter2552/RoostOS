@@ -243,6 +243,16 @@
     });
     el.append(dots);
     host.parentNode.insertBefore(el, host);
+    // The artwork runs to the very top, behind the see-through header: pull the
+    // hero up by however far Jellyfin pushed the page down for its header.
+    const snap = () => {
+      el.style.marginTop = '0px';
+      const top = el.getBoundingClientRect().top + (window.scrollY || 0);
+      el.style.marginTop = top > 0 && top < 400 ? `-${Math.round(top)}px` : '';
+    };
+    snap();
+    setTimeout(snap, 400);
+    addEventListener('resize', snap);
     const rows = buildRows(s, items, (i) => show(i));
     host.parentNode.insertBefore(rows, host);
 

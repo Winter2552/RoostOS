@@ -116,6 +116,8 @@
         if (n && safe(n.Id)) cur.next = { id: n.Id, name: n.Name || '', label: `S${n.ParentIndexNumber || '?'}·E${n.IndexNumber || '?'}` };
       } catch { /* no next card */ }
     }
+    // One Next episode box only: ours, so Jellyfin's own is hidden while ours is ready.
+    document.documentElement.classList.toggle('rf-own-next', !!cur.next);
     mountScrubber();
     remember(true);
     // Start-from-where-you-were gets a 5 second run-up.
@@ -368,6 +370,7 @@
     skip.hidden = true;
     if (!auto) streakSet(0);
     auto = false;
+    document.documentElement.classList.remove('rf-own-next');
     cur = { video: e.target, id: null, segs: [], chapters: [] };
     e.target.playbackRate = speed;
     mountUi();
@@ -389,6 +392,6 @@
   }, true);
   // Leaving the player clears everything away.
   document.addEventListener('viewbeforehide', () => {
-    if (cur && cur.video && !cur.video.isConnected) { remember(); cur = null; skip.hidden = true; hideCard(false); ctl.classList.remove('rf-show'); }
+    if (cur && cur.video && !cur.video.isConnected) { document.documentElement.classList.remove('rf-own-next'); remember(); cur = null; skip.hidden = true; hideCard(false); ctl.classList.remove('rf-show'); }
   });
 })();
