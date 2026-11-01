@@ -87,4 +87,25 @@ function human(bytes) {
   return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
 }
 
-module.exports = { sign, headers, verify, OPEN_HOSTS, hostOpen, sourceKind, VIDEO, cleanName, moviePath, episodePath, jobIdOk, human };
+// A page he may open in his browser: https to a real name, never an address
+// on a network (the kill switch blocks those anyway; this says why).
+function browseUrl(raw) {
+  let u;
+  try { u = new URL(String(raw || '').trim()); } catch { return null; }
+  const h = u.hostname.toLowerCase();
+  if (u.protocol !== 'https:' || u.username || u.password) return null;
+  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(h) || /^\d+\.\d+\.\d+\.\d+$/.test(h) || /\.(local|internal|lan|home|localhost)$/.test(h)) return null;
+  return u.href;
+}
+
+// What a rendered page says, as plain text.
+function pageText(html, max = 15000) {
+  return String(html || '')
+    .replace(/<(script|style|noscript|svg|head)[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<(br|\/p|\/div|\/li|\/h\d|\/tr)[^>]*>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim().slice(0, max);
+}
+
+module.exports = { browseUrl, pageText, sign, headers, verify, OPEN_HOSTS, hostOpen, sourceKind, VIDEO, cleanName, moviePath, episodePath, jobIdOk, human };

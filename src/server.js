@@ -3466,6 +3466,21 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
           pushNotify({ title: 'Cockerel asks', body: text.split('\n')[0].slice(0, 120), tag: `cockerel-act-${act.id}`, url: '/#/cockerel' });
           return send(res, 200, { note: 'Asked Raven. Stop here: nothing happens unless he says yes.' });
         }
+        case 'birdhouse': {
+          // Raven's Birdhouse plans, read-only: the cut list and what to buy.
+          const owner = db().users.find((u) => u.role === 'admin');
+          const mine = owner ? birdhouse.mine(owner) : { plans: [], prices: {} };
+          const id = str(body.id, 60);
+          if (!id) return send(res, 200, { lines: mine.plans.map((p) => `${p.id}  ${p.name}`) });
+          const plan = mine.plans.find((p) => p.id === id);
+          if (!plan) throw new HttpError(404, 'No such plan');
+          const parts = birdhouseModel.parts(plan.plan).map((x) => `${x.qty} x ${x.name}: ${x.length} x ${x.width} x ${x.thickness} mm`);
+          const buy = birdhouseModel.materials(plan.plan).map((m) => {
+            const price = (mine.prices[m.key] || {}).p;
+            return `${m.qty} x ${m.label} (search: "${m.search}") ${price !== undefined ? `Raven's price £${price}` : `rough £${m.estimate}`}${m.have ? `, he has ${m.have}` : ''}`;
+          });
+          return send(res, 200, { lines: [`Plan: ${plan.name}`, 'Cut list:', ...parts, 'To buy:', ...buy] });
+        }
         case 'calendar': {
           const out = await calendars.upcoming(Number(body.days) || 0);
           return send(res, 200, { lines: out.lines, problems: out.problems, linked: calendars.view().length });

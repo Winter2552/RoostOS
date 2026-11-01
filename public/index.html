@@ -255,6 +255,7 @@
             <button class="cx-pill" type="button" id="cx-pill" aria-expanded="false" aria-controls="cx-more"><span class="cx-dot" id="cx-dot"></span><span id="cx-state">Checking…</span></button>
           </div>
           <div class="cx-tools">
+            <button class="cx-icon" type="button" id="cx-aloud" aria-pressed="false" title="Read his replies aloud" hidden>Read aloud</button>
             <button class="cx-icon" type="button" id="cx-book-btn" aria-pressed="false" title="His notebook: things to remember, tasks, reminders and repeating jobs">Notebook</button>
             <button class="cx-icon" type="button" id="cx-steps" aria-pressed="false" title="Show every step he takes">Steps</button>
             <button class="cx-icon" type="button" id="cx-pause" hidden>Pause</button>
@@ -268,6 +269,7 @@
         <form class="cx-form" id="cx-form" autocomplete="off" hidden>
           <label class="sr" for="cx-text">Message Cockerel</label>
           <input type="text" id="cx-text" maxlength="2000" placeholder="Ask me anything" enterkeyhint="send">
+          <button class="cx-mic" type="button" id="cx-mic" aria-label="Speak your message" aria-pressed="false" title="Speak (uses your browser's speech service)" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
           <button class="cx-send" type="submit" id="cx-send" aria-label="Send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
         </form>
       </div>
@@ -787,6 +789,7 @@
           <label class="check"><input type="checkbox" name="tool-notify"> <span>Notes to my phone</span></label>
           <label class="check"><input type="checkbox" name="tool-calendar"> <span>Read my calendar</span></label>
           <label class="check"><input type="checkbox" name="tool-email"> <span>Read my unread email, and write emails (you approve each one)</span></label>
+          <label class="check"><input type="checkbox" name="tool-birdhouse"> <span>Read my Birdhouse plans</span></label>
           <label class="check"><input type="checkbox" name="tool-roost"> <span>Check on Roost and propose a restart, backup or update (you approve each one)</span></label>
         </fieldset>
         <p class="muted">Under these limits he acts alone. Over them, or if he is unsure, he asks you in his chat first. The secret is kept encrypted. Pause him any time from his chat page.</p>

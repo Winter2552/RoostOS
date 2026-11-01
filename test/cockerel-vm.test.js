@@ -158,3 +158,21 @@ test('research runs read the web but cannot download; film runs cannot browse', 
   assert.ok(film.includes('Bash(cockerel-tool fetch:*)') && !film.includes('WebFetch'));
   for (const t of [...research, ...film]) assert.notEqual(t, 'Read', 'no file reading');
 });
+
+test('he only browses real https websites and gets plain text back', () => {
+  assert.equal(lib.browseUrl('https://www.wickes.co.uk/p/x'), 'https://www.wickes.co.uk/p/x');
+  for (const bad of ['http://example.com', 'https://192.168.4.35/', 'https://localhost/', 'https://nas.local/', 'https://u:p@example.com/', 'file:///etc/passwd', 'javascript:alert(1)', 'not a url']) assert.equal(lib.browseUrl(bad), null, bad);
+  const text = lib.pageText('<html><head><title>x</title></head><body><script>bad()</script><h1>Oak board</h1><p>Price &amp; stock<br>£12.50</p><style>p{}</style></body></html>');
+  assert.equal(text, 'Oak board\nPrice & stock\n£12.50');
+});
+
+test('turning web off also turns the browser off, and nothing but film jobs can download', () => {
+  const { allowedFor } = require('../cockerel-vm/service');
+  assert.ok(allowedFor('assistant').includes('Bash(cockerel-tool browse:*)'));
+  const off = allowedFor('assistant', ['web']);
+  assert.ok(!off.includes('WebSearch') && !off.includes('Bash(cockerel-tool browse:*)'));
+  assert.ok(!allowedFor('media').includes('Bash(cockerel-tool browse:*)'));
+  for (const mode of ['assistant', 'scheduled']) assert.ok(!allowedFor(mode).some((t) => /cockerel-tool (fetch|find|library):/.test(t)), `${mode} cannot download`);
+  const sched = allowedFor('scheduled');
+  for (const t of ['remember', 'schedule', 'task', 'remind', 'email']) assert.ok(!sched.includes(`Bash(cockerel-tool ${t}:*)`), `a job cannot ${t}`);
+});

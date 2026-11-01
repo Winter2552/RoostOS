@@ -264,3 +264,8 @@ test('paused, he hears nothing and does nothing', async () => {
   assert.equal((await hook({ type: 'job', id: 'j2', title: 'x' })).status, 200, 'a running download can still be filed');
   await call('PUT', '/api/admin/cockerel', { paused: false }, cookie);
 });
+
+test('his Birdhouse plans are readable and a missing plan is a 404', async () => {
+  assert.deepEqual((await hook({ type: 'birdhouse' })).body.lines, []);
+  assert.equal((await hook({ type: 'birdhouse', id: 'nope' })).status, 404);
+});
