@@ -53,20 +53,26 @@ html, body, .backgroundContainer, .backgroundContainer.withBackdrop, .mainDrawer
   .pageTitleWithDefaultLogo::after, .pageTitleWithLogo::after { animation: none; }
 }
 
-/* ---- header: clear over the page, black once you scroll ---- */
-.skinHeader, .skinHeader.semiTransparent {
-  background: linear-gradient(rgba(0, 0, 0, 0.85), rgba(0, 0, 0, 0)) !important;
+/* ---- header: invisible over the artwork, hazed glass once you scroll ---- */
+.skinHeader, .skinHeader.semiTransparent, .skinHeader.headerBackground, .skinHeader-withBackground {
+  background: linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0)) !important;
   border: 0 !important;
   box-shadow: none !important;
+  transition: background-color 0.25s ease, backdrop-filter 0.25s ease;
 }
-.skinHeader.headerBackground, .skinHeader-withBackground {
-  background: var(--rf-bg) !important;
+html.rf-scrolled .skinHeader, html.rf-scrolled .skinHeader.semiTransparent, html.rf-scrolled .skinHeader.headerBackground, html.rf-scrolled .skinHeader-withBackground {
+  background: rgba(10, 10, 10, 0.55) !important;
+  -webkit-backdrop-filter: blur(22px) saturate(1.5);
+  backdrop-filter: blur(22px) saturate(1.5);
 }
+/* icons and the name stay readable on any artwork */
+.skinHeader .headerButton, .skinHeader .pageTitleWithDefaultLogo, .skinHeader .pageTitleWithLogo { filter: drop-shadow(0 1px 5px rgba(0, 0, 0, 0.65)); }
+@media (prefers-reduced-motion: reduce) { .skinHeader { transition: none; } }
 .headerButton { color: var(--rf-cream); }
 /* the Home / Favourites tabs become a floating frosted pill */
 .headerTabs { background: none !important; }
 .headerTabs .emby-tabs-slider { display: inline-flex !important; gap: 4px; padding: 5px; border-radius: 999px; background: var(--rf-glass); -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4); }
-.headerTabs .emby-tab-button { color: var(--rf-dim); font-weight: 600; padding: 0.55em 1.3em; border: 0 !important; border-radius: 999px; min-width: 0; }
+.headerTabs .emby-tab-button { background: transparent; color: var(--rf-dim); font-weight: 600; padding: 0.55em 1.3em; border: 0 !important; border-radius: 999px; min-width: 0; }
 .headerTabs .emby-tab-button-active { background: var(--rf-cream); color: #000 !important; }
 .headerTabs .emby-tab-button-active .emby-button-foreground { color: #000; }
 .headerTabs.sectionTabs { text-align: center; }
