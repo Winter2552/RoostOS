@@ -117,7 +117,7 @@ test('admin links him, and the secret never comes back', async () => {
   assert.equal(bad.status, 400, 'only home-network addresses');
   const ok = await call('PUT', '/api/admin/cockerel', { url: 'http://192.168.4.40:7070', secret: SECRET, sizeGb: 4, dayGb: 12 }, cookie);
   assert.equal(ok.status, 200);
-  assert.deepEqual(ok.body, { url: 'http://192.168.4.40:7070', hasSecret: true, paused: false, sizeGb: 4, dayGb: 12 });
+  assert.deepEqual(ok.body, { url: 'http://192.168.4.40:7070', hasSecret: true, paused: false, sizeGb: 4, dayGb: 12, tz: 'Europe/London', briefOn: false, briefTime: '07:30', toolsOff: [] });
   const settings = await call('GET', '/api/admin/settings', null, cookie);
   assert.ok(!JSON.stringify(settings.body).includes(SECRET));
   assert.ok(!fs.readFileSync(path.join(dataDir, 'roost.json'), 'utf8').includes(SECRET), 'kept encrypted');
@@ -155,9 +155,33 @@ test('a file he sends lands in Nest under Cockerel and shows in the chat', async
   assert.equal((await hook({ type: 'file', name: 'x.md', data: '' })).status, 413, 'empty is refused');
 });
 
+test('his notebook: remember, tasks, reminders, and a job that waits for Raven', async () => {
+  assert.equal((await hook({ type: 'remember', text: 'Raven lives in Leeds' })).status, 200);
+  assert.equal((await hook({ type: 'task', text: 'Order oak boards', due: '2026-12-01' })).status, 200);
+  assert.equal((await hook({ type: 'task', text: 'x', due: 'soon' })).status, 400);
+  const soon = new Date(Date.now() + 3600e3).toISOString();
+  assert.equal((await hook({ type: 'remind', at: soon, text: 'Call Sam' })).status, 200);
+  assert.equal((await hook({ type: 'remind', at: '2001-01-01 09:00', text: 'Old' })).status, 400, 'not in the past');
+  const lines = (await hook({ type: 'list', kind: 'task' })).body.lines;
+  assert.match(lines[0], /Order oak boards \(due 2026-12-01\)/);
+  const job = await hook({ type: 'schedule', text: 'Check the price of oak at Wickes', every: 'day', time: '08:00' });
+  assert.equal(job.status, 200);
+  assert.equal(job.body.item.approved, false, 'waits for a yes');
+  const view = await call('GET', '/api/cockerel/assistant', null, cookie);
+  assert.equal(view.body.memories.length, 1);
+  assert.equal(view.body.jobs[0].approved, false);
+  const ask = (await call('GET', '/api/cockerel', null, cookie)).body.log.find((e) => e.askId === `job-${job.body.item.id}`);
+  assert.equal((await call('POST', '/api/cockerel/answer', { id: ask.id, choice: 'Yes, do it' }, cookie)).status, 200);
+  assert.equal((await call('GET', '/api/cockerel/assistant', null, cookie)).body.jobs[0].approved, true);
+  assert.equal((await call('GET', '/api/cockerel/assistant')).status, 401);
+  assert.equal((await call('POST', '/api/cockerel/assistant', { op: 'delete', kind: 'memory', id: view.body.memories[0].id }, cookie)).body.memories.length, 0);
+  assert.equal((await call('PUT', '/api/admin/cockerel', { tz: 'Not/AZone' }, cookie)).status, 400);
+  assert.equal((await call('PUT', '/api/admin/cockerel', { briefOn: true, briefTime: '06:45' }, cookie)).body.briefTime, '06:45');
+});
+
 test('his question reaches Raven and the answer goes back', async () => {
   assert.equal((await hook({ type: 'ask', askId: 'a1', text: 'Sintel was requested. Find it?', options: ['Yes', 'No'] })).status, 200);
-  const ask = (await call('GET', '/api/cockerel', null, cookie)).body.log.find((e) => e.kind === 'ask');
+  const ask = (await call('GET', '/api/cockerel', null, cookie)).body.log.find((e) => e.askId === 'a1');
   assert.deepEqual(ask.options, ['Yes', 'No']);
   assert.equal((await call('POST', '/api/cockerel/answer', { id: ask.id, choice: 'Maybe' }, cookie)).status, 400);
   assert.equal((await call('POST', '/api/cockerel/answer', { id: ask.id, choice: 'Yes' }, cookie)).status, 200);

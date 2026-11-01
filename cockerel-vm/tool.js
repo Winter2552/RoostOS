@@ -249,6 +249,28 @@ const COMMANDS = {
   find: async ([title]) => { if (!title) fail('find "Title"'); await find(title); },
   fetch: async ([link], opt) => { if (!link) fail('fetch <link> --job ID --name "Name" [--year 2010] [--kind movie|show] [--requester username]'); await fetchJob(link, opt); },
   send: async (_pos, opt) => { await send(opt); },
+  // His notebook lives in Roost; these just talk to it.
+  remember: async ([text]) => { if (!text) fail('remember "something to keep in mind"'); await hook({ type: 'remember', text }); console.log('Noted.'); },
+  memories: async () => { console.log((await hook({ type: 'list', kind: 'memory' })).lines.join('\n') || 'Nothing remembered yet.'); },
+  forget: async ([id]) => { await hook({ type: 'remove', kind: 'memory', id }); console.log('Forgotten.'); },
+  task: async ([text], opt) => { if (!text) fail('task "what to do" [--due 2026-11-05]'); await hook({ type: 'task', text, due: opt.due }); console.log('Added to the task list.'); },
+  tasks: async () => { console.log((await hook({ type: 'list', kind: 'task' })).lines.join('\n') || 'No open tasks.'); },
+  done: async ([id]) => { if (!id) fail('done TASK_ID'); await hook({ type: 'taskdone', id }); console.log('Ticked off.'); },
+  remind: async ([text], opt) => {
+    if (!text || !opt.at) fail('remind "what" --at "2026-11-05 09:00"  (the time on Raven\'s clock)');
+    const out = await hook({ type: 'remind', at: opt.at, text });
+    console.log(`Reminder set for ${out.item.at} (${out.tz} clock as given).`);
+  },
+  reminders: async () => { console.log((await hook({ type: 'list', kind: 'reminder' })).lines.join('\n') || 'No reminders.'); },
+  cancel: async ([id]) => { await hook({ type: 'remove', kind: 'reminder', id }); console.log('Cancelled.'); },
+  schedule: async ([text], opt) => {
+    if (!text || !opt.every || !opt.time) fail('schedule "what to do each time" --every day|week --time 08:00 [--day 0-6]');
+    const out = await hook({ type: 'schedule', text, every: opt.every, time: opt.time, day: opt.day });
+    console.log(out.note);
+  },
+  schedules: async () => { console.log((await hook({ type: 'list', kind: 'job' })).lines.join('\n') || 'No repeating jobs.'); },
+  unschedule: async ([id]) => { await hook({ type: 'remove', kind: 'job', id }); console.log('Stopped.'); },
+  notify: async ([text]) => { if (!text) fail('notify "short message"'); await hook({ type: 'notify', text }); console.log('Sent to Raven\'s phone.'); },
   done: async ([id]) => { await done(id); },
   failed: async ([id]) => { await failed(id); },
 };

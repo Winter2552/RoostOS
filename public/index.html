@@ -255,12 +255,14 @@
             <button class="cx-pill" type="button" id="cx-pill" aria-expanded="false" aria-controls="cx-more"><span class="cx-dot" id="cx-dot"></span><span id="cx-state">Checking…</span></button>
           </div>
           <div class="cx-tools">
+            <button class="cx-icon" type="button" id="cx-book-btn" aria-pressed="false" title="His notebook: things to remember, tasks, reminders and repeating jobs">Notebook</button>
             <button class="cx-icon" type="button" id="cx-steps" aria-pressed="false" title="Show every step he takes">Steps</button>
             <button class="cx-icon" type="button" id="cx-pause" hidden>Pause</button>
           </div>
         </header>
         <p class="cx-more mono muted" id="cx-more" hidden></p>
         <div class="cx-jobs" id="cx-jobs" hidden></div>
+        <div class="cx-book" id="cx-book" hidden></div>
         <div class="cx-feed" id="cx-feed" aria-live="polite"></div>
         <div class="cx-typing" id="cx-typing" hidden aria-label="Cockerel is working"><i></i><i></i><i></i></div>
         <form class="cx-form" id="cx-form" autocomplete="off" hidden>
@@ -770,6 +772,20 @@
           <label class="field"><span>One download up to (GB)</span><input type="number" name="sizeGb" min="1" max="500" step="0.5"></label>
           <label class="field"><span>Downloads per day up to (GB)</span><input type="number" name="dayGb" min="1" max="2000" step="1"></label>
         </div>
+        <div class="form-grid">
+          <label class="field"><span>Your time zone</span><input type="text" name="tz" placeholder="Europe/London" autocapitalize="none" spellcheck="false"></label>
+          <label class="field"><span>Morning brief at</span><input type="time" name="briefTime"></label>
+          <label class="check"><input type="checkbox" name="briefOn"> <span>Send me a morning brief each day</span></label>
+        </div>
+        <fieldset class="cx-switches"><legend class="muted">What he may use (untick to switch one off)</legend>
+          <label class="check"><input type="checkbox" name="tool-web"> <span>Web search and reading</span></label>
+          <label class="check"><input type="checkbox" name="tool-files"> <span>Send me files (saved in Nest)</span></label>
+          <label class="check"><input type="checkbox" name="tool-memory"> <span>Remember things</span></label>
+          <label class="check"><input type="checkbox" name="tool-tasks"> <span>Task list</span></label>
+          <label class="check"><input type="checkbox" name="tool-reminders"> <span>Reminders</span></label>
+          <label class="check"><input type="checkbox" name="tool-jobs"> <span>Repeating jobs (you approve each one)</span></label>
+          <label class="check"><input type="checkbox" name="tool-notify"> <span>Notes to my phone</span></label>
+        </fieldset>
         <p class="muted">Under these limits he acts alone. Over them, or if he is unsure, he asks you in his chat first. The secret is kept encrypted. Pause him any time from his chat page.</p>
         <div class="row"><button class="btn" type="submit">Save</button></div>
         <div class="msg" role="status"></div>
