@@ -249,6 +249,8 @@
       $('#cx-book-btn').addEventListener('click', (e) => {
         const open = $('#cx-book').hidden;
         $('#cx-book').hidden = !open;
+        $('#cx-feed').hidden = open;
+        $('#cx-jobs').hidden = open || $('#cx-jobs').children.length === 0;
         e.currentTarget.setAttribute('aria-pressed', String(open));
         if (open) book();
       });

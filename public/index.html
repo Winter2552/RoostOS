@@ -774,7 +774,7 @@
           <label class="field"><span>One download up to (GB)</span><input type="number" name="sizeGb" min="1" max="500" step="0.5"></label>
           <label class="field"><span>Downloads per day up to (GB)</span><input type="number" name="dayGb" min="1" max="2000" step="1"></label>
         </div>
-        <div class="form-grid">
+        <div class="form-grid" style="margin-top:14px">
           <label class="field"><span>Your time zone</span><input type="text" name="tz" placeholder="Europe/London" autocapitalize="none" spellcheck="false"></label>
           <label class="field"><span>Morning brief at</span><input type="time" name="briefTime"></label>
           <label class="check"><input type="checkbox" name="briefOn"> <span>Send me a morning brief each day</span></label>
@@ -798,7 +798,7 @@
       </form>
 
       <div class="card panel" id="cockerel-connect" data-sec="server">
-        <h3>Cockerel's calendar and email</h3><span class="mono muted">Optional and read-only. He can look, never change or send</span>
+        <h3>Cockerel's calendar and email</h3><span class="mono muted">Optional. He can read them; anything he writes or sends waits for your yes</span>
         <p class="muted">Calendar: in Google Calendar open Settings → your calendar → "Secret address in iCal format" and paste it here (Apple and Outlook have the same). Roost keeps the link encrypted.</p>
         <div id="cc-cals"></div>
         <form class="form-grid" id="cc-cal-form" autocomplete="off">
@@ -806,7 +806,7 @@
           <label class="field"><span>Secret iCal link</span><input type="password" name="url" autocomplete="off" spellcheck="false" placeholder="https://…/basic.ics"></label>
           <div class="row"><button class="btn" type="submit">Add calendar</button></div>
         </form>
-        <p class="muted">Email: use an app password, never your normal one (Gmail: Google account → Security → App passwords). He only lists unread mail (who, subject, a short snippet) and never marks, moves or sends anything.</p>
+        <p class="muted">Email: use an app password, never your normal one (Gmail: Google account → Security → App passwords). He only lists unread mail (who, subject, a short snippet) and never marks or moves anything. If he writes an email, you see it and approve it first; it goes from your server's own address.</p>
         <p class="muted" id="cc-mail-state"></p>
         <form class="form-grid" id="cc-mail-form" autocomplete="off">
           <label class="field"><span>Mail server</span><input type="text" name="host" placeholder="imap.gmail.com" autocapitalize="none" spellcheck="false"></label>
