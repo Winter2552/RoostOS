@@ -56,8 +56,10 @@ He needs read-write access to three folders on the data drive, and nothing else:
 2. In the VM: put `username=…` and `password=…` in `/etc/cockerel/smb` (`chmod 600`), then add to `/etc/fstab`:
 
 ```
-//192.168.4.35/media  /srv/media  cifs  credentials=/etc/cockerel/smb,uid=cockerel,gid=cockerel,vers=3.0,_netdev  0  0
+//192.168.7.250/media  /srv/media  cifs  credentials=/etc/cockerel/smb,uid=cockerel,gid=cockerel,vers=3.0,_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=30  0  0
 ```
+
+Use `192.168.7.250` (the shim address, step 6b) because a bridged VM cannot reach ZimaOS directly. `nofail,x-systemd.automount` makes the folder mount the first time it is used, so a reboot where the VM starts before ZimaOS's shim container is up still ends with the folder mounted.
 
 If ZimaOS can only share the whole `media` folder, that is what he gets. Films and shows are the only things in it. Bulk data never goes in his own 40 GB disk.
 
