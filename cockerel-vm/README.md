@@ -94,7 +94,11 @@ Snapshot the VM before big changes and weekly. Use the VM app's snapshot or back
 
 ## The desktop and browser
 
-`setup-vm.sh` installs XFCE and Chromium. The desktop shows in the ZimaOS VM console, so you can watch what is happening on the screen. Claude does not drive the browser yet: his only tool is `cockerel-tool`. A browser tool can be added later for a job that needs one.
+`setup-vm.sh` installs XFCE and Chromium. The desktop shows in the ZimaOS VM console, so you can watch what is happening on the screen. Claude does not click or type in the browser. His `browse` command opens a page in a headless Chromium and reads back the text, for shops and sites that need JavaScript; it is https only and refuses addresses on a network.
+
+## As a personal assistant
+
+Besides films, he can research the web, send you files (saved in Nest under Cockerel), keep notes, tasks and reminders, run repeating jobs you approve, send a morning brief, read your calendar and unread email (read-only), read your Birdhouse plans and propose emails or Roost actions. All of it is set up in Roost under Admin → Server → Cockerel (time zone, brief, a switch per tool, calendar link, email app password). Things that change anything outside his own notebook (an email, a restart, a backup, an update, a repeating job) wait for your tap in his chat. Research and general chat can use the web but cannot download; film jobs can download but cannot browse.
 
 ## Updating
 
