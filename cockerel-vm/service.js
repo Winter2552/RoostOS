@@ -13,7 +13,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const lib = require('./lib');
-const { live, describe, clip } = require('./live');
+const { live, describe, clip, stream, isLocal } = require('./live');
 
 const HOME = process.env.COCKEREL_HOME || path.join(os.homedir(), 'cockerel');
 const STATE = path.join(HOME, 'state');
@@ -183,6 +183,13 @@ function status() {
 }
 
 const server = http.createServer(async (req, res) => {
+  // The live page is for the VM's own screen only: no signature, but only from this machine.
+  if (req.method === 'GET' && (req.url === '/live' || req.url === '/live/events')) {
+    if (!isLocal(req)) { res.writeHead(403); return res.end(); }
+    if (req.url === '/live/events') return stream(req, res, status);
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    return res.end(fs.readFileSync(path.join(__dirname, 'live.html')));
+  }
   const reply = (code, data) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(data)); };
   let body = '';
   try {

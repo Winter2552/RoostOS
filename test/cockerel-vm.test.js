@@ -71,6 +71,13 @@ test('the service answers only signed requests and runs Claude for chat', async 
     assert.ok(['up', 'down'].includes(st.body.vpn));
     assert.equal((await ask('POST', '/chat', { text: 'hi' })).body.reply, 'Hello Raven');
     assert.equal((await ask('POST', '/chat', { text: 'again' })).body.reply, 'Hello Raven');
+    const page = await fetch(`${base}/live`);
+    assert.equal(page.status, 200);
+    assert.match(await page.text(), /Cockerel live/, 'the live page needs no signature from this machine');
+    const ev = await fetch(`${base}/live/events`);
+    const reader = ev.body.getReader();
+    assert.match(new TextDecoder().decode((await reader.read()).value), /event: line/, 'the live stream sends log lines');
+    await reader.cancel();
     const liveText = fs.readFileSync(path.join(home, 'live.log'), 'utf8');
     assert.match(liveText, /> Bash: cockerel-tool calendar today/, 'the live log shows his steps');
     assert.match(liveText, /Finished\./);

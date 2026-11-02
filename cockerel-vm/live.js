@@ -42,3 +42,40 @@ function describe(line) {
 }
 
 module.exports = { live, describe, clip };
+
+// ---------- the live page (served on this VM's own address only) ----------
+// Sends the last lines, then each new line as it is written (fs.watch, no
+// polling), plus a small status update every 5 s while someone is watching.
+function recent(n = 80) {
+  try { return fs.readFileSync(FILE, 'utf8').split('\n').filter(Boolean).slice(-n); } catch { return []; }
+}
+
+function stream(req, res, status) {
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
+  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  recent().forEach((l) => send('line', l));
+  send('status', status());
+  let size = 0;
+  try { size = fs.statSync(FILE).size; } catch { /* no log yet */ }
+  let watcher = null;
+  const onChange = () => {
+    try {
+      const now = fs.statSync(FILE).size;
+      if (now < size) size = 0; // trimmed
+      const fd = fs.openSync(FILE, 'r');
+      const buf = Buffer.alloc(now - size);
+      fs.readSync(fd, buf, 0, buf.length, size);
+      fs.closeSync(fd);
+      size = now;
+      buf.toString('utf8').split('\n').filter(Boolean).forEach((l) => send('line', l));
+    } catch { /* ignore */ }
+  };
+  try { fs.mkdirSync(path.dirname(FILE), { recursive: true }); fs.closeSync(fs.openSync(FILE, 'a')); watcher = fs.watch(FILE, onChange); } catch { /* the 5 s tick still works */ }
+  const tick = setInterval(() => { send('status', status()); onChange(); }, 5000);
+  req.on('close', () => { clearInterval(tick); if (watcher) watcher.close(); });
+}
+
+const isLocal = (req) => /^(::ffff:)?127\.0\.0\.1$|^::1$/.test(req.socket.remoteAddress || '');
+
+module.exports.stream = stream;
+module.exports.isLocal = isLocal;

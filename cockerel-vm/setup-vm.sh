@@ -26,7 +26,7 @@ id cockerel >/dev/null 2>&1 || useradd --create-home --shell /bin/bash cockerel
 install -d -o cockerel -g cockerel -m 700 /home/cockerel/cockerel /home/cockerel/cockerel/state
 install -d -m 755 /opt/cockerel /srv/media
 install -d -m 750 -o root -g cockerel /etc/cockerel
-cp "$HERE"/*.js "$HERE"/*.sh "$HERE"/nftables.conf.template /opt/cockerel/
+cp "$HERE"/*.js "$HERE"/*.sh "$HERE"/live.html "$HERE"/nftables.conf.template /opt/cockerel/
 cp "$HERE/CLAUDE.md" /home/cockerel/cockerel/CLAUDE.md
 chown cockerel:cockerel /home/cockerel/cockerel/CLAUDE.md
 chmod +x /opt/cockerel/*.sh /opt/cockerel/tool.js

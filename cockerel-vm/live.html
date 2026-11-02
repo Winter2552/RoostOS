@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cockerel live</title>
+<style>
+*{box-sizing:border-box;margin:0}
+body{background:#0a0a0a;color:#f2f2f2;font:15px/1.45 system-ui,sans-serif;height:100vh;overflow:hidden}
+.mono{font-family:ui-monospace,Menlo,monospace}
+main{display:grid;grid-template-columns:1fr 440px;height:100vh}
+.stage{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;position:relative;padding:24px}
+.orb{width:150px;height:150px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff,#bdbdbd 55%,#555);position:relative;transition:opacity .6s,box-shadow .6s;opacity:.35;box-shadow:0 0 0 #fff0}
+.orb i{position:absolute;inset:0;border-radius:50%;border:2px solid #fff;opacity:0}
+.busy .orb{opacity:1;box-shadow:0 0 90px #ffffff40;animation:breathe 2.4s ease-in-out infinite}
+.busy .orb i{animation:ripple 2.4s infinite}.busy .orb i+i{animation-delay:1.2s}
+.alert .orb{opacity:.35;box-shadow:0 0 0 #fff0}
+h1{font-size:34px;font-weight:600;letter-spacing:-.5px}
+.orb{margin-bottom:14px}.task{max-width:520px;text-align:center;color:#bbb;min-height:44px}
+.timer{color:#777;font-size:14px}
+.pills{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;position:absolute;bottom:28px;left:24px;right:24px}
+.pill{border:1px solid #2e2e2e;border-radius:99px;padding:7px 14px;font-size:13px;color:#aaa;display:flex;align-items:center;gap:9px;background:#101010}
+.pill b{color:#fff;font-weight:600}
+.pill.bad{border-color:#fff}.pill.bad b{animation:blink 1s infinite}
+.pill svg{width:64px;height:20px}
+.pill svg polyline{fill:none;stroke:#fff;stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round}
+.pill .m{width:46px;height:5px;border-radius:5px;background:#262626;overflow:hidden}.pill .m i{display:block;height:100%;background:#fff;transition:width .6s}
+aside{border-left:1px solid #1f1f1f;padding:26px 26px 0;overflow:hidden;display:flex;flex-direction:column}
+aside h2{font-size:12px;letter-spacing:.14em;color:#777;font-weight:600;margin-bottom:10px}
+#feed{overflow-y:auto;flex:1;scrollbar-width:none;}
+#feed::-webkit-scrollbar{display:none}
+.row{display:flex;gap:12px;padding:9px 0;border-bottom:1px solid #181818;animation:in .4s ease-out}
+.row time{color:#666;width:52px;flex:none;font-size:13px;font-variant-numeric:tabular-nums}
+.row span{word-break:break-word}
+.row.tool{color:#8f8f8f}.row.key{color:#fff}.row.soft{color:#6d6d6d}
+@keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.1)}}
+@keyframes ripple{0%{transform:scale(.7);opacity:.5}100%{transform:scale(1.8);opacity:0}}
+@keyframes blink{50%{opacity:.25}}
+@keyframes in{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+@media (max-width:900px){main{grid-template-columns:1fr;grid-template-rows:55vh 1fr}aside{border-left:0;border-top:1px solid #1f1f1f}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style></head>
+<body>
+<main id="app">
+  <section class="stage">
+    <div class="orb"><i></i><i></i></div>
+    <h1 id="state">Waiting for Roost</h1>
+    <div class="task" id="task"></div>
+    <div class="timer mono" id="timer"></div>
+    <div class="pills">
+      <span class="pill" id="vpn">VPN <b>…</b></span>
+      <span class="pill" id="runs">Runs <b>…</b><span class="m"><i style="width:0"></i></span></span>
+      <span class="pill" id="cpu">CPU <b>…</b><svg viewBox="0 0 64 20" preserveAspectRatio="none"><polyline points=""/></svg></span>
+      <span class="pill" id="mem">Memory <b>…</b><svg viewBox="0 0 64 20" preserveAspectRatio="none"><polyline points=""/></svg></span>
+    </div>
+  </section>
+  <aside><h2>ACTIVITY</h2><div id="feed"></div></aside>
+</main>
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const feed = $('feed'), app = $('app');
+let startedAt = 0, timerId = null;
+const cpuHist = [], memHist = [];
+
+function spark(el, hist, lo, hi) {
+  const pts = hist.map((v, i) => `${(i / 29) * 64},${19 - ((v - lo) / Math.max(1, hi - lo)) * 16 - 1}`).join(' ');
+  el.querySelector('polyline').setAttribute('points', pts);
+}
+function setStatus(s) {
+  const vpn = $('vpn'); vpn.classList.toggle('bad', s.vpn !== 'up'); vpn.querySelector('b').textContent = s.vpn === 'up' ? 'up' : 'DOWN';
+  $('runs').querySelector('b').textContent = `${s.runsToday}/${s.maxRuns}`;
+  $('runs').querySelector('.m i').style.width = `${Math.min(100, (s.runsToday / s.maxRuns) * 100)}%`;
+  cpuHist.push(s.cpu); memHist.push(s.memMb); if (cpuHist.length > 30) { cpuHist.shift(); memHist.shift(); }
+  $('cpu').querySelector('b').textContent = `${s.cpu}%`; spark($('cpu'), cpuHist, 0, 100);
+  $('mem').querySelector('b').textContent = s.memMb >= 1024 ? `${(s.memMb / 1024).toFixed(1)} GB` : `${s.memMb} MB`; spark($('mem'), memHist, Math.min(...memHist) * 0.97, Math.max(...memHist) * 1.03);
+  setBusy(s.busy);
+}
+function setBusy(busy) {
+  app.classList.toggle('busy', busy);
+  $('state').textContent = busy ? 'Thinking…' : 'Resting';
+  if (!busy) { $('task').textContent = $('task').dataset.last || ''; $('timer').textContent = ''; clearInterval(timerId); timerId = null; }
+}
+function tick() { const s = Math.floor((Date.now() - startedAt) / 1000); $('timer').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
+
+function onLine(raw) {
+  const m = /^(\d\d:\d\d):\d\d\s+(.*)$/.exec(raw); if (!m) return;
+  const [, time, text] = m;
+  let cls = '', shown = text;
+  if (text.startsWith('> ')) { cls = 'tool mono'; shown = '› ' + text.slice(2).replace(/^Bash: (cockerel-tool )?/, ''); $('state').textContent = 'Using a tool'; }
+  else if (text.startsWith('Working on:')) {
+    cls = 'key'; shown = text.replace(/^Working on: /, 'Started: ').replace(/ \((assistant|media|scheduled)\)$/, '');
+    startedAt = Date.now(); clearInterval(timerId); timerId = setInterval(tick, 1000); tick();
+    $('task').dataset.last = ''; $('task').textContent = shown.replace('Started: ', ''); setBusy(true);
+  } else if (text.startsWith('says:')) { shown = text.slice(5).trim(); $('task').textContent = shown; $('task').dataset.last = shown; $('state').textContent = 'Thinking…'; }
+  else if (text === 'Finished.') { cls = 'key'; setBusy(false); }
+  else if (text.startsWith('Could not')) { cls = 'key'; setBusy(false); }
+  else cls = 'soft';
+  const row = document.createElement('div'); row.className = 'row ' + cls;
+  const t = document.createElement('time'); t.textContent = time;
+  const s = document.createElement('span'); s.textContent = shown;
+  row.append(t, s); feed.prepend(row);
+  while (feed.children.length > 120) feed.lastChild.remove();
+}
+
+if (new URLSearchParams(location.search).has('demo')) {
+  const lines = ['07:00:01  Awake and listening on port 7070', '06:40:10  Heard from Roost: Movie request - Hana asks for Sintel', '06:40:12  Working on: Raven said yes to this request (media)', '06:40:20  > Bash: cockerel-tool library Sintel', '06:40:31  > Bash: cockerel-tool find Sintel', '06:41:50  Finished.', '07:02:10  Roost woke me for a scheduled job', '07:02:10  Working on: Make the morning brief (scheduled)', '07:02:14  > Bash: cockerel-tool calendar today', '07:02:18  > Bash: cockerel-tool inbox unread', '07:02:24  says: Checking your calendar and inbox for the morning brief'];
+  lines.forEach(onLine);
+  for (let i = 0; i < 30; i++) setStatus({ busy: true, vpn: 'up', cpu: 14 + Math.round(Math.abs(Math.sin(i / 3)) * 30), memMb: 1000 + i * 6 + (i % 4) * 20, runsToday: 7, maxRuns: 60 });
+  startedAt = Date.now() - 14000; tick();
+} else {
+  const es = new EventSource('/live/events');
+  es.addEventListener('line', (e) => onLine(JSON.parse(e.data)));
+  es.addEventListener('status', (e) => setStatus(JSON.parse(e.data)));
+  es.onerror = () => { $('state').textContent = 'Reconnecting…'; };
+}
+</script>
+</body></html>
