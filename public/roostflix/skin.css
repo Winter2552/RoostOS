@@ -60,11 +60,16 @@ html, body, .backgroundContainer, .backgroundContainer.withBackdrop, .mainDrawer
   box-shadow: none !important;
   transition: background-color 0.25s ease, backdrop-filter 0.25s ease;
 }
-html.rf-scrolled .skinHeader, html.rf-scrolled .skinHeader.semiTransparent, html.rf-scrolled .skinHeader.headerBackground, html.rf-scrolled .skinHeader-withBackground {
-  background: rgba(10, 10, 10, 0.55) !important;
-  -webkit-backdrop-filter: blur(22px) saturate(1.5);
-  backdrop-filter: blur(22px) saturate(1.5);
+html.rf-scrolled .skinHeader, html.rf-scrolled .skinHeader.semiTransparent, html.rf-scrolled .skinHeader.headerBackground, html.rf-scrolled .skinHeader-withBackground,
+html.rf-scrolled body .skinHeader {
+  background: linear-gradient(rgba(10, 10, 10, 0.6), rgba(10, 10, 10, 0.3)) !important;
+  background-color: transparent !important;
+  -webkit-backdrop-filter: blur(22px) saturate(1.5) !important;
+  backdrop-filter: blur(22px) saturate(1.5) !important;
 }
+/* Jellyfin's own header pieces must not paint a solid band of their own */
+.skinHeader .headerTop, .skinHeader .headerLeft, .skinHeader .headerRight, .skinHeader .headerTabs, .skinHeader .headerTabs .emby-tabs-slider-container { background: none !important; box-shadow: none !important; }
+.skinHeader { position: fixed !important; top: 0; left: 0; right: 0; }
 /* icons and the name stay readable on any artwork */
 .skinHeader .headerButton, .skinHeader .pageTitleWithDefaultLogo, .skinHeader .pageTitleWithLogo { filter: drop-shadow(0 1px 5px rgba(0, 0, 0, 0.65)); }
 @media (prefers-reduced-motion: reduce) { .skinHeader { transition: none; } }
