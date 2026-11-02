@@ -4,7 +4,7 @@
 // the video's own events and on taps and keys, and does nothing otherwise.
 //  - skip intro / recap / credits, from Jellyfin's Media Segments, or from
 //    chapter names when no segments exist
-//  - "Next episode" card at the credits (asks "Still watching?" after 3 in a row)
+//  - "Next episode" card 10 seconds into the credits (asks "Still watching?" after 3 in a row)
 //  - chapter ticks and chapter names on the scrubber bar
 //  - speed button, sleep timer, J/K/L, < > keys, double-tap to skip 10 seconds
 //  - remembers audio and subtitle language per series
@@ -257,11 +257,12 @@
       skip.dataset.type = seg.type;
       skip.hidden = false;
     } else skip.hidden = true;
-    // The card starts at the credits, or in the last 40 seconds when there are none.
+    // The card starts 10 seconds into the credits, or in the last 40 seconds when there are none.
     const outro = cur.segs.find((x) => x.type === 'Outro');
+    const cardAt = outro ? outro.start + 10 : 0;
     const nearEnd = dur > 600 && dur - t <= 40;
-    if (cur.next && ((outro && t >= outro.start) || nearEnd)) showCard();
-    else if (!card.hidden && cur.next && t < (outro ? outro.start : dur - 40) - 2) hideCard(false);
+    if (cur.next && ((outro && t >= cardAt) || nearEnd)) showCard();
+    else if (!card.hidden && cur.next && t < (outro ? cardAt : dur - 40) - 2) hideCard(false);
   }
 
   // ---------- chapters on the scrubber ----------
