@@ -269,3 +269,16 @@ test('his Birdhouse plans are readable and a missing plan is a 404', async () =>
   assert.deepEqual((await hook({ type: 'birdhouse' })).body.lines, []);
   assert.equal((await hook({ type: 'birdhouse', id: 'nope' })).status, 404);
 });
+
+test('"Update all" asks his VM to update itself, for admins only', async () => {
+  assert.equal((await call('POST', '/api/admin/cockerel/update', {})).status, 401);
+  const before = sent.length;
+  const r = await call('POST', '/api/admin/cockerel/update', {}, cookie);
+  assert.equal(r.status, 202);
+  const hit = sent.slice(before).find((s) => s.url.endsWith('/update'));
+  assert.ok(hit, 'the VM was asked');
+  assert.match(hit.headers['x-roost-sig'], /^[0-9a-f]{64}$/);
+  const v = await call('GET', '/api/admin/cockerel/update', null, cookie);
+  assert.equal(v.body.enabled, true);
+  assert.equal(v.body.reachable, true);
+});

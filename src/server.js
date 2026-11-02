@@ -3285,6 +3285,22 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 200, { ok: true });
     },
 
+    // "Update all": Roost leaves a flag with Cockerel's VM, whose own root-owned
+    // updater (cockerel-vm/update.sh) pulls the new code. The VM reports back in /status.
+    'GET /api/admin/cockerel/update': async (req, res) => {
+      requireAdmin(req);
+      if (!cockerel.enabled()) return send(res, 200, { enabled: false });
+      const st = await cockerel.status();
+      send(res, 200, { enabled: true, reachable: st.reachable, update: st.update || null, error: st.error || null });
+    },
+
+    'POST /api/admin/cockerel/update': async (req, res) => {
+      const admin = requireAdmin(req);
+      await cockerel.call('POST', '/update', {}, 8000);
+      record(req, 'settings-changed', { actor: admin.username, target: 'cockerel', detail: 'Cockerel VM update started' });
+      send(res, 202, { ok: true });
+    },
+
     'GET /api/admin/cockerel': (req, res) => {
       requireAdmin(req);
       send(res, 200, { ...cockerel.view(), ...assistant.settings() });

@@ -54,6 +54,7 @@ test('the service answers only signed requests and runs Claude for chat', async 
   const secret = 'service-test-secret-0123456789';
   process.env.COCKEREL_HOME = home;
   process.env.COCKEREL_LIVE_LOG = path.join(home, 'live.log');
+  process.env.COCKEREL_UPDATE_DIR = path.join(home, 'update');
   process.env.COCKEREL_SECRET = secret;
   process.env.PATH = `${bin}:${process.env.PATH}`;
   process.env.MAX_RUNS_PER_DAY = '2';
@@ -71,6 +72,10 @@ test('the service answers only signed requests and runs Claude for chat', async 
     assert.ok(['up', 'down'].includes(st.body.vpn));
     assert.equal((await ask('POST', '/chat', { text: 'hi' })).body.reply, 'Hello Raven');
     assert.equal((await ask('POST', '/chat', { text: 'again' })).body.reply, 'Hello Raven');
+    assert.equal((await ask('POST', '/update', {})).body.ok, true);
+    assert.ok(fs.existsSync(path.join(home, 'update', 'update-request')), 'the root updater is woken by this file');
+    fs.writeFileSync(path.join(home, 'update', 'update-status.json'), JSON.stringify({ state: 'done', to: 'abc1234' }));
+    assert.equal((await ask('GET', '/status')).body.update.state, 'done', 'the update result shows in status');
     const page = await fetch(`${base}/live`);
     assert.equal(page.status, 200);
     assert.match(await page.text(), /Cockerel live/, 'the live page needs no signature from this machine');

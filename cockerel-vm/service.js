@@ -169,6 +169,10 @@ async function onAnswer({ askId, choice }) {
   await tool('log', reply.slice(0, 900));
 }
 
+// Roost's "Update all" leaves a flag for the root-owned updater (update.sh).
+const UPDATE_DIR = process.env.COCKEREL_UPDATE_DIR || '/var/lib/cockerel';
+const updateStatus = () => { try { return JSON.parse(fs.readFileSync(path.join(UPDATE_DIR, 'update-status.json'), 'utf8')); } catch { return null; } };
+
 function status() {
   const df = spawnSync('df', ['--output=pcent', '/'], { encoding: 'utf8' }).stdout || '';
   return {
@@ -179,6 +183,7 @@ function status() {
     diskPct: Number((df.match(/(\d+)%/) || [])[1]) || 0,
     runsToday: (read('usage.json', {}).runs) || 0,
     maxRuns: MAX_RUNS,
+    update: updateStatus(),
   };
 }
 
@@ -214,6 +219,12 @@ const server = http.createServer(async (req, res) => {
       // A job Roost woke him for (the morning brief, a repeating job). No chat history.
       const out = await runClaude(`${String(data.prompt || '').slice(0, 3000)}${data.context ? `\n\n${String(data.context).slice(0, 4000)}` : ''}`, 'scheduled', groupsOff(data.toolsOff));
       return reply(200, { reply: out });
+    }
+    if (req.url === '/update') {
+      live('Roost asked me to update myself');
+      fs.mkdirSync(UPDATE_DIR, { recursive: true });
+      fs.writeFileSync(path.join(UPDATE_DIR, 'update-request'), new Date().toISOString());
+      return reply(200, { ok: true });
     }
     if (req.url === '/event') { reply(200, { ok: true }); return void onEvent(data).catch(() => {}); }
     if (req.url === '/answer') { reply(200, { ok: true }); return void onAnswer(data).catch(() => {}); }
