@@ -5,7 +5,29 @@
 // at home. Uses an API token that
 // only needs "Zone · DNS · Edit" on the one domain.
 
+const crypto = require('crypto');
+
 const API = 'https://api.cloudflare.com/client/v4';
+
+// What cloudflared accepts as TUNNEL_TOKEN: base64 of {"a": account, "t": tunnel id,
+// "s": secret}, where the secret is itself standard base64.
+function buildToken(account, id, secret) {
+  return Buffer.from(JSON.stringify({ a: account, t: id, s: secret })).toString('base64');
+}
+
+// True when `token` has that shape (cloudflared says "Provided Tunnel token is
+// not valid" otherwise, and gives no hint why).
+function tokenLooksRight(token) {
+  try {
+    const json = JSON.parse(Buffer.from(String(token), 'base64').toString('utf8'));
+    const b64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+    return typeof json.a === 'string' && json.a.length > 0
+      && /^[0-9a-f-]{36}$/i.test(String(json.t))
+      && typeof json.s === 'string' && b64.test(json.s) && Buffer.from(json.s, 'base64').length === 32;
+  } catch {
+    return false;
+  }
+}
 
 class CloudflareDns {
   constructor({ token, domain, apiBase = API, fetchImpl = fetch }) {
@@ -60,8 +82,12 @@ class CloudflareDns {
     return (found && found[0]) || null;
   }
 
+  // Roost picks the tunnel's secret itself, so it can write the connector token
+  // without depending on the shape of the one Cloudflare's API hands back.
   async createTunnel(name) {
-    return this.tunnelCall('POST', '', { name, config_src: 'cloudflare' });
+    const secret = crypto.randomBytes(32).toString('base64');
+    const made = await this.tunnelCall('POST', '', { name, config_src: 'cloudflare', tunnel_secret: secret });
+    return { ...made, token: buildToken(await this.accountId(), made.id, secret) };
   }
 
   // Which names the tunnel answers for, and the address it hands them to
@@ -71,8 +97,13 @@ class CloudflareDns {
     await this.tunnelCall('PUT', `/${id}/configurations`, { config: { ingress } });
   }
 
+  // The connector token Cloudflare keeps for a tunnel; refused when it isn't one cloudflared can use.
   async tunnelToken(id) {
-    return this.tunnelCall('GET', `/${id}/token`);
+    const token = await this.tunnelCall('GET', `/${id}/token`);
+    if (!tokenLooksRight(token)) {
+      throw new Error('Cloudflare gave a token cloudflared can’t use. Copy the tunnel’s token from the dashboard instead: Networking → Tunnels → roost → Configure');
+    }
+    return token;
   }
 
   // → { status: healthy | degraded | down | inactive, connections: n }
@@ -130,4 +161,4 @@ class CloudflareDns {
   }
 }
 
-module.exports = { CloudflareDns };
+module.exports = { CloudflareDns, buildToken, tokenLooksRight };

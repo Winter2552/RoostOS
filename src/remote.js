@@ -180,12 +180,19 @@ class RemoteAccess {
     const dns = this.needDns();
     const { domain } = this.getTls();
     const test = `${TEST_LABEL}.${domain}`;
-    const found = (await dns.findTunnel(TUNNEL_NAME)) || (await dns.createTunnel(TUNNEL_NAME));
+    const existing = await dns.findTunnel(TUNNEL_NAME);
+    const found = existing || (await dns.createTunnel(TUNNEL_NAME));
     await dns.configureTunnel(found.id, [test, domain], this.origin);
     await dns.pointAtTunnel(test, found.id);
     this.patch({ tunnel: { ...(this.tunnelInfo() || {}), id: found.id, test, createdAt: (this.tunnelInfo() || {}).createdAt || this.now() } });
     await this.refreshTunnel();
-    return { token: await dns.tunnelToken(found.id) };
+    // A tunnel made just now has a token Roost wrote itself; an older one is asked for.
+    if (!existing) return { token: found.token };
+    try {
+      return { token: await dns.tunnelToken(found.id) };
+    } catch (err) {
+      return { token: '', note: err.message };
+    }
   }
 
   async tunnelToken() {
