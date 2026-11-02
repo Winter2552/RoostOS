@@ -35,8 +35,9 @@ function takenMs(raw) {
 }
 
 class PhotoBackup {
-  constructor({ nest, dbFile }) {
+  constructor({ nest, dbFile, onStored = () => {} }) {
     this.nest = nest;
+    this.onStored = onStored;
     this.db = new DatabaseSync(dbFile);
     this.db.exec(`
       PRAGMA journal_mode = WAL;
@@ -124,12 +125,13 @@ class PhotoBackup {
       name: params.get('name'),
       type: params.get('type'),
       path: this.folderFor(takenMs(params.get('taken'))),
+      taken: takenMs(params.get('taken')),
     }, req[Symbol.asyncIterator]());
   }
 
   // Stores `size` bytes pulled from `source` (an async iterator of Buffers) as
   // one photo and remembers it under `id`. Nest takes it piece by piece.
-  async storeStream(user, { id, size, device, name, type, path }, source) {
+  async storeStream(user, { id, size, device, name, type, path, taken }, source) {
     const start = this.nest.startUpload(user, { name, size, type, path });
     let last = start.done ? { done: true, item: start.item } : null;
     if (!last) {
@@ -167,6 +169,7 @@ class PhotoBackup {
       }
     }
     this.q.addSent.run(user.id, id, last.item.id, cleanName(str(device, 60)) || 'Phone', last.item.size, Date.now());
+    this.onStored(user, last.item, taken);
     return { done: true, item: last.item };
   }
 
@@ -203,6 +206,7 @@ class PhotoBackup {
       });
       if (out.done) {
         this.q.addSent.run(user.id, id, out.item.id, device, out.item.size, Date.now());
+        this.onStored(user, out.item, Number(body.taken));
         return send(res, 201, out);
       }
       this.q.addPending.run(out.id, user.id, id, device, Date.now());
@@ -216,6 +220,7 @@ class PhotoBackup {
         const p = this.q.pending.get(r[1], user.id);
         if (p) {
           this.q.addSent.run(user.id, p.id, out.item.id, p.device, out.item.size, Date.now());
+          this.onStored(user, out.item, Number(params.get('taken')));
           this.q.dropPending.run(r[1]);
         }
       }

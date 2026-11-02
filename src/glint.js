@@ -330,6 +330,16 @@ class Glint {
     return done.map((id) => photoItem(this.photo(user, id)));
   }
 
+  // A phone backup knows when each photo was taken, so it is dated right away and the browser never has to open
+  // the original just to find out (which would also move it in the timeline afterwards).
+  datedByBackup(user, id, taken) {
+    const when = num(taken, TAKEN_MIN, TAKEN_MAX - 1);
+    if (when === null) return;
+    this.q.indexOne.run(id, user.id);
+    this.q.setDate.run(Math.round(when), id, user.id);
+    this.dirty.add(user.id);
+  }
+
   find(user, id) {
     const p = this.q.photo.get(id, user.id);
     if (p) return p;

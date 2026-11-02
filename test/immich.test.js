@@ -180,3 +180,15 @@ test('things the app asks for that Roost does not answer are a plain 404', async
   const res = await fetch(`${base}/api/albums/not-there`, { headers: { Authorization: `Bearer ${token}` } });
   assert.equal(res.status, 404);
 });
+
+test('a backed-up photo is dated from the phone, so Glint never has to open it to find out', async () => {
+  const token = (await call('POST', '/api/auth/login', { email: 'sam@roost', password: 'password1' })).body.accessToken;
+  const m = multipart({ deviceAssetId: 'DATED_1', deviceId: 'phone-1', fileCreatedAt: '2017-03-04T05:06:07.000Z', fileModifiedAt: '2026-11-02T00:00:00.000Z' }, 'IMG_0099.JPG', Buffer.from('pixels'));
+  const sent = await post('/api/assets', { Authorization: `Bearer ${token}`, 'Content-Type': m.type }, m.body);
+  assert.equal(sent.status, 201);
+  const sam = (await call('POST', '/api/login', { username: 'sam', password: 'password1' })).cookie;
+  const list = (await call('GET', '/api/glint/photos', null, sam)).body.items;
+  const photo = list.find((p) => p.name === 'IMG_0099.JPG');
+  assert.ok(photo, 'the photo is in the timeline');
+  assert.equal(photo.taken, Date.parse('2017-03-04T05:06:07.000Z'));
+});

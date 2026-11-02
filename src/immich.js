@@ -178,7 +178,7 @@ class ImmichApi {
       // The video half of a Live Photo is sent hidden; keep it beside the photo but out of the way.
       if (/hidden/i.test(fields.visibility || '')) path += '/Live Photo videos';
       await this.photoBackup.storeStream(user, {
-        id: key, size: file.size, device: fields.deviceId, name: file.name || 'photo', type: file.type, path,
+        id: key, size: file.size, device: fields.deviceId, name: file.name || 'photo', type: file.type, path, taken,
       }, file.source);
       return { code: 201, body: { id, status: 'created' } };
     });
