@@ -146,6 +146,17 @@ class ImmichApi {
     };
   }
 
+  // The app reads these along with the user and treats a missing one as a failed sign-in, so every group is present.
+  preferences() {
+    const on = { enabled: true, sidebarWeb: false };
+    return {
+      albums: { defaultAssetOrder: 'desc' }, cast: { gCastEnabled: false }, download: { archiveSize: 4294967296, includeEmbeddedVideos: false },
+      emailNotifications: { albumInvite: false, albumUpdate: false, enabled: false }, folders: { enabled: false, sidebarWeb: false },
+      memories: { ...on, duration: 5 }, people: { ...on, minimumFaces: 3, updateStrategy: 'everyone' }, purchase: { hideBuyButtonUntil: '2000-01-01T00:00:00.000Z', showSupportBadge: false },
+      ratings: { enabled: false }, recentlyAdded: { sidebarWeb: false }, sharedLinks: on, tags: on,
+    };
+  }
+
   userView(user) {
     const created = user.createdAt || new Date(0).toISOString();
     return {
@@ -193,7 +204,7 @@ class ImmichApi {
     if (m === 'POST' && pathname === '/api/auth/validateToken') return send(res, 200, { authStatus: true });
     if (m === 'POST' && pathname === '/api/auth/logout') return send(res, 200, { successful: true, redirectUri: '/auth/login?autoLaunch=0' });
     if (m === 'GET' && pathname === '/api/users/me') return send(res, 200, this.userView(user));
-    if (m === 'GET' && pathname === '/api/users/me/preferences') return send(res, 200, {});
+    if (m === 'GET' && pathname === '/api/users/me/preferences') return send(res, 200, this.preferences());
     if (m === 'POST' && pathname === '/api/assets') return this.upload(req, res, user);
     if (m === 'POST' && pathname === '/api/assets/bulk-upload-check') {
       const body = await readJson(req, 4 * 1024 * 1024);

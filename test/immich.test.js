@@ -87,6 +87,10 @@ test('the Immich app can find Roost and sign in with a username or a backup key'
     assert.deepEqual(await (await fetch(`${base}/api/auth/validateToken`, { method: 'POST', headers })).json(), { authStatus: true });
   }
   assert.equal((await fetch(`${base}/api/users/me`)).status, 401);
+  // The app reads the preferences with the user, and signs out again if any group is missing.
+  const prefs = await (await fetch(`${base}/api/users/me/preferences`, { headers: { Authorization: `Bearer ${ok.body.accessToken}` } })).json();
+  assert.deepEqual(Object.keys(prefs).sort(), ['albums', 'cast', 'download', 'emailNotifications', 'folders', 'memories', 'people', 'purchase', 'ratings', 'recentlyAdded', 'sharedLinks', 'tags']);
+  assert.equal(prefs.albums.defaultAssetOrder, 'desc');
 
   // Two-step accounts sign in with a backup key instead of the password.
   const refused = await call('POST', '/api/auth/login', { email: 'raven@roost', password: 'correct horse' });
