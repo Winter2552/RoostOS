@@ -1,0 +1,8 @@
+[Unit]
+Description=Update Cockerel when Roost asks
+
+[Path]
+PathExists=/var/lib/cockerel/update-request
+
+[Install]
+WantedBy=multi-user.target

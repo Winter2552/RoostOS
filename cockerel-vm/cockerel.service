@@ -15,6 +15,7 @@ ProtectHome=tmpfs
 BindPaths=/home/cockerel
 ReadWritePaths=/home/cockerel /srv/media
 LogsDirectory=cockerel
+StateDirectory=cockerel
 PrivateTmp=true
 
 [Install]

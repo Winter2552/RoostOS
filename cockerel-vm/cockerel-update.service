@@ -1,0 +1,6 @@
+[Unit]
+Description=Update Cockerel's VM from GitHub
+
+[Service]
+Type=oneshot
+ExecStart=/opt/cockerel/update.sh

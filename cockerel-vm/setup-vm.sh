@@ -32,7 +32,7 @@ chown cockerel:cockerel /home/cockerel/cockerel/CLAUDE.md
 chmod +x /opt/cockerel/*.sh /opt/cockerel/tool.js
 ln -sf /opt/cockerel/tool.js /usr/local/bin/cockerel-tool
 ln -sf /opt/cockerel/watch.sh /usr/local/bin/cockerel-watch
-cp "$HERE/cockerel.service" /etc/systemd/system/cockerel.service
+cp "$HERE/cockerel.service" "$HERE/cockerel-update.service" "$HERE/cockerel-update.path" /etc/systemd/system/
 install -d -m 755 /etc/xdg/autostart
 cp "$HERE/cockerel-watch.desktop" /etc/xdg/autostart/cockerel-watch.desktop
 cp "$HERE/cockerel-watch.desktop" /usr/share/applications/cockerel-watch.desktop
@@ -58,6 +58,7 @@ fi
 ln -sf /home/cockerel/.local/bin/claude /usr/local/bin/claude
 
 systemctl daemon-reload
+systemctl enable --now cockerel-update.path
 echo
 echo "Installed. Next steps are in README.md. Your shared secret is:"
 grep COCKEREL_SECRET /etc/cockerel/env
