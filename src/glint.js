@@ -25,6 +25,7 @@ const { Memories } = require('./glint-memories');
 const { Clutter } = require('./glint-clutter');
 const { People } = require('./glint-people');
 
+const LIVE_FOLDER = 'Live Photo videos'; // where the Immich app's hidden Live Photo clips are kept (src/immich.js)
 const PAGE = 240; // photos per timeline page
 const THUMB_MAX = 512 * 1024; // previews are about 30 KB; this is a ceiling
 const MAX_IDS = 1000;
@@ -171,8 +172,9 @@ class Glint {
       fav: q('UPDATE photos SET fav = ? WHERE id = ? AND owner = ?'),
       count: q(`SELECT COUNT(*) AS n FROM photos p JOIN nodes n ON n.id = p.id
                 WHERE p.owner = ? AND n.trash_root IS NULL AND p.hide = 0`),
-      pairable: q(`SELECT p.id, p.duration, n.parent, n.name, n.mime, n.size, n.trash_root IS NOT NULL AS gone
-                   FROM photos p JOIN nodes n ON n.id = p.id WHERE p.owner = ?`),
+      pairable: q(`SELECT p.id, p.duration, p.taken, n.parent, n.name, n.mime, n.size, n.trash_root IS NOT NULL AS gone,
+                     f.name AS folder, f.parent AS above
+                   FROM photos p JOIN nodes n ON n.id = p.id LEFT JOIN nodes f ON f.id = n.parent WHERE p.owner = ?`),
       unpair: q('UPDATE photos SET live = NULL, hide = 0 WHERE owner = ? AND (live IS NOT NULL OR hide = 1)'),
       pairPhoto: q('UPDATE photos SET live = ? WHERE id = ?'),
       pairClip: q('UPDATE photos SET hide = 1 WHERE id = ?'),
@@ -362,16 +364,29 @@ class Glint {
     this.dirty.delete(user.id);
     this.paired.add(user.id);
     const groups = new Map();
+    const loose = []; // clips the phone sent hidden (in "Live Photo videos") whose name has no photo to match
     for (const r of this.q.pairable.all(user.id)) {
       const type = mediaType(r);
       const video = type.startsWith('video/');
       if (!video && !type.startsWith('image/')) continue;
       if (video && (r.size > LIVE_MAX_BYTES || r.duration > LIVE_MAX_SECONDS)) continue;
-      const key = `${r.gone}|${r.parent}|${r.name.replace(/\.[^.]*$/, '').toLowerCase()}`;
-      const g = groups.get(key) || { photo: null, clip: null };
+      // The phone app files the video half of a Live Photo in a folder beside the photos: it belongs to them.
+      const hidden = video && r.folder === LIVE_FOLDER;
+      const home = hidden ? r.above : r.parent;
+      const key = `${r.gone}|${home}|${r.name.replace(/\.[^.]*$/, '').toLowerCase()}`;
+      const g = groups.get(key) || { photo: null, clip: null, home, gone: r.gone, taken: 0 };
       const slot = video ? 'clip' : 'photo';
-      if (!g[slot] || r.id < g[slot]) g[slot] = r.id;
+      if (!g[slot] || r.id < g[slot]) { g[slot] = r.id; if (!video) g.taken = r.taken; else g.clipTaken = r.taken; }
+      if (hidden) g.hiddenClip = true;
       groups.set(key, g);
+    }
+    // A hidden clip and a photo of the same moment (within two seconds) are a pair even when the names differ,
+    // as long as it is the only photo that fits.
+    const lone = [...groups.values()].filter((g) => g.photo && !g.clip);
+    for (const g of [...groups.values()]) {
+      if (!g.clip || g.photo || !g.hiddenClip) continue;
+      const near = lone.filter((o) => !o.clip && o.home === g.home && o.gone === g.gone && Math.abs(o.taken - g.clipTaken) <= 2000);
+      if (near.length === 1) { near[0].clip = g.clip; g.clip = null; }
     }
     this.db.exec('BEGIN');
     try {
