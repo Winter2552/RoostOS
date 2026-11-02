@@ -70,6 +70,44 @@ html.rf-scrolled body .skinHeader {
 /* Jellyfin's own header pieces must not paint a solid band of their own */
 .skinHeader .headerTop, .skinHeader .headerLeft, .skinHeader .headerRight, .skinHeader .headerTabs, .skinHeader .headerTabs .emby-tabs-slider-container { background: none !important; box-shadow: none !important; }
 .skinHeader { position: fixed !important; top: 0; left: 0; right: 0; }
+/* Jellyfin 10.11's own header is a MUI app bar, not .skinHeader: see-through at
+   the top of the page (colorTransparent), a solid grey slab once the page has
+   scrolled (colorDefault). Same treatment for both, so the artwork shows through
+   and the change is a smooth fade instead of a grey band. */
+header.MuiAppBar-root, .MuiAppBar-root.MuiAppBar-colorTransparent, .MuiAppBar-root.MuiAppBar-colorDefault, .MuiAppBar-root.MuiAppBar-colorPrimary {
+  background: linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0)) !important;
+  background-color: transparent !important;
+  color: var(--rf-cream) !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: blur(0px);
+  backdrop-filter: blur(0px);
+  transition: background-color 0.25s ease, -webkit-backdrop-filter 0.25s ease, backdrop-filter 0.25s ease !important;
+}
+html.rf-scrolled header.MuiAppBar-root, header.MuiAppBar-root.MuiAppBar-colorDefault {
+  background: linear-gradient(rgba(10, 10, 10, 0.6), rgba(10, 10, 10, 0.3)) !important;
+  background-color: transparent !important;
+  -webkit-backdrop-filter: blur(22px) saturate(1.5) !important;
+  backdrop-filter: blur(22px) saturate(1.5) !important;
+}
+.MuiAppBar-root .MuiToolbar-root { background: none !important; }
+.MuiAppBar-root .MuiIconButton-root, .MuiAppBar-root .MuiButton-root { filter: drop-shadow(0 1px 5px rgba(0, 0, 0, 0.65)); }
+/* Roost's mark in place of Jellyfin's in the bar's logo */
+.MuiAppBar-root img[src*="icon-transparent"] { content: url(icon.svg); border-radius: 0.5rem; }
+/* On phones Jellyfin shows only the menu button; put the Roostflix name beside it */
+@media (max-width: 899.95px) {
+  .MuiAppBar-root .MuiToolbar-root > .MuiIconButton-root:first-child { order: -2; }
+  .MuiAppBar-root .MuiToolbar-root::before {
+    content: 'Roostflix';
+    order: -1;
+    font: 700 1.3rem var(--rf-mono);
+    letter-spacing: -0.05em;
+    color: var(--rf-cream);
+    margin: 0 auto 0 0.4rem;
+    filter: drop-shadow(0 1px 5px rgba(0, 0, 0, 0.65));
+  }
+}
+@media (prefers-reduced-motion: reduce) { header.MuiAppBar-root { transition: none !important; } }
 /* icons and the name stay readable on any artwork */
 .skinHeader .headerButton, .skinHeader .pageTitleWithDefaultLogo, .skinHeader .pageTitleWithLogo { filter: drop-shadow(0 1px 5px rgba(0, 0, 0, 0.65)); }
 @media (prefers-reduced-motion: reduce) { .skinHeader { transition: none; } }
@@ -168,6 +206,10 @@ a { color: var(--rf-cream); }
   .rf-body { bottom: 214px; }
   .rf-dots { right: auto; left: 4%; bottom: 182px; }
   .rf-play, .rf-more { padding: 0.75em 1.5em; }
+}
+/* Landscape phones are short: give the hero room so the title sits under the bar, not behind it. */
+@media (max-height: 520px) {
+  .rf-hero { min-height: 640px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .rf-slide { transition: none; }
