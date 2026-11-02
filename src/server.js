@@ -407,7 +407,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   const glint = new Glint({ nest });
   glint.importer = new Importer({ glint, nest });
   nest.importer = new NestImporter({ glint, nest });
-  const photoBackup = new PhotoBackup({ nest, dbFile: path.join(dataDir, 'photo-backup.db') });
+  const photoBackup = new PhotoBackup({ nest, dbFile: path.join(dataDir, 'photo-backup.db'), onStored: (user, item, taken) => glint.datedByBackup(user, item.id, taken) });
   // The free Immich phone app backing up to Glint (see src/immich.js).
   const immich = new ImmichApi({
     photoBackup,

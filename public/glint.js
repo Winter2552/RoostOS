@@ -151,6 +151,7 @@
     G.sel.clear();
     G.anchor = null;
     thumbQueue.length = 0;
+    eager.length = 0;
     render();
     load(true);
   };
@@ -159,6 +160,8 @@
     if (G.loading && !first) return;
     const token = ++G.token;
     G.loading = true;
+    if (first) eager.length = 0;
+    let fresh = null; // the page that just arrived, drawn on its own instead of redrawing the whole list
     try {
       if (G.mode === 'albums') {
         const { albums } = await gapi('GET', '/api/glint/albums');
@@ -197,6 +200,7 @@
         const d = await gapi('GET', `/api/glint/photos?${q}`);
         if (token !== G.token) return;
         G.items = first ? d.items : G.items.concat(d.items);
+        if (!first) fresh = d.items;
         G.next = d.next;
         if (first) { G.total = d.total; G.storage = d.storage; }
         if (first && G.mode === 'photos') loadMemories(token);
@@ -218,7 +222,8 @@
     } finally {
       if (token === G.token) G.loading = false;
     }
-    render();
+    if (fresh && !G.error && tl.grid && body.contains(tl.grid) && token === G.token) appendTimeline(fresh);
+    else render();
     watchEnd();
     pollMove();
   }
@@ -244,6 +249,16 @@
     const s = $('#glint-sentinel').getBoundingClientRect();
     if (G.next && !G.loading && s.top < innerHeight + 800) load(false);
   }
+
+  // Pictures are only held while they are near the screen. A phone that keeps thousands of decoded previews
+  // runs out of memory and reloads the page, so far-away ones are let go and come back from the cache.
+  const imgObserver = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      const img = e.target;
+      if (e.isIntersecting) { if (!img.getAttribute('src')) img.src = img.dataset.src; }
+      else if (img.getAttribute('src')) img.removeAttribute('src');
+    }
+  }, { rootMargin: '1500px 0px' });
 
   // ---------- rendering ----------
 
@@ -384,24 +399,43 @@
     // One grid per month, with the month as a heading, so scrolling stays oriented.
     const parts = [];
     if (G.mode === 'photos' && G.memories.length) parts.push(memoryStrip());
-    let grid = null;
-    let month = '';
-    let year = '';
-    for (const p of G.items) {
-      const m = monthName(p.taken);
-      if (m !== month) {
-        month = m;
-        // The year level shows one label per year (the first month of it) and no month names.
-        const y = String(new Date(p.taken).getFullYear());
-        parts.push(el('h3', { class: `glint-month mono muted${y !== year ? ' yr' : ''}`, 'data-year': y, text: m }));
-        year = y;
-        grid = el('div', { class: 'glint-grid' });
-        parts.push(grid);
-      }
-      grid.append(tile(p));
-    }
+    imgObserver.disconnect();
+    Object.assign(tl, { grid: null, month: '', year: '' });
+    addToTimeline(G.items, parts);
     body.replaceChildren(...parts);
     for (const t of body.querySelectorAll('.gtile[data-need]')) tileObserver.observe(t);
+    queueEager(G.items);
+  }
+
+  // Where the timeline ended, so the next page carries on in the same month's grid.
+  const tl = { grid: null, month: '', year: '' };
+
+  function addToTimeline(items, parts) {
+    for (const p of items) {
+      const m = monthName(p.taken);
+      if (m !== tl.month) {
+        tl.month = m;
+        // The year level shows one label per year (the first month of it) and no month names.
+        const y = String(new Date(p.taken).getFullYear());
+        parts.push(el('h3', { class: `glint-month mono muted${y !== tl.year ? ' yr' : ''}`, 'data-year': y, text: m }));
+        tl.year = y;
+        tl.grid = el('div', { class: 'glint-grid' });
+        parts.push(tl.grid);
+      }
+      tl.grid.append(tile(p));
+    }
+  }
+
+  // The next page goes on the end of the list. Redrawing everything for each page made scrolling through
+  // thousands of photos slower and slower, and threw away every picture already on screen.
+  function appendTimeline(items) {
+    const parts = []; // only new months: photos in the current month go straight into its grid
+    addToTimeline(items, parts);
+    body.append(...parts);
+    for (const t of body.querySelectorAll('.gtile[data-need]')) tileObserver.observe(t);
+    queueEager(items);
+    renderCrumbs();
+    renderTools();
   }
 
   function memoryStrip() {
@@ -418,7 +452,11 @@
       tabindex: '0',
       'aria-label': `${p.video ? 'Video' : 'Photo'} ${p.name}, ${dayName(p.taken)}`,
     });
-    if (p.thumb === 1) t.append(el('img', { src: thumbUrl(p), alt: '', loading: 'lazy', decoding: 'async', draggable: 'false' }));
+    if (p.thumb === 1) {
+      const img = el('img', { 'data-src': thumbUrl(p), alt: '', decoding: 'async', draggable: 'false' });
+      t.append(img);
+      imgObserver.observe(img);
+    }
     else if (p.thumb === 2) t.append(el('span', { class: 'gtile-blank' }, gi(p.video ? 'play' : 'photo')));
     else { t.dataset.need = '1'; t.append(el('span', { class: 'gtile-blank' }, gi(p.video ? 'play' : 'photo'))); }
     if (p.live) t.append(el('span', { class: 'gtile-live mono', text: 'LIVE' }));
@@ -1685,6 +1723,15 @@
     return r.bottom < -600 || r.top > innerHeight + 600;
   }
 
+  // Photos that have no preview yet, newest first. They are made in the background, a couple at a time and only
+  // while this page is showing, so scrolling later finds them ready instead of waiting on each original.
+  const eager = [];
+  function queueEager(items) {
+    for (const p of items) if (!p.thumb && !p.making && !p.queued) { p.queued = true; eager.push(p); }
+    pumpThumbs();
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') pumpThumbs(); });
+
   function pumpThumbs() {
     while (thumbBusy < 3 && thumbQueue.length) {
       const job = thumbQueue.pop();
@@ -1696,6 +1743,14 @@
       }
       thumbBusy++;
       makePreview(job.p, job.file).catch(() => {}).finally(() => { thumbBusy--; pumpThumbs(); });
+    }
+    // What is on screen (or just uploaded) goes first; the rest fills in behind it.
+    while (thumbBusy < 2 && !thumbQueue.length && eager.length && document.visibilityState === 'visible' && !view.classList.contains('hidden')) {
+      const p = eager.shift();
+      if (p.thumb || p.making) continue;
+      p.making = true;
+      thumbBusy++;
+      makePreview(p).catch(() => {}).finally(() => { thumbBusy--; pumpThumbs(); });
     }
   }
 
@@ -1835,13 +1890,19 @@
     });
     if (!res.ok) return;
     const { item } = await res.json();
+    const was = p.taken;
     Object.assign(p, item);
     p.making = false;
     const t = body.querySelector(`.gtile[data-id="${p.id}"]`);
     if (G.mode === 'undated' && !p.undated) { removeLocal([p.id]); return; }
-    if (t) t.replaceWith(tile(p));
-    // A new date can change where the photo belongs; the next load puts it in order.
-    if (taken !== null) reloadSoon();
+    if (t) {
+      const old = t.querySelector('img');
+      if (old) imgObserver.unobserve(old);
+      t.replaceWith(tile(p));
+    }
+    // A new date can change where the photo belongs; the next load puts it in order. Photos that already
+    // had their date (a phone backup knows it) stay where they are, so the list doesn't jump while previews are made.
+    if (taken !== null && p.taken !== was) reloadSoon();
   }
 
   async function serverPoster(p) {
