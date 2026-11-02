@@ -654,13 +654,54 @@ Rules for custom designs:
     d = clean(d);
     const st = d.stock;
     if (!st) return null;
-    const l = layout(d, { stock: [{ kind: 'sheet', w: st.w, l: st.l, thick: st.t, qty: st.qty }], sheet: [st.l, st.w], noBuy: true, strip: false });
     const rows = parts(d);
+    const list = [];
+    const other = [];
+    rows.forEach((r, part) => { for (let i = 0; i < r.qty; i++) (r.thickness === st.t ? list : other).push(r.thickness === st.t ? { part, l: r.length, w: r.width } : part); });
+    // Pieces go on the boards of the stated stock with the saw cut kept between
+    // them; several orders are tried and the one that places most wins.
+    let best = null;
+    const orders = [(a, b) => b.l * b.w - a.l * a.w, (a, b) => b.l - a.l || b.w - a.w, (a, b) => b.w - a.w || b.l - a.l];
+    for (const order of orders) {
+      const boards = Array.from({ length: st.qty }, () => ({ free: [{ x: 0, y: 0, w: st.l + KERF, h: st.w + KERF }], pieces: [] }));
+      const left = [];
+      for (const p of list.slice().sort(order)) {
+        let pick = null;
+        for (const bd of boards) {
+          for (const f of bd.free) {
+            for (const [w, h] of [[p.l, p.w], [p.w, p.l]]) {
+              if (w + KERF > f.w || h + KERF > f.h) continue;
+              const score = Math.min(f.w - w - KERF, f.h - h - KERF);
+              if (!pick || score < pick.score) pick = { bd, f, w, h, score };
+            }
+          }
+        }
+        if (!pick) { left.push(p.part); continue; }
+        const { bd, f, w, h } = pick;
+        bd.pieces.push({ part: p.part, x: f.x, y: f.y, w, h });
+        // Cut the used corner out of every free area it touches, keeping what is left.
+        const used = { x: f.x, y: f.y, w: w + KERF, h: h + KERF };
+        const next = [];
+        for (const r of bd.free) {
+          if (used.x >= r.x + r.w || used.x + used.w <= r.x || used.y >= r.y + r.h || used.y + used.h <= r.y) { next.push(r); continue; }
+          if (used.x > r.x) next.push({ x: r.x, y: r.y, w: used.x - r.x, h: r.h });
+          if (used.x + used.w < r.x + r.w) next.push({ x: used.x + used.w, y: r.y, w: r.x + r.w - used.x - used.w, h: r.h });
+          if (used.y > r.y) next.push({ x: r.x, y: r.y, w: r.w, h: used.y - r.y });
+          if (used.y + used.h < r.y + r.h) next.push({ x: r.x, y: used.y + used.h, w: r.w, h: r.y + r.h - used.y - used.h });
+        }
+        bd.free = next.filter((r, i) => r.w > 0 && r.h > 0 && !next.some((o, j) => j !== i && o.x <= r.x && o.y <= r.y && o.x + o.w >= r.x + r.w && o.y + o.h >= r.y + r.h && (o.w * o.h > r.w * r.h || j < i)));
+      }
+      if (!best || left.length < best.left.length) best = { boards, left };
+    }
     const count = (idx) => { const m = new Map(); for (const i of idx) m.set(i, (m.get(i) || 0) + 1); return [...m].map(([i, qty]) => ({ name: rows[i].name, qty, thickness: rows[i].thickness })); };
     let need = 0;
     for (const r of rows) if (r.thickness === st.t) need += r.qty * (r.length + KERF) * (r.width + KERF);
     const have = st.qty * st.w * st.l;
-    return { stock: st, layout: l, sheets: l.sheets, unplaced: count(l.unplaced), other: count(l.other), need: need / 1e6, have: have / 1e6, over: Math.max(0, need - have) / 1e6 };
+    const sheets = best.boards.filter((bd) => bd.pieces.length).map((bd) => ({ thickness: st.t, width: st.l, height: st.w, owned: true, pieces: bd.pieces }));
+    const area = sheets.length * st.l * st.w;
+    const usedArea = sheets.reduce((a, sh) => a + sh.pieces.reduce((b, q) => b + q.w * q.h, 0), 0);
+    const layout = { width: st.l, height: st.w, sheets, timber: [], tooBig: [], area, used: usedArea };
+    return { stock: st, layout, sheets, unplaced: count(best.left), other: count(other), need: need / 1e6, have: have / 1e6, over: Math.max(0, need - have) / 1e6 };
   }
 
   // Plain sentences for what a stated board cannot give, empty when all is well.
