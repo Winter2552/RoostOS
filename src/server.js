@@ -965,6 +965,9 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     if (!storage.appTokenOk(req, appToken)) throw new HttpError(401, 'App token missing or wrong');
   }
 
+  // The Admin switch for nightly backups (on unless switched off).
+  const backupSummary = () => backup.summarize(backup.readStatus(dataDir), Date.now(), backup.config(db().settings.backup).enabled);
+
   function certSummary() {
     const s = certs.status();
     if (s.state === 'off') return null;
@@ -2031,7 +2034,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     'GET /api/backup': (req, res) => {
       const user = requireMember(req);
       const status = backup.readStatus(dataDir);
-      const out = backup.summarize(status);
+      const out = backupSummary();
+      if (out.state === 'disabled') {
+        send(res, 200, { state: 'disabled', lastOk: null });
+        return;
+      }
       if (user.role !== 'admin') {
         send(res, 200, { state: out.state, lastOk: out.lastOk || null });
         return;
@@ -2061,7 +2068,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const status = backup.readStatus(dataDir);
       const snapshots = status && status.snapshots ? status.snapshots : [];
       send(res, 200, {
-        ...backup.summarize(status),
+        ...backupSummary(),
         config: backup.config(db().settings.backup),
         drive: status && status.drive,
         last: status && status.last,
@@ -2074,7 +2081,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     // "Back up now" and "Cancel" leave a request for the backup service.
     'POST /api/admin/backup/run': (req, res) => {
       const admin = requireAdmin(req);
-      const { state, message } = backup.summarize(backup.readStatus(dataDir));
+      const { state, message } = backupSummary();
+      if (state === 'disabled') throw new HttpError(409, 'Backups are switched off. Turn them on first.');
       if (state === 'off' || state === 'stopped') throw new HttpError(409, 'The backup service isn’t running. Check that roost-backup is started.');
       if (state === 'running') throw new HttpError(409, 'A backup is already running');
       if (state === 'drive') throw new HttpError(409, message || 'Backup drive not found');
@@ -2336,6 +2344,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         galaxies: galaxiesView(),
         ticked: db().settings.setupTicked || [],
         backup: backup.readStatus(dataDir),
+        backupDisabled: !backup.config(db().settings.backup).enabled,
         update: selfUpdate.summarize(selfUpdate.readStatus(dataDir)),
       }));
     },
@@ -2542,7 +2551,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
           throw new HttpError(400, err.message);
         }
         if (JSON.stringify(next) !== JSON.stringify(backup.config(db().settings.backup))) {
-          changes.push(`backups ${next.time}, keep ${next.keepDaily} nightly + ${next.keepWeekly} weekly${next.capGb ? `, up to ${next.capGb} GB` : ''}`);
+          changes.push(next.enabled ? `backups ${next.time}, keep ${next.keepDaily} nightly + ${next.keepWeekly} weekly${next.capGb ? `, up to ${next.capGb} GB` : ''}` : 'backups switched off');
           tellBackups = true;
         }
         db().settings.backup = next;
@@ -2630,7 +2639,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
           entries: activity.entries,
           cert,
           updates: updates.summary(),
-          backup: backup.summarize(backup.readStatus(dataDir)),
+          backup: backupSummary(),
           pushDevices: db().users.filter((u) => u.role === 'admin').reduce((n, u) => n + push.devicesOf(u.id).length, 0),
           outside: Boolean(cert),
           lockdown: db().settings.lockdown || null,

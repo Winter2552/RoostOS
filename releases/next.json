@@ -1,3 +1,10 @@
 {
-  "items": []
+  "items": [
+    {
+      "title": "A switch for backups",
+      "text": "No backup drive yet? Switch nightly backups off in Admin and the drive warnings, failed nights and setup nudges all go quiet. Switch them back on when the drive is plugged in.",
+      "image": "backups-switch.png",
+      "admin": true
+    }
+  ]
 }

@@ -148,9 +148,10 @@ const STEPS = [
       'Note the drive\'s mount folder in ZimaOS Storage, e.g. /media/Backup.',
       'In Roost\'s compose file, point the roost-backup service\'s /backup line at it, e.g. /media/Backup:/backup, and the roost service\'s /backup:ro line at the same folder (so Admin → Backups can get files back). Set TZ to your time zone so backups run at your time of day.',
       'Redeploy Roost. This ticks off once Roost has found the drive.',
+      'No drive yet? Switch backups off under Admin → Storage & backups. This step then counts as done and nothing warns about it until you switch them back on.',
     ],
     covers: ['BACKUP_DIR', 'APPDATA_DIR', 'backup'],
-    check: (ctx) => Boolean(ctx.backup && ctx.backup.drive && ctx.backup.drive.ok),
+    check: (ctx) => Boolean(ctx.backupDisabled || (ctx.backup && ctx.backup.drive && ctx.backup.drive.ok)),
   },
   {
     id: 'first-backup',
@@ -162,7 +163,7 @@ const STEPS = [
       'Leave the server on with the drive plugged in.',
       'The dashboard shows "Last backup" once it has finished.',
     ],
-    check: (ctx) => Boolean(ctx.backup && ctx.backup.lastOk),
+    check: (ctx) => Boolean(ctx.backupDisabled || (ctx.backup && ctx.backup.lastOk)),
   },
   {
     id: 'self-update',
@@ -705,13 +706,14 @@ const CARDS = [
   { id: 'backup-form', section: 'storage', steps: ['backup-drive', 'first-backup'] },
 ];
 
-function cardsDone(steps) {
+// `keepOpen` lists cards that stay on the page even when their steps are done.
+function cardsDone(steps, keepOpen = []) {
   const byId = new Map(steps.map((s) => [s.id, s]));
   return CARDS.map((card) => {
     const mine = card.steps === 'all' ? steps : card.steps.map((id) => byId.get(id));
     const required = mine.filter((s) => !s.optional);
     const pool = required.length ? required : mine;
-    return { id: card.id, done: pool.length > 0 && pool.every((s) => s.done) };
+    return { id: card.id, done: pool.length > 0 && pool.every((s) => s.done) && !keepOpen.includes(card.id) };
   });
 }
 
@@ -726,7 +728,9 @@ async function checklist(ctx) {
     return { ...step, done };
   });
   const required = steps.filter((s) => !s.optional);
-  return { steps, done: required.filter((s) => s.done).length, total: required.length, cards: cardsDone(steps) };
+  // With backups switched off their card stays out, so the switch is easy to find.
+  const cards = cardsDone(steps, ctx.backupDisabled ? ['backup-form'] : []);
+  return { steps, done: required.filter((s) => s.done).length, total: required.length, cards };
 }
 
 module.exports = { SECTIONS, STEPS, NO_STEP, MANUAL, CARDS, checklist };

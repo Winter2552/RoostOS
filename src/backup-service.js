@@ -124,6 +124,7 @@ function start({ dataDir, dest, nestDir, appDataDir }) {
   const config = () => {
     const s = backup.config(settingsOf(dataDir));
     return {
+      enabled: s.enabled,
       time: s.time,
       keep: { daily: s.keepDaily, weekly: s.keepWeekly },
       capBytes: s.capGb ? s.capGb * 1000 ** 3 : 0,
@@ -216,18 +217,28 @@ function start({ dataDir, dest, nestDir, appDataDir }) {
   }
 
   let lastCheck = Date.now();
+  let idle = false;
   async function tick() {
     const request = backup.takeRequest(dataDir);
     if (request === 'cancel' && abort) abort.abort();
     if (status.running) return;
-    if (request === 'run' || Date.now() >= next.getTime()) {
+    // Switched off in Admin: no runs and no drive checks, so nothing fails.
+    if (!config().enabled) {
+      idle = true;
+      if (status.next) { status.next = null; save(); }
+      return;
+    }
+    // Just switched back on: look at the drive afresh before anything runs.
+    const resumed = idle;
+    idle = false;
+    if (!resumed && (request === 'run' || Date.now() >= next.getTime())) {
       await runNow({ manual: request === 'run' });
       next = nextAt(config().time);
       catchUp = false;
       status.next = next.toISOString();
       save();
       lastCheck = Date.now();
-    } else if (request === 'reload' || Date.now() - lastCheck >= DRIVE_CHECK_EVERY * MINUTE) {
+    } else if (resumed || request === 'reload' || Date.now() - lastCheck >= DRIVE_CHECK_EVERY * MINUTE) {
       lastCheck = Date.now();
       // Also picks up a changed backup time.
       const wasThere = status.drive && status.drive.ok;

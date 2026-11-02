@@ -219,9 +219,9 @@ test('next run is the coming 3:00', () => {
 });
 
 test('settings fall back to the defaults and are checked strictly', () => {
-  assert.deepEqual(backup.config(undefined), { time: '03:00', keepDaily: 7, keepWeekly: 4, capGb: null });
-  assert.deepEqual(backup.config({ time: '25:99', keepDaily: 0, keepWeekly: 'x', capGb: 3 }), { time: '03:00', keepDaily: 7, keepWeekly: 4, capGb: null });
-  assert.deepEqual(backup.cleanConfig({ time: '04:30', keepDaily: '10', keepWeekly: '0', capGb: '' }), { time: '04:30', keepDaily: 10, keepWeekly: 0, capGb: null });
+  assert.deepEqual(backup.config(undefined), { enabled: true, time: '03:00', keepDaily: 7, keepWeekly: 4, capGb: null });
+  assert.deepEqual(backup.config({ time: '25:99', keepDaily: 0, keepWeekly: 'x', capGb: 3 }), { enabled: true, time: '03:00', keepDaily: 7, keepWeekly: 4, capGb: null });
+  assert.deepEqual(backup.cleanConfig({ time: '04:30', keepDaily: '10', keepWeekly: '0', capGb: '' }), { enabled: true, time: '04:30', keepDaily: 10, keepWeekly: 0, capGb: null });
   assert.equal(backup.cleanConfig({ time: '04:30', keepDaily: 7, keepWeekly: 4, capGb: '500' }).capGb, 500);
   for (const bad of [
     { time: '', keepDaily: 7, keepWeekly: 4 },
@@ -336,4 +336,10 @@ test('a test restore reads files back and catches damage', async () => {
   // A missing file counts as damage too.
   fs.rmSync(snap(dest, r.snapshot, 'Nest', 'a', 'notes.txt.gz'));
   assert.equal((await backup.verifySnapshot(dest, r.snapshot, { sample: 10 })).bad.length, 2);
+});
+
+test('summarize reports nothing but "disabled" while backups are switched off', () => {
+  assert.equal(backup.summarize({ updatedAt: new Date().toISOString(), drive: { ok: false } }, Date.now(), false).state, 'disabled');
+  assert.equal(backup.summarize({ updatedAt: new Date().toISOString(), drive: { ok: false } }).state, 'drive');
+  assert.equal(backup.config({ enabled: false }).enabled, false);
 });

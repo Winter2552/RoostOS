@@ -3972,13 +3972,19 @@ function renderBackup(b) {
     drive: ['offline', 'Backup drive not found'],
     stopped: ['offline', 'The backup service isn’t running'],
     off: ['', 'Backups aren’t set up yet'],
+    disabled: ['', 'Backups are switched off'],
   }[b.state] || ['', b.state];
+  const off = b.state === 'disabled';
+  $('#backup-fields').classList.toggle('hidden', off);
+  $('#backup-history').classList.toggle('hidden', off);
+  if (document.activeElement !== f.enabled) f.enabled.checked = !off;
   $('#backup-state').replaceChildren(el('span', { class: `dot ${dot}` }), el('span', { text: headline }));
 
   const lines = [];
   if (running && b.progress && b.progress.files !== undefined) lines.push(`${b.progress.files.toLocaleString()} files checked · ${bytes(b.progress.written)} written so far`);
   if (b.state === 'failed') lines.push(b.message);
   if (b.state === 'stopped') lines.push('Check that the roost-backup container is started in ZimaOS, then reload this page.');
+  if (off) lines.push('Nothing runs and nothing warns. Switch them on when the backup drive is plugged in.');
   if (b.state === 'off') lines.push('Finish the “Plug in the backup drive” step in Setup above.');
   if (!running && b.next && ['ok', 'late', 'none', 'failed', 'drive'].includes(b.state)) lines.push(`Next backup ${backupWhen(b.next)}`);
   if (b.snapshots && b.snapshots.count) lines.push(`${b.snapshots.count} ${b.snapshots.count === 1 ? 'backup' : 'backups'} kept, back to ${shortDate(b.snapshots.oldest)}`);
@@ -4027,11 +4033,14 @@ $('#backup-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = e.target;
   try {
-    await api('PATCH', '/api/admin/settings', { backup: { time: f.time.value, keepDaily: f.keepDaily.value, keepWeekly: f.keepWeekly.value, capGb: f.capGb.value } });
+    await api('PATCH', '/api/admin/settings', { backup: { enabled: f.enabled.checked, time: f.time.value, keepDaily: f.keepDaily.value, keepWeekly: f.keepWeekly.value, capGb: f.capGb.value } });
     flash(f, 'Saved');
     loadBackupAdmin();
   } catch (err) { flash(f, err.message, false); }
 });
+
+// The on/off switch saves itself.
+$('#backup-form').enabled.addEventListener('change', () => $('#backup-form').requestSubmit());
 
 $('#backup-run').addEventListener('click', async () => {
   const f = $('#backup-form');
