@@ -225,6 +225,22 @@ const STEPS = [
     covers: ['roostflix'],
     check: (ctx) => Boolean(ctx.db.settings.jellyfin && ctx.db.settings.jellyfin.url) && ctx.db.settings.roostflix !== false,
   },
+  {
+    id: 'credits-detection',
+    section: 'apps',
+    group: 'Server',
+    title: 'Find the credits so Next episode appears on time',
+    why: 'Roostflix shows its Next episode card 10 seconds into the credits. With credits markers from Jellyfin it lands exactly; without them it appears in the last 40 seconds.',
+    how: [
+      'In Jellyfin, open Dashboard → Plugins → Catalogue and install Intro Skipper (add its repository first if it is not listed). Check it supports your Jellyfin version.',
+      'Restart Jellyfin, then run the plugin\'s scan under Dashboard → Scheduled Tasks.',
+      'Nothing to set in Roost: it reads the markers by itself.',
+    ],
+    optional: true,
+    covers: [],
+    // Lives inside Jellyfin, which Roost does not ask when this list opens.
+    check: () => false,
+  },
 
   // ---------- reaching Roost from anywhere ----------
   {
