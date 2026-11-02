@@ -4,7 +4,7 @@
 // the video's own events and on taps and keys, and does nothing otherwise.
 //  - skip intro / recap / credits, from Jellyfin's Media Segments, or from
 //    chapter names when no segments exist
-//  - "Next episode" card at the credits (asks "Still watching?" after 3 in a row)
+//  - "Next episode" card 10 seconds into the credits (asks "Still watching?" after 3 in a row)
 //  - chapter ticks and chapter names on the scrubber bar
 //  - speed button, sleep timer, J/K/L, < > keys, double-tap to skip 10 seconds
 //  - remembers audio and subtitle language per series
@@ -20,7 +20,7 @@
     if (c && c.accessToken && c.accessToken()) return { base: c.serverAddress().replace(/\/+$/, ''), token: c.accessToken(), userId: c.getCurrentUserId(), deviceId: c.deviceId ? c.deviceId() : null };
     try {
       const s = JSON.parse(localStorage.getItem('jellyfin_credentials') || '{}').Servers[0];
-      return { base: `${location.origin}/jellyfin`, token: s.AccessToken, userId: s.UserId, deviceId: null };
+      return { base: `${location.origin}/jellyfin`, token: s.AccessToken, userId: s.UserId, deviceId: localStorage.getItem('_deviceId2') || null };
     } catch { return null; }
   }
   const auth = (s) => ({ Authorization: `MediaBrowser Client="Roostflix", Device="Browser", DeviceId="roostflix", Version="1", Token="${s.token}"` });
@@ -209,7 +209,14 @@
     auto = true;
     streakSet(streakGet() + 1);
     remember();
-    playNow(id, 0).catch(() => { auto = false; });
+    // If our own route fails (no session found, API refused), never fail silently:
+    // press Jellyfin's own next button, and as a last resort open the episode page.
+    playNow(id, 0).then((ok) => { if (!ok) throw new Error('no session'); }).catch(() => {
+      auto = false;
+      const nb = document.querySelector('.btnNextItem, .btnNextTrack, .btnNext');
+      if (nb && !nb.disabled) nb.click();
+      else location.hash = `#/details?id=${id}`;
+    });
   }
   function showCard() {
     if (!cur || !cur.next || cur.cancelled || !card.hidden || sleep === 'end') return;
@@ -250,11 +257,12 @@
       skip.dataset.type = seg.type;
       skip.hidden = false;
     } else skip.hidden = true;
-    // The card starts at the credits, or in the last 40 seconds when there are none.
+    // The card starts 10 seconds into the credits, or in the last 40 seconds when there are none.
     const outro = cur.segs.find((x) => x.type === 'Outro');
+    const cardAt = outro ? outro.start + 10 : 0;
     const nearEnd = dur > 600 && dur - t <= 40;
-    if (cur.next && ((outro && t >= outro.start) || nearEnd)) showCard();
-    else if (!card.hidden && cur.next && t < (outro ? outro.start : dur - 40) - 2) hideCard(false);
+    if (cur.next && ((outro && t >= cardAt) || nearEnd)) showCard();
+    else if (!card.hidden && cur.next && t < (outro ? cardAt : dur - 40) - 2) hideCard(false);
   }
 
   // ---------- chapters on the scrubber ----------
