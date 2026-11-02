@@ -93,7 +93,10 @@ html.rf-scrolled header.MuiAppBar-root, header.MuiAppBar-root.MuiAppBar-colorDef
 .MuiAppBar-root .MuiToolbar-root { background: none !important; }
 .MuiAppBar-root .MuiIconButton-root, .MuiAppBar-root .MuiButton-root { filter: drop-shadow(0 1px 5px rgba(0, 0, 0, 0.65)); }
 /* Roost's mark in place of Jellyfin's in the bar's logo */
-.MuiAppBar-root img[src*="icon-transparent"] { content: url(icon.svg); border-radius: 0.5rem; }
+.MuiAppBar-root img[src*="icon-transparent"] { content: url(icon.svg); width: 2rem !important; height: 2rem !important; max-width: none; object-fit: contain; border-radius: 0.45rem; margin-right: 0.35rem; }
+/* no Favourites button in the bar */
+/* no SyncPlay (the group of people icon) either */
+.MuiAppBar-root a[href*="home?tab=1"], .MuiAppBar-root button[aria-controls="app-sync-play-menu"] { display: none !important; }
 /* On phones Jellyfin shows only the menu button; put the Roostflix name beside it */
 @media (max-width: 899.95px) {
   .MuiAppBar-root .MuiToolbar-root > .MuiIconButton-root:first-child { order: -2; }
