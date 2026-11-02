@@ -781,7 +781,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // With the Coffee Galaxy gateway on, the sign-in cookie covers every name under
   // the domain, so signing in once works on nova.<domain> too (and signing out clears both).
   function cookieDomain(req) {
-    const domain = coffee.enabled() || galaxyList().some((g) => g.enabled && g.secret) ? (db().settings.tls || {}).domain : '';
+    // Also while the main address is on the tunnel: Roostflix then lives on stream.<domain>.
+    const domain = coffee.enabled() || galaxyList().some((g) => g.enabled && g.secret) || remote.tunnelOn() ? (db().settings.tls || {}).domain : '';
     const host = requestHost(req).toLowerCase();
     return domain && (host === domain || host.endsWith(`.${domain}`)) ? domain : '';
   }
@@ -3955,7 +3956,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         const stream = req.viaTunnel && remote.tunnelOn() ? remote.streamHost() : '';
         if (stream) {
           if (req.method !== 'GET' && req.method !== 'HEAD') throw new HttpError(421, `Open Roostflix at https://${stream}/`);
-          res.writeHead(302, { Location: `https://${stream}${req.url}`, 'Cache-Control': 'no-store' });
+          // The sign-in goes with them: the cookie is re-issued for the whole domain
+          // (an older host-only one is cleared), so stream.<domain> knows who this is.
+          const token = tokenOf(req);
+          const headers = { Location: `https://${stream}${req.url}`, 'Cache-Control': 'no-store' };
+          if (token && currentUser(req)) headers['Set-Cookie'] = sessionCookies(req, token);
+          res.writeHead(302, headers);
           return res.end();
         }
         serveJellyfin(req, res, pathname);

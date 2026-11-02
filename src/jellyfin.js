@@ -331,9 +331,12 @@ class Jellyfin {
 const OPENER_HTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Opening Jellyfin</title><style>html,body{margin:0;height:100%;background:#000;color:#fff;font:15px system-ui,sans-serif}
-body{display:flex;align-items:center;justify-content:center}</style></head>
-<body><p>Opening Jellyfin…</p>
+body{display:flex;align-items:center;justify-content:center}
+p{opacity:0;transition:opacity .4s}</style></head>
+<body><p id="m">Opening Jellyfin…</p>
 <script>
+// Nothing shows on a normal open (a blink of black); the words only appear if it is slow.
+setTimeout(() => { document.getElementById('m').style.opacity = 1; }, 2000);
 (async () => {
   const KEY = 'jellyfin_credentials';
   try {

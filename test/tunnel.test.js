@@ -71,6 +71,8 @@ test('a sign-in through the tunnel gets a Secure cookie, though the hop to Roost
     return { status: r.status, body: parsed };
   };
   await setUpTwoStep(call, admin);
+  // The domain the sign-in cookie can cover (saved, with no certificate asked for).
+  assert.equal((await call('PUT', '/api/admin/tls', { domain: 'roostos.network', token: 'secret-token', renew: false }, admin)).status, 200);
   // The plain home port stays without Secure.
   const home = await direct('POST', '/api/login', { body: { username: 'raven', password: 'correct horse' } });
   assert.doesNotMatch((home.headers['set-cookie'] || []).join(';'), /Secure/);
@@ -85,6 +87,14 @@ test('Roostflix is handed to its direct name when asked for through the tunnel',
   assert.equal(redirected.status, 302);
   assert.equal(redirected.headers.location, 'https://stream.roostos.network/jellyfin/web/index.html?x=1');
   assert.equal((await viaTunnel('POST', '/jellyfin/Sessions', { body: {} })).status, 421);
+  // A signed-in visitor takes the sign-in with them: the cookie is re-issued for the whole domain.
+  const signedIn = await viaTunnel('GET', '/jellyfin/', { headers: { Cookie: admin, Host: 'roostos.network' } });
+  assert.equal(signedIn.status, 302);
+  const cookies = (signedIn.headers['set-cookie'] || []).join('\n');
+  assert.match(cookies, /Domain=roostos\.network/);
+  assert.match(cookies, /Secure/);
+  // Someone not signed in gets the redirect and no cookie.
+  assert.equal((await viaTunnel('GET', '/jellyfin/', { headers: { Host: 'roostos.network' } })).headers['set-cookie'], undefined);
   // The home port is untouched.
   assert.doesNotMatch(String((await direct('GET', '/jellyfin/')).headers.location || ''), /stream\./);
   routeOn = false;
