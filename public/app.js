@@ -2559,11 +2559,17 @@ async function loadMovieRequests() {
   } catch { /* the panel just stays hidden */ }
 }
 
+function navDot(n) {
+  const label = `${n} setup step${n === 1 ? '' : 's'} left (see Setup)`;
+  return el('i', { class: 'nav-dot', title: label, 'aria-label': label });
+}
+
 function renderAdminNav() {
-  const todo = new Set(setupState.steps.filter((s) => !s.done && !s.optional).map((s) => s.section));
+  const todo = new Map();
+  for (const s of setupState.steps) if (!s.done && !s.optional) todo.set(s.section, (todo.get(s.section) || 0) + 1);
   $('#admin-nav').replaceChildren(...ADMIN_SECTIONS.map(([id, name]) => el('a', {
     href: `#/admin/${id}`, class: id === adminState.sec ? 'on' : '', 'aria-current': id === adminState.sec ? 'page' : false,
-  }, name, !['overview', 'setup'].includes(id) && todo.has(id) ? el('i', { class: 'nav-dot', 'aria-label': 'Needs setup' }) : null)));
+  }, name, !['overview', 'setup'].includes(id) && todo.has(id) ? navDot(todo.get(id)) : null)));
   const on = $('#admin-nav a.on');
   if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest', inline: 'center' });
 }
