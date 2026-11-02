@@ -363,3 +363,49 @@ test('"Only Nest photos" shows just the photos that live elsewhere in Nest', asy
   const own = await photos(sam, '?own=1');
   assert.equal(nest.total + own.total, all.total);
 });
+
+test('Clear clutter suggests screenshots, chat saves, tiny pictures and copies, and never deletes by itself', async () => {
+  await call('POST', '/api/admin/users', { username: 'cora', password: 'password1', apps: ['glint'] }, admin);
+  const cora = (await call('POST', '/api/login', { username: 'cora', password: 'password1' })).cookie;
+  const T = Date.UTC(2024, 4, 1, 10);
+  const add = async (name, data, w, h, taken, type) => {
+    const it = await upload(cora, name, data, type ? { type } : {});
+    await preview(cora, it.id, `taken=${taken}&w=${w}&h=${h}`);
+    return it;
+  };
+  const shot = await add('Screenshot 2024-05-01.png', 'a', 1170, 2532, T, 'image/png');
+  const chat = await add('IMG-20240501-WA0003.jpg', 'bb', 1600, 1200, T + 5000);
+  const tiny = await add('sticker.jpg', 'ccc', 300, 300, T + 9000);
+  const real = await add('IMG_1000.jpg', 'dddd', 4032, 3024, T + 20000);
+  const copyA = await add('IMG_2000.jpg', 'eeeee', 4032, 3024, T + 40000);
+  const copyB = await add('IMG_2000 (1).jpg', 'fffff', 4032, 3024, T + 40400);
+  const fav = await add('Screenshot fav.png', 'g', 1170, 2532, T + 60000, 'image/png');
+  await call('POST', '/api/glint/favourite', { ids: [fav.id], on: true }, cora);
+
+  let { body } = await call('GET', '/api/glint/clutter', null, cora);
+  const ids = (g) => body.groups.find((x) => x.id === g).items.map((i) => i.id);
+  assert.deepEqual(body.groups.map((g) => g.id), ['screenshots', 'chat', 'tiny', 'copies']);
+  assert.deepEqual(ids('screenshots'), [shot.id]);
+  assert.deepEqual(ids('chat'), [chat.id]);
+  assert.deepEqual(ids('tiny'), [tiny.id]);
+  assert.equal(ids('copies').length, 1); // the newest of the two stays out of the list
+  assert.ok([copyA.id, copyB.id].includes(ids('copies')[0]));
+  assert.ok(!JSON.stringify(body).includes(real.id));
+
+  // Looking never deletes anything.
+  assert.equal((await photos(cora)).total, 7);
+
+  // Keep: not suggested again.
+  assert.equal((await call('POST', '/api/glint/clutter/keep', { ids: [shot.id] }, cora)).status, 200);
+  ({ body } = await call('GET', '/api/glint/clutter', null, cora));
+  assert.ok(!body.groups.some((g) => g.id === 'screenshots'));
+
+  // Photos in an album are left alone.
+  await call('POST', '/api/glint/albums', { name: 'Trip', ids: [tiny.id] }, cora);
+  ({ body } = await call('GET', '/api/glint/clutter', null, cora));
+  assert.ok(!body.groups.some((g) => g.id === 'tiny'));
+
+  // Other people never see these.
+  assert.equal((await call('GET', '/api/glint/clutter', null, mia)).body.groups.length, 0);
+  assert.equal((await call('GET', '/api/glint/clutter')).status, 401);
+});

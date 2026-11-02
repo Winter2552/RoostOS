@@ -1337,6 +1337,10 @@ button.restore-name:hover { text-decoration: underline; text-underline-offset: 3
 
 .glint-count { font-size: 11px; }
 .glint-note { padding: 16px 2px; font-size: 13px; }
+.gclutter-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin: 22px 0 10px; }
+.gclutter-head h3 { margin: 0 0 2px; font-size: 18px; }
+.gclutter-head p { margin: 4px 0 0; font-size: 14px; }
+.gclutter-head .btn { flex: none; min-height: 44px; }
 .glint-month { margin: 22px 0 10px; font-size: 12px; font-weight: 400; }
 .glint-month:first-child { margin-top: 6px; }
 
