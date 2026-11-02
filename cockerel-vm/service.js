@@ -183,6 +183,7 @@ function status() {
     diskPct: Number((df.match(/(\d+)%/) || [])[1]) || 0,
     runsToday: (read('usage.json', {}).runs) || 0,
     maxRuns: MAX_RUNS,
+    updateApi: 2, // 2 = understands {action:'check'}
     update: updateStatus(),
   };
 }
@@ -221,9 +222,10 @@ const server = http.createServer(async (req, res) => {
       return reply(200, { reply: out });
     }
     if (req.url === '/update') {
-      live('Roost asked me to update myself');
+      const action = data.action === 'check' ? 'check' : 'apply';
+      live(action === 'check' ? 'Checking for a newer version of myself' : 'Roost asked me to update myself');
       fs.mkdirSync(UPDATE_DIR, { recursive: true });
-      fs.writeFileSync(path.join(UPDATE_DIR, 'update-request'), new Date().toISOString());
+      fs.writeFileSync(path.join(UPDATE_DIR, 'update-request'), JSON.stringify({ action }));
       return reply(200, { ok: true });
     }
     if (req.url === '/event') { reply(200, { ok: true }); return void onEvent(data).catch(() => {}); }

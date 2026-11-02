@@ -3692,7 +3692,9 @@ let updateTimer = null;
 let updateAsking = false;
 let updateLast = null;
 let updateReload = false;
+let vmCheckAsked = 0;
 let updateVm = null; // what Cockerel's VM reports, when he is linked
+const vmBehind = () => (updateVm && updateVm.enabled && updateVm.reachable && updateVm.update && updateVm.update.behind > 0 && updateVm.update.state !== 'running' ? updateVm.update.behind : 0);
 const vmUsable = () => Boolean(updateVm && updateVm.enabled && updateVm.reachable && !(updateVm.update && updateVm.update.state === 'running'));
 
 const UPDATE_PHASE = {
@@ -3809,16 +3811,20 @@ function renderUpdate(u) {
 
   const canApply = u.state === 'available' && !u.conflicts.length && !u.ahead && !u.requested;
   $('#update-apply').disabled = !canApply;
-  $('#update-apply').classList.toggle('hidden', u.state !== 'available' && !vmUsable());
-  $('#update-apply').textContent = updateVm && updateVm.enabled ? 'Update all' : 'Update Roost';
-  if (u.state !== 'available' && vmUsable()) $('#update-apply').disabled = Boolean(u.requested || applying);
+  // Which button shows follows what is actually new, from each side's own commit list.
+  const roostNew = u.state === 'available';
+  const vmNew = vmBehind() > 0;
+  const label = roostNew && vmNew ? 'Update all' : roostNew ? 'Update Roost' : 'Update VM';
+  $('#update-apply').classList.toggle('hidden', !roostNew && !vmNew);
+  $('#update-apply').textContent = label;
+  if (!roostNew && vmNew) $('#update-apply').disabled = Boolean(u.requested || applying);
   renderUpdateVm();
   $('#update-check').disabled = ['off', 'stopped', 'checking', 'applying'].includes(u.state) || u.requested;
   $('#update-check').textContent = u.state === 'checking' || (u.requested && u.state !== 'applying') ? 'Checking…' : 'Check now';
   $('#update-buttons').classList.toggle('hidden', updateAsking || applying);
   $('#update-confirm').classList.toggle('hidden', !updateAsking || applying);
   $('#update-confirm-text').textContent = u.state === 'available'
-    ? `Update ${vmUsable() ? 'Roost and Cockerel' : 'Roost'} now? ${plural(u.behind, 'change', 'changes')} will be installed. Roost is unavailable for a minute or two while it restarts, and the old version is put back if the new one fails.`
+    ? `Update ${vmBehind() ? 'Roost and Cockerel' : 'Roost'} now? ${plural(u.behind, 'change', 'changes')} will be installed. Roost is unavailable for a minute or two while it restarts, and the old version is put back if the new one fails.`
     : 'Update Cockerel’s VM now? He restarts for a few seconds.';
 
   clearTimeout(updateTimer);
@@ -3829,12 +3835,16 @@ const VM_WORDS = { running: 'updating', done: 'updated', current: 'up to date', 
 function renderUpdateVm() {
   const box = $('#update-vm');
   const v = updateVm;
-  if (!v || !v.enabled) { box.classList.add('hidden'); return; }
+  if (!v || !v.enabled) { box.classList.add('hidden'); $('#update-vm-changes').classList.add('hidden'); return; }
   const u = v.update;
   let text = 'Cockerel’s VM: not answering';
-  if (v.reachable) text = u ? `Cockerel’s VM: ${VM_WORDS[u.state] || u.state}${u.to ? ` (${u.to})` : ''}${u.state === 'failed' && u.detail ? `. ${u.detail}` : ''}` : 'Cockerel’s VM: ready (first update on the VM is by hand, see Cockerel’s README)';
+  if (v.reachable) text = u ? `Cockerel’s VM: ${u.state === 'idle' ? (u.behind ? `${plural(u.behind, 'change', 'changes')} waiting` : 'up to date') : VM_WORDS[u.state] || u.state}${u.state !== 'idle' && u.to ? ` (${u.to})` : ''}${u.state === 'failed' && u.detail ? `. ${u.detail}` : ''}` : 'Cockerel’s VM: ready (first update on the VM is by hand, see Cockerel’s README)';
   box.textContent = text;
   box.classList.remove('hidden');
+  const list = $('#update-vm-changes');
+  const commits = v.reachable && u && u.behind > 0 ? u.commits || [] : [];
+  list.replaceChildren(...commits.map((c) => el('li', {}, el('span', { class: 'muted', text: c.sha }), el('span', { text: c.subject }))));
+  list.classList.toggle('hidden', !commits.length);
 }
 
 async function loadUpdate() {
@@ -3845,7 +3855,17 @@ async function loadUpdate() {
   }
   try {
     renderUpdate(await api('GET', '/api/admin/update'));
-    api('GET', '/api/admin/cockerel/update').then((v) => { updateVm = v; if (updateLast) renderUpdate(updateLast); }).catch(() => {});
+    api('GET', '/api/admin/cockerel/update').then((v) => {
+      updateVm = v;
+      // Ask the VM to look at GitHub when it hasn't lately (it only looks when asked).
+      const u = v.update;
+      const stale = !u || !u.checkedAt || Date.now() - Date.parse(u.checkedAt) > 10 * 60 * 1000;
+      if (v.enabled && v.reachable && v.canCheck && stale && !(u && u.state === 'running') && Date.now() - vmCheckAsked > 60 * 1000) {
+        vmCheckAsked = Date.now();
+        api('POST', '/api/admin/cockerel/update', { action: 'check' }).catch(() => {});
+      }
+      if (updateLast) renderUpdate(updateLast);
+    }).catch(() => {});
   } catch (err) {
     // While Roost restarts for an update, it simply doesn't answer for a bit.
     if (updateLast && updateLast.state === 'applying' && !err.status) {
@@ -3860,6 +3880,7 @@ $('#update-check').addEventListener('click', async () => {
   const f = $('#update-form');
   try {
     await api('POST', '/api/admin/update/check');
+    if (updateVm && updateVm.enabled && updateVm.reachable && updateVm.canCheck) api('POST', '/api/admin/cockerel/update', { action: 'check' }).catch(() => {});
     loadUpdate();
   } catch (err) { flash(f, err.message, false); }
 });
@@ -3880,8 +3901,8 @@ $('#update-yes').addEventListener('click', async () => {
   updateAsking = false;
   try {
     // Cockerel first: Roost is about to restart and would lose the chance to ask.
-    if (vmUsable()) {
-      try { await api('POST', '/api/admin/cockerel/update'); } catch (err) { flash(f, `Cockerel: ${err.message}`, false); }
+    if (vmBehind()) {
+      try { await api('POST', '/api/admin/cockerel/update', { action: 'apply' }); } catch (err) { flash(f, `Cockerel: ${err.message}`, false); }
     }
     if (updateLast && updateLast.state === 'available') await api('POST', '/api/admin/update/apply', { confirm: true });
     flash(f, 'Starting the update');
