@@ -31,7 +31,11 @@ cp "$HERE/CLAUDE.md" /home/cockerel/cockerel/CLAUDE.md
 chown cockerel:cockerel /home/cockerel/cockerel/CLAUDE.md
 chmod +x /opt/cockerel/*.sh /opt/cockerel/tool.js
 ln -sf /opt/cockerel/tool.js /usr/local/bin/cockerel-tool
+ln -sf /opt/cockerel/watch.sh /usr/local/bin/cockerel-watch
 cp "$HERE/cockerel.service" /etc/systemd/system/cockerel.service
+install -d -m 755 /etc/xdg/autostart
+cp "$HERE/cockerel-watch.desktop" /etc/xdg/autostart/cockerel-watch.desktop
+cp "$HERE/cockerel-watch.desktop" /usr/share/applications/cockerel-watch.desktop
 
 if [ ! -f /etc/cockerel/env ]; then
   SECRET="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"

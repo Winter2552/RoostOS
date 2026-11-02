@@ -96,7 +96,7 @@ Snapshot the VM before big changes and weekly. Use the VM app's snapshot or back
 
 ## The desktop and browser
 
-`setup-vm.sh` installs XFCE and Chromium. The desktop shows in the ZimaOS VM console, so you can watch what is happening on the screen. Claude does not click or type in the browser. His `browse` command opens a page in a headless Chromium and reads back the text, for shops and sites that need JavaScript; it is https only and refuses addresses on a network.
+`setup-vm.sh` installs XFCE and Chromium. The desktop shows in the ZimaOS VM console. A **Cockerel live** window opens by itself when the desktop starts (or run `cockerel-watch`): one line per thing he does, such as a message from Roost, each tool he runs and when he finishes. It is a plain log file (`/var/log/cockerel/live.log`), so it costs nothing while he sleeps. Claude does not click or type in the browser. His `browse` command opens a page in a headless Chromium and reads back the text, for shops and sites that need JavaScript; it is https only and refuses addresses on a network.
 
 ## As a personal assistant
 
