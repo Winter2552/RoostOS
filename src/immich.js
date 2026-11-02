@@ -23,7 +23,7 @@ const MAX_FIELD = 64 * 1024;
 
 // The version the app is told the server is. Immich's app warns when it
 // disagrees too much with the one it was built for, so it can be changed.
-const DEFAULT_VERSION = '2.7.5';
+const DEFAULT_VERSION = '3.3.5';
 function parseVersion(text) {
   const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(text || DEFAULT_VERSION));
   return { major: +m[1], minor: +m[2], patch: +m[3] };
