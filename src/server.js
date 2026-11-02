@@ -404,7 +404,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // The free Immich phone app backing up to Glint (see src/immich.js).
   const immich = new ImmichApi({
     photoBackup,
-    log: (line) => console.log(`Immich app asked for something Roost does not answer: ${line}`),
+    log: (line) => console.log(`Immich app: ${line}`),
     signIn: (req, name, secret) => {
       const ip = clientIp(req, trustProxy);
       if (!limiter.allow(ip)) throw new HttpError(429, 'Too many attempts, wait a few minutes');

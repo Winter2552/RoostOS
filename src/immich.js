@@ -23,7 +23,7 @@ const MAX_FIELD = 64 * 1024;
 
 // The version the app is told the server is. Immich's app warns when it
 // disagrees too much with the one it was built for, so it can be changed.
-const DEFAULT_VERSION = '2.7.5';
+const DEFAULT_VERSION = '3.3.5';
 function parseVersion(text) {
   const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(text || DEFAULT_VERSION));
   return { major: +m[1], minor: +m[2], patch: +m[3] };
@@ -184,7 +184,15 @@ class ImmichApi {
     send(res, out.code, out.body);
   }
 
+  // Sign-ins and anything that fails are logged (`docker logs roost`), so a phone that won't connect shows where it stops.
   async handle(req, res, pathname, params) {
+    res.once('finish', () => {
+      if (res.statusCode >= 300 || pathname === '/api/auth/login' || pathname === '/api/users/me') this.log(`${req.method} ${pathname} -> ${res.statusCode}`);
+    });
+    return this.answer(req, res, pathname, params);
+  }
+
+  async answer(req, res, pathname, params) {
     const m = req.method;
     // Open to anyone who can reach the address, like Immich's own: the app checks them before signing in.
     if (m === 'GET' && pathname === '/api/server/ping') return send(res, 200, { res: 'pong' });
@@ -226,7 +234,6 @@ class ImmichApi {
     }
     if (pathname === '/api/sync/ack') return send(res, m === 'GET' ? 200 : 204, m === 'GET' ? [] : undefined);
     if (m === 'GET' && pathname === '/api/albums') return send(res, 200, []);
-    this.log(`${m} ${pathname}${params.toString() ? '?…' : ''}`);
     throw new HttpError(404, 'Not found');
   }
 }
