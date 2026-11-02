@@ -187,7 +187,7 @@ class ImmichApi {
   // Sign-ins and anything that fails are logged (`docker logs roost`), so a phone that won't connect shows where it stops.
   async handle(req, res, pathname, params) {
     res.once('finish', () => {
-      if (res.statusCode >= 300 || pathname === '/api/auth/login' || pathname === '/api/users/me') this.log(`${req.method} ${pathname} -> ${res.statusCode}`);
+      if (res.statusCode >= 300 || pathname === '/api/auth/login' || pathname === '/api/users/me') this.log(`${req.method} ${pathname} -> ${res.statusCode}${res.statusCode === 401 ? ` (headers sent: ${Object.keys(req.headers).join(', ')})` : ''}`);
     });
     return this.answer(req, res, pathname, params);
   }

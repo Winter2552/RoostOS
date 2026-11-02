@@ -80,7 +80,7 @@ test('the Immich app can find Roost and sign in with a username or a backup key'
   assert.equal(ok.body.userEmail, 'sam@roost');
 
   // Every way the app might send its token.
-  for (const headers of [{ Authorization: `Bearer ${ok.body.accessToken}` }, { 'x-immich-user-token': ok.body.accessToken }, { 'x-api-key': ok.body.accessToken }]) {
+  for (const headers of [{ Authorization: `Bearer ${ok.body.accessToken}` }, { 'x-immich-user-token': ok.body.accessToken }, { 'x-api-key': ok.body.accessToken }, { Cookie: `immich_is_authenticated=true; immich_access_token=${ok.body.accessToken}` }]) {
     const me = await fetch(`${base}/api/users/me`, { headers });
     assert.equal(me.status, 200);
     assert.equal((await me.json()).name, 'sam');
@@ -162,8 +162,8 @@ test('failed requests and sign-ins from the app are logged', async () => {
   } finally {
     console.log = real;
   }
-  assert.ok(lines.includes('Immich app: POST /api/auth/login -> 401'), lines.join('|'));
-  assert.ok(lines.includes('Immich app: GET /api/albums/x -> 401'), lines.join('|'));
+  assert.ok(lines.some((l) => l.startsWith('Immich app: POST /api/auth/login -> 401')), lines.join('|'));
+  assert.ok(lines.some((l) => l.startsWith('Immich app: GET /api/albums/x -> 401 (headers sent: ')), lines.join('|'));
 });
 
 test('things the app asks for that Roost does not answer are a plain 404', async () => {

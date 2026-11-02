@@ -424,9 +424,9 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       return { user, token: keyOk ? secret : sessions.create(user.id, { kind: 'app', name: 'Immich app' }) };
     },
     userFor: (req) => {
-      // The app sends its token as a Bearer, as x-immich-user-token or as x-api-key, depending on its version.
+      // The app sends its token as a Bearer, as x-immich-user-token, as x-api-key or as Immich's own cookie, depending on its version.
       if (!req.headers.authorization) {
-        const t = req.headers['x-immich-user-token'] || req.headers['x-api-key'];
+        const t = req.headers['x-immich-user-token'] || req.headers['x-api-key'] || cookieValues(req, 'immich_access_token')[0];
         if (t) req.headers.authorization = `Bearer ${t}`;
       }
       const user = requireUser(req);
