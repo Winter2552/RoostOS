@@ -77,6 +77,15 @@ test('the Immich app can find Roost and sign in with a username or a backup key'
   const ok = await call('POST', '/api/auth/login', { email: 'Sam@roost', password: 'password1' });
   assert.equal(ok.status, 201);
   assert.match(ok.body.accessToken, /^[0-9a-f]{64}$/);
+  // Like Immich's server, the sign-in also sets its three cookies (the phone app's next requests rely on them).
+  const raw = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'sam@roost', password: 'password1' }) });
+  const cookies = raw.headers.getSetCookie();
+  assert.deepEqual(cookies.map((c) => c.split('=')[0]).sort(), ['immich_access_token', 'immich_auth_type', 'immich_is_authenticated']);
+  const set = Object.fromEntries(cookies.map((c) => [c.split('=')[0], c]));
+  assert.match(set.immich_access_token, /^immich_access_token=[0-9a-f]{64}; Path=\/; Max-Age=\d+; SameSite=Lax; HttpOnly$/);
+  assert.doesNotMatch(set.immich_is_authenticated, /HttpOnly/);
+  const jar = cookies.map((c) => c.split(';')[0]).join('; ');
+  assert.equal((await fetch(`${base}/api/users/me`, { headers: { Cookie: jar } })).status, 200);
   assert.equal(ok.body.userEmail, 'sam@roost');
 
   // Every way the app might send its token.

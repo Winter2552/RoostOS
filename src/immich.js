@@ -120,7 +120,8 @@ async function readUpload(req, onFile) {
 
 class ImmichApi {
   // signIn(req, name, secret) -> { user, token }; userFor(req) -> user (both throw HttpError).
-  constructor({ photoBackup, signIn, userFor, toUser, version, log = () => {} }) {
+  constructor({ photoBackup, signIn, userFor, toUser, isSecure = () => false, version, log = () => {} }) {
+    this.isSecure = isSecure;
     this.photoBackup = photoBackup;
     this.signIn = signIn;
     this.userFor = userFor;
@@ -203,14 +204,20 @@ class ImmichApi {
     if (m === 'POST' && pathname === '/api/auth/login') {
       const body = await readJson(req, 16 * 1024);
       const { user, token } = this.signIn(req, body.email, body.password);
+      // Immich's server also hands the token back in cookies, and its phone app relies on them for its next requests.
+      const cookie = (name, value, httpOnly, maxAge) => `${name}=${value}; Path=/; Max-Age=${maxAge}; SameSite=Lax${httpOnly ? '; HttpOnly' : ''}${this.isSecure(req) ? '; Secure' : ''}`;
+      const year = 400 * 86400;
       return send(res, 201, {
         accessToken: token, userId: uuid(user.id), userEmail: `${user.username}@roost`, name: user.displayName || user.username,
         isAdmin: user.role === 'admin', isOnboarded: true, profileImagePath: '', shouldChangePassword: false,
-      });
+      }, { 'Set-Cookie': [cookie('immich_access_token', token, true, year), cookie('immich_auth_type', 'password', true, year), cookie('immich_is_authenticated', 'true', false, year)] });
     }
     const user = this.userFor(req);
     if (m === 'POST' && pathname === '/api/auth/validateToken') return send(res, 200, { authStatus: true });
-    if (m === 'POST' && pathname === '/api/auth/logout') return send(res, 200, { successful: true, redirectUri: '/auth/login?autoLaunch=0' });
+    if (m === 'POST' && pathname === '/api/auth/logout') {
+      const gone = ['immich_access_token', 'immich_auth_type', 'immich_is_authenticated'].map((n) => `${n}=; Path=/; Max-Age=0`);
+      return send(res, 200, { successful: true, redirectUri: '/auth/login?autoLaunch=0' }, { 'Set-Cookie': gone });
+    }
     if (m === 'GET' && pathname === '/api/users/me') return send(res, 200, this.userView(user));
     if (m === 'GET' && pathname === '/api/users/me/preferences') return send(res, 200, this.preferences());
     if (m === 'POST' && pathname === '/api/assets') return this.upload(req, res, user);

@@ -411,6 +411,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // The free Immich phone app backing up to Glint (see src/immich.js).
   const immich = new ImmichApi({
     photoBackup,
+    isSecure: (req) => secure(req),
     log: (line) => console.log(`Immich app: ${line}`),
     signIn: (req, name, secret) => {
       const ip = clientIp(req, trustProxy);
