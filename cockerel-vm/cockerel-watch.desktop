@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Cockerel live
+Comment=Shows what Cockerel is doing
+Exec=xfce4-terminal --maximize --title="Cockerel live" --command=/opt/cockerel/watch.sh
+Terminal=false

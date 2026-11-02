@@ -13,6 +13,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const lib = require('./lib');
+const { live, describe, clip } = require('./live');
 
 const HOME = process.env.COCKEREL_HOME || path.join(os.homedir(), 'cockerel');
 const STATE = path.join(HOME, 'state');
@@ -75,17 +76,29 @@ function runClaude(prompt, mode = 'media', off = []) {
     write('usage.json', usage);
     busy = true;
     try {
+      live(`Working on: ${clip(prompt.split('\n')[0], 120)} (${mode})`);
       return await new Promise((resolve) => {
-        const args = ['-p', prompt, '--model', MODEL, '--output-format', 'json', '--max-turns', '15', '--allowedTools', ...allowedFor(mode, off)];
+        // stream-json prints each step as it happens, so the VM window can follow along.
+        const args = ['-p', prompt, '--model', MODEL, '--output-format', 'stream-json', '--verbose', '--max-turns', '15', '--allowedTools', ...allowedFor(mode, off)];
         const child = spawn('claude', args, { cwd: HOME, env: { ...process.env, PATH: `${path.dirname(TOOL)}:${process.env.PATH}` } });
-        let out = '';
+        let buf = '';
+        let result = '';
         let err = '';
+        const take = (line) => {
+          if (!line.trim()) return;
+          const shown = describe(line);
+          if (shown) shown.split('\n').forEach(live);
+          try { const ev = JSON.parse(line); if (ev.type === 'result') result = String(ev.result || '').trim(); } catch { /* not JSON */ }
+        };
         const timer = setTimeout(() => child.kill('SIGKILL'), RUN_TIMEOUT_MS);
-        child.stdout.on('data', (d) => { out += d; });
+        child.stdout.on('data', (d) => { buf += d; const lines = buf.split('\n'); buf = lines.pop(); lines.forEach(take); });
         child.stderr.on('data', (d) => { err += d; });
         child.on('close', () => {
           clearTimeout(timer);
-          try { resolve(String(JSON.parse(out).result || '').trim() || 'Done.'); } catch { resolve(`I couldn't finish that${err ? ` (${err.trim().slice(-200)})` : ''}. Is Claude signed in on my VM?`); }
+          take(buf);
+          if (result) { live('Finished.'); resolve(result); return; }
+          live('Could not finish that run.');
+          resolve(`I couldn't finish that${err ? ` (${err.trim().slice(-200)})` : ''}. Is Claude signed in on my VM?`);
         });
         child.on('error', () => resolve('Claude is not installed on my VM yet.'));
       });
@@ -116,6 +129,7 @@ function tool(...args) {
 
 // ---------- what arrives ----------
 async function onEvent(e) {
+  live(`Heard from Roost: ${clip(e.title)}${e.body ? ` - ${clip(e.body, 90)}` : ''}`);
   const events = (fs.existsSync(path.join(STATE, 'events.jsonl')) ? fs.readFileSync(path.join(STATE, 'events.jsonl'), 'utf8').trim().split('\n') : []).filter(Boolean);
   events.push(JSON.stringify({ at: new Date().toISOString(), title: e.title, body: e.body }));
   fs.mkdirSync(STATE, { recursive: true });
@@ -131,6 +145,7 @@ async function onEvent(e) {
 }
 
 async function onAnswer({ askId, choice }) {
+  live(`Raven answered ${clip(askId, 40)}: ${clip(choice, 30)}`);
   const yes = /^(yes|download)/i.test(choice);
   const pending = read('pending.json', {});
   const approvals = read('approvals.json', {});
@@ -181,12 +196,14 @@ const server = http.createServer(async (req, res) => {
     if (req.method !== 'POST') return reply(404, { error: 'no such thing' });
     if (req.url === '/chat') {
       const text = String(data.text || '').slice(0, 2000);
+      live('Raven said something in chat');
       remember('Raven', text);
       const out = await runClaude(promptFor(`Raven says: ${text}`, data.context), modeFor(text), groupsOff(data.toolsOff));
       remember('Cockerel', out);
       return reply(200, { reply: out });
     }
     if (req.url === '/run') {
+      live('Roost woke me for a scheduled job');
       // A job Roost woke him for (the morning brief, a repeating job). No chat history.
       const out = await runClaude(`${String(data.prompt || '').slice(0, 3000)}${data.context ? `\n\n${String(data.context).slice(0, 4000)}` : ''}`, 'scheduled', groupsOff(data.toolsOff));
       return reply(200, { reply: out });
@@ -202,7 +219,7 @@ const server = http.createServer(async (req, res) => {
 if (require.main === module) {
   if (SECRET.length < 24) { console.error('COCKEREL_SECRET must be at least 24 characters.'); process.exit(1); }
   fs.mkdirSync(STATE, { recursive: true });
-  server.listen(PORT, BIND, () => console.log(`Cockerel listening on ${BIND}:${PORT}`));
+  server.listen(PORT, BIND, () => { console.log(`Cockerel listening on ${BIND}:${PORT}`); live(`Awake and listening on port ${PORT}`); });
 }
 
 module.exports = { server, modeFor, allowedFor };

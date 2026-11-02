@@ -50,9 +50,10 @@ test('the service answers only signed requests and runs Claude for chat', async 
   const path = require('path');
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cockerel-home-'));
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'cockerel-bin-'));
-  fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\necho \'{"result":"Hello Raven"}\'\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\necho \'{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cockerel-tool calendar today"}}]}}\'\necho \'{"type":"result","result":"Hello Raven"}\'\n', { mode: 0o755 });
   const secret = 'service-test-secret-0123456789';
   process.env.COCKEREL_HOME = home;
+  process.env.COCKEREL_LIVE_LOG = path.join(home, 'live.log');
   process.env.COCKEREL_SECRET = secret;
   process.env.PATH = `${bin}:${process.env.PATH}`;
   process.env.MAX_RUNS_PER_DAY = '2';
@@ -70,6 +71,9 @@ test('the service answers only signed requests and runs Claude for chat', async 
     assert.ok(['up', 'down'].includes(st.body.vpn));
     assert.equal((await ask('POST', '/chat', { text: 'hi' })).body.reply, 'Hello Raven');
     assert.equal((await ask('POST', '/chat', { text: 'again' })).body.reply, 'Hello Raven');
+    const liveText = fs.readFileSync(path.join(home, 'live.log'), 'utf8');
+    assert.match(liveText, /> Bash: cockerel-tool calendar today/, 'the live log shows his steps');
+    assert.match(liveText, /Finished\./);
     assert.match((await ask('POST', '/chat', { text: 'third' })).body.reply, /used my 2 runs/, 'daily cap');
   } finally {
     server.close();
