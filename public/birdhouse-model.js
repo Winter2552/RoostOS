@@ -339,7 +339,12 @@
   function clean(input) {
     const id = input && TEMPLATES[input.template] ? input.template : 'bookshelf';
     const t = TEMPLATES[id];
-    if (t.custom) return { template: id, style: 'panel', boards: sanitizeBoards(input && input.boards).boards, notes: plain(input && input.notes, 1500) };
+    if (t.custom) {
+      const out = { template: id, style: 'panel', boards: sanitizeBoards(input && input.boards).boards, notes: plain(input && input.notes, 1500) };
+      const st = cleanStock(input && input.stock);
+      if (st) out.stock = st;
+      return out;
+    }
     const out = { template: id };
     for (const [key, lim] of Object.entries(t.limits)) {
       let v = Math.round(Number(input && input[key]));
@@ -355,6 +360,14 @@
 
 
   // ---- Free-form boards ----
+  // The board or sheet a person says they have, so a design can be held to it:
+  // { w, l, t, qty } in mm (width, length, thickness), or null.
+  function cleanStock(s) {
+    if (!s || typeof s !== 'object') return null;
+    const [a, b, t, q] = [s.w, s.l, s.t, s.qty === undefined ? 1 : s.qty].map((v) => Math.round(Number(v)));
+    if (![a, b, t, q].every(Number.isFinite) || a < 20 || b < 20 || t < 1 || a > 3000 || b > 3000 || t > 100 || q < 1) return null;
+    return { w: Math.min(a, b), l: Math.max(a, b), t, qty: Math.min(q, 20) };
+  }
   const MAX_BOARDS = 120;
   const plain = (v, n) => String(v === undefined || v === null ? '' : v).replace(/[\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
 
@@ -442,6 +455,7 @@ Rules for custom designs:
 - Build it the way a woodworker would: a frame of timber posts and rails (for example 44 x 44 or 44 x 94 mm) with thin plywood (6 to 18 mm) fixed to it as skins, shelves resting on rails, back panels or braces to stop it racking. Do not just butt big sheets together.
 - The piece stands on the floor (its lowest boards start at z = 0). Every board must touch the boards it is fixed to, and nothing may float or pass through another board.
 - Use standard stock: sheets 2440 x 1220 mm, timber up to 2400 mm long, usual plywood and timber thicknesses.
+- If I say what board or sheet I have (for example "a 700 x 600 x 18 mm pine board"), that is all the wood there is for the boards of that thickness. Add "stock": {"w": 600, "l": 700, "t": 18, "qty": 1} to the JSON (width, length, thickness in mm, and how many) and make every board of that thickness, cleats and uprights included, fit inside it: add up the area of the cut parts plus about 3 mm saw cut around each, check it is no more than the board's area, and check the parts really pack onto it. If the idea cannot be made from that board, make it smaller or simpler instead of using more wood. Pegs, dowels and other thicknesses are bought separately.
 - Give identical boards the same name, a short name each (at most 40 characters), and a "join" saying how it is fixed.
 - At most 100 boards. Make it stable: wide enough for its height, and say in the notes if it should be fixed to a wall.
 - "notes" is 2 to 5 sentences: why it is built this way and anything to watch for.`;
@@ -450,7 +464,7 @@ Rules for custom designs:
   // A design as the JSON a designer replies with, so it can be sent back for changes.
   function describeDesign(d, name) {
     const t = TEMPLATES[d.template];
-    if (t.custom) return JSON.stringify({ template: 'custom', name, notes: d.notes || '', boards: d.boards.map((b) => ({ name: b.name, x: b.x, y: b.y, z: b.z, w: b.w, d: b.d, h: b.h, join: b.join })) });
+    if (t.custom) return JSON.stringify({ template: 'custom', name, notes: d.notes || '', ...(d.stock ? { stock: d.stock } : {}), boards: d.boards.map((b) => ({ name: b.name, x: b.x, y: b.y, z: b.z, w: b.w, d: b.d, h: b.h, join: b.join })) });
     const sizes = {};
     for (const k of Object.keys(t.limits)) sizes[k] = d[k];
     return JSON.stringify({ template: d.template, name, sizes });
@@ -478,7 +492,9 @@ Rules for custom designs:
       if (boards.length < 2) return { ok: false, error: 'a custom design needs at least two boards' };
       const problems = boardProblems(boards);
       if (dropped) problems.push(`${plural(dropped, 'board')} could not be used (bad sizes or over the ${MAX_BOARDS} limit).`);
-      return { ok: true, d: clean({ template: 'custom', boards, notes: data.notes }), name, notes: plain(data.notes, 1500), problems };
+      const d = clean({ template: 'custom', boards, notes: data.notes, stock: data.stock });
+      problems.push(...fitProblems(d));
+      return { ok: true, d, name, notes: plain(data.notes, 1500), problems };
     }
     const sizes = data.sizes && typeof data.sizes === 'object' ? data.sizes : {};
     const set = {};
@@ -558,8 +574,12 @@ Rules for custom designs:
     const pieces = [];
     rows.forEach((r, part) => { for (let i = 0; i < r.qty; i++) pieces.push({ part, l: r.length, w: r.width, t: r.thickness }); });
     // Narrow boards (strips) come from lengths of timber; the rest from sheets.
-    const strips = pieces.filter((p) => p.w <= STRIP);
-    const flats = pieces.filter((p) => p.w > STRIP);
+    const strip = opts && opts.strip === false ? 0 : STRIP;
+    const noBuy = !!(opts && opts.noBuy); // only the stock given: what does not fit is reported, never bought
+    const unplaced = [];
+    const other = [];
+    const strips = pieces.filter((p) => p.w <= strip);
+    const flats = pieces.filter((p) => p.w > strip);
     flats.sort((a, b) => b.t - a.t || b.l - a.l || b.w - a.w);
     const have = ownedStock(opts && opts.stock);
     // Wood already in the workshop goes in first, biggest pieces first.
@@ -607,6 +627,7 @@ Rules for custom designs:
         if (done) break;
       }
       if (done) continue;
+      if (noBuy) { (sheets.some((sh) => sh.thickness === p.t) ? unplaced : other).push(p.part); continue; }
       const ways = waysFor(p, SW, SH);
       if (!ways.length) { tooBig.push({ part: p.part, w: p.l, h: p.w }); continue; }
       const [w, h] = ways[0];
@@ -619,9 +640,40 @@ Rules for custom designs:
     return {
       width: SW, height: SH,
       sheets: cut.map((sh) => ({ thickness: sh.thickness, width: sh.W, height: sh.H, owned: sh.owned, pieces: sh.pieces })),
-      tooBig, area, used,
+      tooBig, area, used, unplaced, other,
       timber: timber.map((g) => ({ width: g.width, thickness: g.thickness, stock: g.stock, bars: g.bars.filter((b) => b.pieces.length).map((b) => ({ len: b.len, owned: b.owned, pieces: b.pieces })) })).filter((g) => g.bars.length),
     };
+  }
+
+  // Does the design fit the board the person said they have? Only that stock is
+  // used (nothing is bought) and the saw cut is counted. Without a stated board
+  // it is null.
+  //   -> { stock, sheets, unplaced: [{ name, qty }], other: [{ name, qty, thickness }],
+  //        need, have, over }  (areas in m2; over > 0 means not enough board)
+  function fit(d) {
+    d = clean(d);
+    const st = d.stock;
+    if (!st) return null;
+    const l = layout(d, { stock: [{ kind: 'sheet', w: st.w, l: st.l, thick: st.t, qty: st.qty }], sheet: [st.l, st.w], noBuy: true, strip: false });
+    const rows = parts(d);
+    const count = (idx) => { const m = new Map(); for (const i of idx) m.set(i, (m.get(i) || 0) + 1); return [...m].map(([i, qty]) => ({ name: rows[i].name, qty, thickness: rows[i].thickness })); };
+    let need = 0;
+    for (const r of rows) if (r.thickness === st.t) need += r.qty * (r.length + KERF) * (r.width + KERF);
+    const have = st.qty * st.w * st.l;
+    return { stock: st, layout: l, sheets: l.sheets, unplaced: count(l.unplaced), other: count(l.other), need: need / 1e6, have: have / 1e6, over: Math.max(0, need - have) / 1e6 };
+  }
+
+  // Plain sentences for what a stated board cannot give, empty when all is well.
+  function fitProblems(d) {
+    const f = fit(d);
+    if (!f) return [];
+    const out = [];
+    const st = f.stock;
+    const of = (list) => list.map((u) => `${u.name}${u.qty > 1 ? ` × ${u.qty}` : ''}`).join(', ');
+    const board = `${st.qty > 1 ? `${st.qty} × ` : ''}${st.l} × ${st.w} × ${st.t} mm`;
+    if (f.unplaced.length) out.push(`Does not fit the ${board} board you have: ${of(f.unplaced)}. The parts that need cutting from it come to ${f.need.toFixed(2)} m² (with saw cuts) and the board is ${f.have.toFixed(2)} m²${f.over > 0 ? `, over by ${f.over.toFixed(2)} m²` : ', so they will not pack into it'}. Make it smaller or get more board.`);
+    if (f.other.length) out.push(`Needs different wood than the ${st.t} mm board: ${of(f.other)} (buy separately).`);
+    return out;
   }
 
   // Workshop stock cleaned for the layout: sheets (thickness, width, length)
@@ -682,6 +734,7 @@ Rules for custom designs:
     const out = [];
     if (d.template === 'custom') {
       for (const text of boardProblems(d.boards)) out.push({ level: 'warn', text });
+      for (const text of fitProblems(d)) out.push({ level: 'warn', text });
       const z = size(d);
       if (z.height / Math.min(z.width, z.depth) > 4) out.push({ level: 'note', tip: true, text: 'Tall for its footprint: fix it to the wall with an anti-tip bracket; one is on the shopping list.' });
       return out;
@@ -796,7 +849,7 @@ Rules for custom designs:
     return { template, set, unused };
   }
 
-  const exported = { TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, layout, materials, project, parse, ownedStock, checks, sanitizeBoards, boardProblems, designInstructions, readDesign, describeDesign, reviseRequest };
+  const exported = { fit, fitProblems, cleanStock, TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, layout, materials, project, parse, ownedStock, checks, sanitizeBoards, boardProblems, designInstructions, readDesign, describeDesign, reviseRequest };
   if (typeof module !== 'undefined' && module.exports) module.exports = exported;
   else window.birdhouseModel = exported;
 })();

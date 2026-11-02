@@ -342,3 +342,17 @@ test('boards that pass through each other are flagged, and replies without a des
   assert.ok(!model.IDS.includes('custom'));
   assert.match(model.designInstructions(), /"template": "custom"/);
 });
+
+test('a stated board is the only stock: what does not fit is flagged with an area shortfall', () => {
+  const b = (name, w, d, h, y = 0) => ({ name, x: 0, y, z: 0, w, d, h, join: 'glued' });
+  const boards = [b('Shelf', 600, 170, 18), b('Shelf', 600, 170, 18, 200), b('Shelf', 600, 170, 18, 400), ...Array.from({ length: 6 }, (_, i) => b('Cleat', 560, 44, 18, 600 + i * 50)), b('Peg', 12, 12, 60)];
+  const d = model.clean({ template: 'custom', boards, stock: { w: 600, l: 700, t: 18 } });
+  const f = model.fit(d);
+  assert.ok(f.over > 0.04 && f.over < 0.1);
+  assert.deepEqual(f.unplaced.map((u) => u.name), ['Cleat']);
+  assert.deepEqual(f.other.map((u) => u.name), ['Peg']);
+  assert.ok(model.fitProblems(d)[0].includes('over by'));
+  // Without a stated board there is nothing to check; a design that fits is quiet.
+  assert.equal(model.fit(model.clean({ template: 'custom', boards })), null);
+  assert.deepEqual(model.fitProblems(model.clean({ template: 'custom', boards: boards.slice(0, 3), stock: { w: 600, l: 700, t: 18 } })), []);
+});

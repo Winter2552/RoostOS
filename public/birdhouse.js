@@ -368,7 +368,9 @@
   // The boards laid out on sheets of stock: what to cut from where, using the
   // wood already in the workshop first.
   function drawSheets() {
-    const l = layout();
+    // A board the design says it is made from is the only stock: nothing is added.
+    const f = model.fit(S.d);
+    const l = f ? f.layout : layout();
     const box = h('div', { class: 'bh-sheets' });
     l.sheets.forEach((sheet, n) => {
       const root = svg('svg', { viewBox: `-20 -20 ${sheet.width + 40} ${sheet.height + 40}`, role: 'img', 'aria-label': `Sheet ${n + 1}, ${spoken(sheet.thickness)} board, ${plural(sheet.pieces.length, 'piece')}${sheet.owned ? ', from your workshop' : ''}` });
@@ -400,6 +402,7 @@
     if (l.timber.length) { const n = l.timber.reduce((a, g) => a + g.bars.length, 0); bits.push(`${plural(n, 'length')} of timber`); }
     box.append(h('p', { class: 'bh-note', text: `${bits.join(' · ')} · 3 mm saw cut between boards · letters match the cut list` }));
     if (l.tooBig.length) box.append(h('p', { class: 'bh-warn', text: `Too big for a ${fmt(l.width)} × ${fmt(l.height)} sheet: ${[...new Set(l.tooBig.map((t) => letter(t.part)))].join(', ')}. Make it smaller or join boards.` }));
+    if (f) for (const text of model.fitProblems(S.d)) box.append(h('p', { class: 'bh-warn', text: `Careful: ${text}` }));
     return box;
   }
 
@@ -416,12 +419,13 @@
   function cutList() {
     const rows = model.parts(S.d);
     const area = rows.reduce((a, r) => a + r.qty * r.length * r.width, 0) / 1e6;
+    const fit = model.fit(S.d);
     return h('div', {},
       h('h3', { class: 'bh-h', text: 'Cut list' }),
       h('table', { class: 'bh-table' },
         h('thead', {}, h('tr', {}, ...['', 'Part', 'Qty', 'Length', 'Width', 'Thick'].map((t) => h('th', { text: t })))),
         h('tbody', {}, ...rows.map((r, i) => h('tr', {}, h('td', { class: 'bh-key', text: letter(i) }), h('td', {}, r.name, h('br'), h('span', { class: 'bh-age', text: r.join })), h('td', { text: String(r.qty) }), h('td', { text: fmt(r.length) }), h('td', { text: fmt(r.width) }), h('td', { text: fmt(r.thickness) }))))),
-      h('p', { class: 'bh-note', text: `${rows.reduce((a, r) => a + r.qty, 0)} boards · ${area.toFixed(2)} m² of board · sizes in ${inch() ? 'inches' : 'mm'}` }));
+      h('p', { class: 'bh-note', text: `${rows.reduce((a, r) => a + r.qty, 0)} boards · ${area.toFixed(2)} m² of board${fit ? ` (your board is ${fit.have.toFixed(2)} m²${fit.over > 0 ? `, over by ${fit.over.toFixed(2)} m²` : ''})` : ''} · sizes in ${inch() ? 'inches' : 'mm'}` }));
   }
 
   function titleBlock() {
