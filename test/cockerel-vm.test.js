@@ -72,6 +72,9 @@ test('the service answers only signed requests and runs Claude for chat', async 
     assert.ok(['up', 'down'].includes(st.body.vpn));
     assert.equal((await ask('POST', '/chat', { text: 'hi' })).body.reply, 'Hello Raven');
     assert.equal((await ask('POST', '/chat', { text: 'again' })).body.reply, 'Hello Raven');
+    assert.equal((await ask('POST', '/update', { action: 'check' })).body.ok, true);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'update', 'update-request'), 'utf8')).action, 'check');
+    assert.equal((await ask('GET', '/status')).body.updateApi, 2);
     assert.equal((await ask('POST', '/update', {})).body.ok, true);
     assert.ok(fs.existsSync(path.join(home, 'update', 'update-request')), 'the root updater is woken by this file');
     fs.writeFileSync(path.join(home, 'update', 'update-status.json'), JSON.stringify({ state: 'done', to: 'abc1234' }));

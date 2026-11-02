@@ -278,6 +278,9 @@ test('"Update all" asks his VM to update itself, for admins only', async () => {
   const hit = sent.slice(before).find((s) => s.url.endsWith('/update'));
   assert.ok(hit, 'the VM was asked');
   assert.match(hit.headers['x-roost-sig'], /^[0-9a-f]{64}$/);
+  const chk = sent.length;
+  assert.equal((await call('POST', '/api/admin/cockerel/update', { action: 'check' }, cookie)).status, 202);
+  assert.equal(sent.slice(chk).find((s) => s.url.endsWith('/update')).body.action, 'check', 'a check is not an update');
   const v = await call('GET', '/api/admin/cockerel/update', null, cookie);
   assert.equal(v.body.enabled, true);
   assert.equal(v.body.reachable, true);
