@@ -40,10 +40,10 @@ async function call(method, url, body, cookie) {
 }
 
 // The body the Immich app sends: text fields first, the file last.
-function multipart(fields, filename, data) {
+function multipart(fields, filename, data, type = 'image/jpeg') {
   const B = '----dart-http-boundary-abc123';
   const parts = Object.entries(fields).map(([k, v]) => Buffer.from(`--${B}\r\ncontent-disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`));
-  parts.push(Buffer.from(`--${B}\r\ncontent-type: image/jpeg\r\ncontent-disposition: form-data; name="assetData"; filename="${filename}"\r\n\r\n`), data, Buffer.from(`\r\n--${B}--\r\n`));
+  parts.push(Buffer.from(`--${B}\r\ncontent-type: ${type}\r\ncontent-disposition: form-data; name="assetData"; filename="${filename}"\r\n\r\n`), data, Buffer.from(`\r\n--${B}--\r\n`));
   return { type: `multipart/form-data; boundary=${B}`, body: Buffer.concat(parts) };
 }
 
@@ -191,4 +191,26 @@ test('a backed-up photo is dated from the phone, so Glint never has to open it t
   const photo = list.find((p) => p.name === 'IMG_0099.JPG');
   assert.ok(photo, 'the photo is in the timeline');
   assert.equal(photo.taken, Date.parse('2017-03-04T05:06:07.000Z'));
+});
+
+test('the hidden half of a Live Photo from the app joins its photo, by name or by the moment it was taken', async () => {
+  const token = (await call('POST', '/api/auth/login', { email: 'sam@roost', password: 'password1' })).body.accessToken;
+  const send = (id, name, data, created, extra = {}) => {
+    const m = multipart({ deviceAssetId: id, deviceId: 'phone-1', fileCreatedAt: created, fileModifiedAt: created, ...extra }, name, Buffer.from(data), /MOV$/.test(name) ? 'video/quicktime' : 'image/heic');
+    return post('/api/assets', { Authorization: `Bearer ${token}`, 'Content-Type': m.type }, m.body);
+  };
+  const T = '2018-08-08T08:08:08.000Z';
+  const T2 = '2018-08-08T09:09:09.000Z';
+  await send('L_A', 'IMG_0200.HEIC', 'still a', T);
+  await send('L_B', 'IMG_0200.MOV', 'clip a', T, { visibility: 'hidden' });
+  await send('L_C', 'IMG_0201.HEIC', 'still c', T2);
+  await send('L_D', 'AAAA-1111.MOV', 'clip d', '2018-08-08T09:09:10.000Z', { visibility: 'hidden' });
+  const sam = (await call('POST', '/api/login', { username: 'sam', password: 'password1' })).cookie;
+  const items = (await call('GET', '/api/glint/photos', null, sam)).body.items;
+  const clips = items.filter((p) => /MOV$/.test(p.name) && p.taken >= Date.parse(T) && p.taken <= Date.parse(T2) + 5000);
+  for (const c of clips) await fetch(`${base}/api/glint/photos/${c.id}/preview?taken=${c.taken}&dur=1.5`, { method: 'PUT', headers: { Cookie: sam, 'Content-Type': 'image/jpeg' }, body: Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4, 0xff, 0xd9]) });
+  const after = (await call('GET', '/api/glint/photos', null, sam)).body.items;
+  const mine = after.filter((p) => p.taken >= Date.parse(T) && p.taken <= Date.parse(T2) + 5000);
+  assert.deepEqual(mine.map((p) => p.name).sort(), ['IMG_0200.HEIC', 'IMG_0201.HEIC']);
+  assert.ok(mine.every((p) => p.live));
 });
