@@ -81,6 +81,20 @@
     return out;
   }
 
+  // Points drawn on the scrubber: the file's chapters, plus where intro, recap
+  // and credits start and end (Intro Skipper stores those as segments, not
+  // chapters, so a file with no chapters still gets marks).
+  const SEG_NAME = { Intro: 'Intro', Recap: 'Recap', Outro: 'Credits', Preview: 'Preview', Commercial: 'Ad' };
+  function scrubMarks(chapters, segs) {
+    const marks = chapters.map((c) => ({ at: c.StartPositionTicks / 1e7, name: c.Name || '' }));
+    const near = (t) => marks.some((m) => Math.abs(m.at - t) < 2);
+    segs.forEach((g) => {
+      if (g.start > 0 && !near(g.start)) marks.push({ at: g.start, name: SEG_NAME[g.type] || '' });
+      if (g.end > 0 && !near(g.end)) marks.push({ at: g.end, name: '' });
+    });
+    return marks.sort((a, b) => a.at - b.at);
+  }
+
   async function load(v) {
     // The id of what this browser is playing comes from its own session.
     let me = null;
@@ -107,6 +121,7 @@
     } catch { /* this Jellyfin has no segments */ }
     if (!cur.segs.length) cur.segs = segmentsFromChapters(cur.chapters, item.RunTimeTicks || 0);
     cur.segs.sort((a, b) => a.start - b.start);
+    cur.marks = scrubMarks(cur.chapters, cur.segs);
     // Next episode, if this is one.
     if (item.Type === 'Episode' && safe(item.SeriesId)) {
       try {
@@ -273,28 +288,29 @@
     const go = () => {
       const slider = document.querySelector('.osdPositionSlider');
       const box = slider && slider.parentElement;
-      if (!box || !cur || !cur.chapters || !cur.item) { if (n++ < 20) setTimeout(go, 500); return; }
+      if (!box || !cur || !cur.marks || !cur.item) { if (n++ < 20) setTimeout(go, 500); return; }
       box.querySelectorAll('.rf-ticks').forEach((e) => e.remove());
       const run = cur.item.RunTimeTicks || 0;
-      if (!run || cur.chapters.length < 2) return;
+      const runS = run / 1e7;
+      if (!run || cur.marks.length < 2) return;
       if (getComputedStyle(box).position === 'static') box.style.position = 'relative';
       const wrap = h('div', 'rf-ticks');
-      cur.chapters.forEach((c) => {
-        if (c.StartPositionTicks <= 0) return;
+      cur.marks.forEach((m) => {
+        if (m.at <= 0) return;
         const t = h('i');
-        t.style.left = `${(c.StartPositionTicks / run) * 100}%`;
+        t.style.left = `${(m.at / runS) * 100}%`;
         wrap.append(t);
       });
       box.append(wrap, tip);
       if (!slider.dataset.rf) {
         slider.dataset.rf = '1';
         const at = (e) => {
-          if (!cur || !cur.chapters.length) return;
+          if (!cur || !cur.marks || !cur.marks.length) return;
           const r = slider.getBoundingClientRect();
           const f = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-          const at = f * run;
+          const at = f * runS;
           let name = '';
-          cur.chapters.forEach((c) => { if (c.StartPositionTicks <= at) name = c.Name || ''; });
+          cur.marks.forEach((m) => { if (m.at <= at) name = m.name; });
           tip.textContent = name;
           tip.hidden = !name;
           tip.style.left = `${f * 100}%`;
