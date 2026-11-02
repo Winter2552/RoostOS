@@ -53,10 +53,21 @@
   // Reading his replies aloud, and talking to him: the browser's own speech
   // features, nothing Roost sends anywhere itself.
   const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private window */ } } };
+  // Phones only let a page speak once a tap has made it speak first, and his
+  // replies arrive later with no tap. So the tap that turns reading on, and each
+  // message sent, says a silent word to unlock it.
+  const unlock = (text = ' ') => {
+    if (!('speechSynthesis' in window)) return;
+    const u = new SpeechSynthesisUtterance(text);
+    if (text === ' ') u.volume = 0;
+    window.speechSynthesis.speak(u);
+  };
   const aloud = (text) => {
     if (store.get('cx-aloud') !== '1' || !('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = navigator.language || 'en-GB';
+    window.speechSynthesis.speak(u);
   };
   function setupVoice() {
     const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -68,7 +79,8 @@
       const on = store.get('cx-aloud') !== '1';
       store.set('cx-aloud', on ? '1' : '0');
       speaker.setAttribute('aria-pressed', String(on));
-      if (!on && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+      if (on) unlock('Reading aloud is on');
+      else if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     });
     if (!Rec) return;
     mic.hidden = false;
@@ -207,6 +219,7 @@
     text = String(text || '').trim();
     if (S.busy || !text) return;
     S.busy = true;
+    if (store.get('cx-aloud') === '1') unlock();
     $('#cx-text').value = '';
     $('#cx-send').disabled = true;
     $('#cx-typing').hidden = false;
