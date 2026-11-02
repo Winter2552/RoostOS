@@ -3761,7 +3761,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
 
   // ---------- Galaxies ----------
 
-  const galaxyList = () => db().settings.galaxies || [];
+  // Function declarations, so the startup uptime check can use them before this point.
+  function galaxyList() { return db().settings.galaxies || []; }
 
   function findGalaxy(id) {
     const g = galaxyList().find((x) => x.id === id);
@@ -3812,7 +3813,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     }));
   }
 
-  const novaHasGalaxies = () => coffee.enabled() || galaxyList().some((g) => g.enabled && g.secret);
+  function novaHasGalaxies() { return coffee.enabled() || galaxyList().some((g) => g.enabled && g.secret); }
 
   // The apps a person sees on the dashboard: theirs, plus Nova as the way in
   // when they were given a galaxy but not Nova itself.
