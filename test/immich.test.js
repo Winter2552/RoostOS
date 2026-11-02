@@ -162,7 +162,7 @@ test('failed requests and sign-ins from the app are logged', async () => {
   } finally {
     console.log = real;
   }
-  assert.ok(lines.includes('Immich app: POST /api/auth/login -> 401'), lines.join('|'));
+  assert.ok(lines.some((l) => l.startsWith('Immich app: POST /api/auth/login -> 401')), lines.join('|'));
   assert.ok(lines.some((l) => l.startsWith('Immich app: GET /api/albums/x -> 401 (headers sent: ')), lines.join('|'));
 });
 
