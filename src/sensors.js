@@ -15,6 +15,7 @@ const STALE_MS = 5 * 60 * 1000;
 // The CPU counter doesn't see the board, memory, SSD or fans, or a spinning
 // drive. These allowances turn it into a rough whole-box figure.
 const BASE_WATTS = 6;
+const MAX_CPU_WATTS = 140;
 const HDD_WATTS = 4;
 
 const DEFAULT_PRICE = 26.84; // per kWh, in the currency's small unit (pence)
@@ -100,7 +101,8 @@ class Sensors {
     const spinning = drives.filter((d) => d.kind === 'HDD' && !d.asleep).length;
 
     const cpuMw = Number(v.power_mw);
-    const cpuWatts = v.power_mw !== undefined && Number.isFinite(cpuMw) ? cpuMw / 1000 : null;
+    // A CPU can't draw this much; it's a glitched counter reading.
+    const cpuWatts = v.power_mw !== undefined && Number.isFinite(cpuMw) && cpuMw >= 0 && cpuMw <= MAX_CPU_WATTS * 1000 ? cpuMw / 1000 : null;
     const temp = Number(v.cpu_temp_mc);
     const fan = Number(v.fan_rpm);
     const hottest = drives
