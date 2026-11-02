@@ -235,7 +235,14 @@ function appIds(db, list) {
 // True when the browser reached Roost over HTTPS: directly, or through a
 // trusted proxy such as Cloudflare, which talks HTTPS to the browser.
 function isSecure(req, trustProxy) {
-  return !!req.socket.encrypted || (trustProxy && req.headers['x-forwarded-proto'] === 'https');
+  return !!req.socket.encrypted || !!req.viaTunnel || (trustProxy && req.headers['x-forwarded-proto'] === 'https');
+}
+
+// Traffic from outside the house: HTTPS on the router's forwarded port, or
+// anything that came in through the Cloudflare Tunnel (which reaches Roost on
+// a plain port only the tunnel container can see).
+function fromOutside(req) {
+  return Boolean(req.socket.encrypted || req.viaTunnel);
 }
 
 // Addresses on the home network, which Roost can also reach from inside its
@@ -527,6 +534,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     if (!userId) cockerel.event(message);
   };
   const secWatch = new SecurityWatch({ store, push, newId: () => store.newId() });
+  remote.onTunnelDown = () => secWatch.raise('sec:tunnel-down', 'The Cloudflare Tunnel stopped', 'Roost can’t be reached from outside until it is back. Switch Admin → Network → Route to Direct if it stays down.');
   const sentinel = new Sentinel({
     dataDir,
     store,
@@ -719,7 +727,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       return null;
     }
     // An admin's browser cookie turning up in a different browser or device is a sign it was stolen.
-    if (user && user.role === 'admin' && s.kind === 'browser' && s.name && req.socket.encrypted) {
+    if (user && user.role === 'admin' && s.kind === 'browser' && s.name && fromOutside(req)) {
       const now = deviceName(req.headers['user-agent']);
       if (now !== s.name && sentinel.sessionMismatch({ userId: user.id, username: user.username, sessionId: s.id, was: s.name, now, ip: clientIp(req, trustProxy) })) return null;
     }
@@ -758,7 +766,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     activity.add(type, { ...fields, ip: clientIp(req, trustProxy) });
     secWatch.onActivity(type, fields);
     if (type === 'sign-in-failed') {
-      if (req.socket.encrypted && !/^guest/.test(fields.detail || '')) sentinel.failedSignIn(clientIp(req, trustProxy), fields.target);
+      if (fromOutside(req) && !/^guest/.test(fields.detail || '')) sentinel.failedSignIn(clientIp(req, trustProxy), fields.target);
     } else if (type !== 'sign-in' && type !== 'sign-out') {
       sentinel.reseal(); // a change through a Roost screen, so not tampering
     }
@@ -1272,7 +1280,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (!limiter.allow(clientIp(req, trustProxy))) throw new HttpError(429, 'Too many attempts, wait a few minutes');
       const body = await readJson(req);
       const username = str(body.username, 32).toLowerCase();
-      if (!guard.allow(username, clientIp(req, trustProxy), Boolean(req.socket.encrypted))) throw new HttpError(429, 'Too many wrong passwords for this account. Wait a few minutes, or sign in from home.');
+      if (!guard.allow(username, clientIp(req, trustProxy), Boolean(fromOutside(req)))) throw new HttpError(429, 'Too many wrong passwords for this account. Wait a few minutes, or sign in from home.');
       const user = db().users.find((u) => u.username === username);
       if (!user) verifyAgainstNobody(body.password);
       if (!user || typeof body.password !== 'string' || !verifyPassword(body.password, user.password)) {
@@ -1308,7 +1316,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         pendingCodes.delete(body.ticket);
         throw new HttpError(401, 'Sign in again');
       }
-      if (!guard.allow(user.username, clientIp(req, trustProxy), Boolean(req.socket.encrypted))) throw new HttpError(429, 'Too many wrong codes for this account. Wait a few minutes, or sign in from home.');
+      if (!guard.allow(user.username, clientIp(req, trustProxy), Boolean(fromOutside(req)))) throw new HttpError(429, 'Too many wrong codes for this account. Wait a few minutes, or sign in from home.');
       const code = str(body.code, 40);
       let ok = false;
       if (/^\d{6}$/.test(code.replace(/\s/g, ''))) {
@@ -1466,7 +1474,9 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (!visibleApps(db(), user).some((a) => a.id === 'glint')) throw new HttpError(403, 'You don’t have access to Glint');
       const body = await readJson(req);
       const name = str(body.name, 40) || 'iPhone';
-      send(res, 201, { key: sessions.create(user.id, { kind: 'app', name: `${name} backup` }) });
+      // Big videos can't pass the Cloudflare Tunnel (100 MB per request), so while it
+      // carries the main address, phones are given the direct name instead.
+      send(res, 201, { key: sessions.create(user.id, { kind: 'app', name: `${name} backup` }), directHost: remote.tunnelOn() ? remote.streamHost() : '' });
     },
 
     'POST /api/me/devices/sign-out-others': (req, res) => {
@@ -1851,7 +1861,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         // Certificate health, for admins once HTTPS is set up.
         certificate: user.role === 'admin' ? certSummary() : null,
         // Cloudflare, Let's Encrypt and Docker Hub at a glance, for admins only.
-        outside: user.role === 'admin' ? outside.view({ containers: docker.error ? null : all, cert: certs.status() }) : null,
+        outside: user.role === 'admin' ? outside.view({ containers: docker.error ? null : all, cert: certs.status(), remote: remote.view() }) : null,
         history: uptime.history(visibleApps(db(), user).map((a) => a.id)),
         checkedAt: new Date().toISOString(),
       });
@@ -2885,8 +2895,48 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 200, { nonce: remote.nonce });
     },
 
-    'GET /api/admin/remote': (req, res) => {
+    'GET /api/admin/remote': async (req, res) => {
       requireAdmin(req);
+      // A fresh look at the tunnel when the page is opened (one small call).
+      const t = (db().settings.remote || {}).tunnel;
+      if (t && t.id && Date.now() - (t.checkedAt || 0) > 60 * 1000) await remote.refreshTunnel();
+      send(res, 200, remote.view());
+    },
+
+    // Makes the tunnel and its test address; the main address isn't touched.
+    // Returns the connector token the tunnel container needs.
+    'POST /api/admin/remote/tunnel': async (req, res) => {
+      const admin = requireAdmin(req);
+      let made;
+      try {
+        made = await remote.createTunnel();
+      } catch (err) {
+        throw new HttpError(400, err.message);
+      }
+      record(req, 'settings-changed', { actor: admin.username, detail: 'Remote access: Cloudflare Tunnel created' });
+      send(res, 200, { ...remote.view(), token: made.token });
+    },
+
+    // Shows the connector token again (it is a secret, so only on request).
+    'POST /api/admin/remote/tunnel/token': async (req, res) => {
+      requireAdmin(req);
+      try {
+        send(res, 200, { token: await remote.tunnelToken() });
+      } catch (err) {
+        throw new HttpError(400, err.message);
+      }
+    },
+
+    // The Direct / Tunnel toggle for the main address.
+    'PUT /api/admin/remote/route': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      try {
+        await remote.setRoute(body.route);
+      } catch (err) {
+        throw new HttpError(400, err.message);
+      }
+      record(req, 'settings-changed', { actor: admin.username, detail: `Remote access: main address now ${body.route === 'tunnel' ? 'through the Cloudflare Tunnel' : 'direct'}` });
       send(res, 200, remote.view());
     },
 
@@ -3858,7 +3908,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // 443 only, so outside traffic is exactly what arrives over HTTPS; the plain
   // home address keeps working so the admin can always get back in and lift it.
   function lockedOut(req) {
-    return Boolean(db().settings.lockdown && req.socket.encrypted);
+    return Boolean(db().settings.lockdown && fromOutside(req));
   }
 
   // Which app a request counts against on the upload meter.
@@ -3873,7 +3923,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
       return res.end('Use the Roost address, not the IP');
     }
-    if (req.socket.encrypted) {
+    if (fromOutside(req)) {
       const ip = clientIp(req, trustProxy);
       if (sentinel.isBanned(ip)) {
         res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -3893,13 +3943,20 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
     // Over HTTPS, browsers keep to HTTPS for six months. No includeSubDomains, so
     // other names (Coffee Galaxy, home-only addresses) are untouched.
-    if (req.socket.encrypted) res.setHeader('Strict-Transport-Security', 'max-age=15552000');
+    if (fromOutside(req)) res.setHeader('Strict-Transport-Security', 'max-age=15552000');
     try {
       const { pathname, searchParams } = new URL(req.url, 'http://roost');
       traffic.track(req, res, trafficApp(pathname), clientIp(req, trustProxy));
       if (novaMatches(req)) {
         serveNova(req, res, pathname, new URL(req.url, 'http://roost').search);
       } else if (pathname === JELLYFIN_PREFIX || pathname.startsWith(`${JELLYFIN_PREFIX}/`)) {
+        // Video never goes through the tunnel: Roostflix has its own direct name.
+        const stream = req.viaTunnel && remote.tunnelOn() ? remote.streamHost() : '';
+        if (stream) {
+          if (req.method !== 'GET' && req.method !== 'HEAD') throw new HttpError(421, `Open Roostflix at https://${stream}/`);
+          res.writeHead(302, { Location: `https://${stream}${req.url}`, 'Cache-Control': 'no-store' });
+          return res.end();
+        }
         serveJellyfin(req, res, pathname);
       } else if (pathname.startsWith('/s/')) {
         // Public file links: the one place Nest answers without a sign-in.
@@ -3946,7 +4003,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // Live updates from Jellyfin (a WebSocket) pass through on both the HTTP and
   // HTTPS side.
   function onUpgrade(req, socket, head) {
-    if (screen(req) || lockedOut(req) || (req.socket.encrypted && sentinel.isBanned(clientIp(req, trustProxy)))) return socket.destroy();
+    if (screen(req) || lockedOut(req) || (fromOutside(req) && sentinel.isBanned(clientIp(req, trustProxy)))) return socket.destroy();
     const { pathname } = new URL(req.url, 'http://roost');
     if (pathname.startsWith(`${JELLYFIN_PREFIX}/`) && jellyfinAllowed(req)) return jellyfin.proxyUpgrade(req, socket, head);
     socket.destroy();
@@ -3961,6 +4018,24 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // connection, so a renewal takes effect without a restart.
   // Browsers opening Roost by IP address send no name and get no certificate,
   // which is right: the certificate is only valid for the domain.
+  // The tunnel container hands requests to this plain port, which is not
+  // published outside Docker. Cloudflare has already checked the visitor, and
+  // tells us their real address; everything else is the normal Roost.
+  server.createTunnelServer = () => {
+    const mark = (req) => {
+      req.viaTunnel = true;
+      const given = String(req.headers['cf-connecting-ip'] || '').trim();
+      if (net.isIP(given)) req.roostIp = given.replace(/^::ffff:/, '');
+    };
+    const tunnelServer = http.createServer((req, res) => { mark(req); handle(req, res); });
+    // Live video updates never ride the tunnel.
+    tunnelServer.on('upgrade', (req, socket, head) => {
+      mark(req);
+      if (new URL(req.url, 'http://roost').pathname.startsWith(`${JELLYFIN_PREFIX}/`)) return socket.destroy();
+      onUpgrade(req, socket, head);
+    });
+    return tunnelServer;
+  };
   server.createHttpsServer = () => {
     const secureServer = https.createServer({ SNICallback: (name, cb) => cb(null, certs.context) }, handle);
     secureServer.on('upgrade', onUpgrade);
@@ -4029,6 +4104,7 @@ if (require.main === module) {
   server.certs.start();
   server.outside.start();
   server.remote.start();
+  server.createTunnelServer().listen(Number(process.env.TUNNEL_PORT) || 8081);
   server.createHttpsServer().listen(httpsPort, () => {
     console.log(`HTTPS is listening on port ${httpsPort}${server.certs.cert ? '' : ' (no certificate yet; set one up under Admin)'}`);
   });

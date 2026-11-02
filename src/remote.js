@@ -53,14 +53,19 @@ const isHome = (ip) => inList(HOME_LIST, ip);
 const isCgnat = (ip) => inList(CGNAT_LIST, ip);
 
 const HOUR = 60 * 60 * 1000;
+// The one tunnel Roost makes, and the test name used before the real switch.
+const TUNNEL_NAME = 'roost';
+const TEST_LABEL = 'try';
+const STREAM_LABEL = 'stream';
 const sameNames = (a = [], b = []) => a.length === b.length && a.every((n, i) => n === b[i]);
 
 class RemoteAccess {
-  constructor({ getSettings, patch, getTls, extraNames = () => [], fetchImpl = fetch, cloudflareApi, traceUrl = 'https://1.1.1.1/cdn-cgi/trace', now = Date.now, intervalMs = 5 * 60 * 1000, firstMs = 20 * 1000, timeoutMs = 8000 }) {
+  constructor({ getSettings, patch, getTls, extraNames = () => [], origin = 'http://roost:8081', fetchImpl = fetch, cloudflareApi, traceUrl = 'https://1.1.1.1/cdn-cgi/trace', now = Date.now, intervalMs = 5 * 60 * 1000, firstMs = 20 * 1000, timeoutMs = 8000 }) {
     this.getSettings = getSettings;
     this.patch = patch;
     this.getTls = getTls;
     this.extraNames = extraNames;
+    this.origin = origin;
     this.fetch = fetchImpl;
     this.cloudflareApi = cloudflareApi;
     this.traceUrl = traceUrl;
@@ -113,7 +118,20 @@ class RemoteAccess {
     return domain && token ? new CloudflareDns({ token, domain, ...(this.cloudflareApi ? { apiBase: this.cloudflareApi } : {}), fetchImpl: this.fetch }) : null;
   }
 
-  // Points the domain at the current home address (a proxied A record).
+  // True when the tunnel carries the main address.
+  tunnelOn() {
+    return this.settings().route === 'tunnel';
+  }
+
+  // Where Roostflix answers while the main address is on the tunnel.
+  streamHost() {
+    const { domain } = this.getTls() || {};
+    return domain ? `${STREAM_LABEL}.${domain}` : '';
+  }
+
+  // Points the domain at the current home address (a proxied A record). While
+  // the tunnel carries the main address, the domain is left alone and only the
+  // direct names (Roostflix's, Coffee Galaxy's) follow the home address.
   async sync({ force = false } = {}) {
     const s = this.settings();
     const { domain } = this.getTls() || {};
@@ -123,21 +141,104 @@ class RemoteAccess {
     try {
       if (!dns) throw new Error('Save a domain and Cloudflare token under Secure connection first');
       const ip = await this.homeIp();
+      // The domain itself, plus any other names Roost answers (Coffee Galaxy's).
+      const tunnel = this.tunnelOn();
+      const names = tunnel ? [this.streamHost(), ...this.extraNames()] : [domain, ...this.extraNames()];
+      // Roostflix's name stays grey: video must not pass through Cloudflare.
+      const proxiedOf = (name) => name !== this.streamHost();
       // Nothing to do while the address hasn't moved, apart from a daily look.
-      if (!force && last.ok && last.ip === ip && last.domain === domain && sameNames(last.names, [domain, ...this.extraNames()]) && this.now() - last.at < 24 * HOUR) {
+      if (!force && last.ok && last.ip === ip && last.domain === domain && Boolean(last.tunnel) === tunnel && sameNames(last.names, names) && this.now() - last.at < 24 * HOUR) {
         result = { ...last };
       } else {
-        // The domain itself, plus any other names Roost answers (Coffee Galaxy's).
-        const names = [domain, ...this.extraNames()];
         let changed = false;
-        for (const name of names) changed = (await dns.upsert({ type: 'A', name, content: ip, proxied: true })).changed || changed;
-        result = { ok: true, ip, domain, names, at: this.now(), changed, cgnat: isCgnat(ip) };
+        for (const name of names) changed = (await dns.upsert({ type: 'A', name, content: ip, proxied: proxiedOf(name) })).changed || changed;
+        result = { ok: true, ip, domain, names, tunnel, at: this.now(), changed, cgnat: isCgnat(ip) };
       }
     } catch (err) {
       result = { ok: false, ip: last.ip || '', domain, at: this.now(), error: err.message };
     }
     this.patch({ dns: result });
     return result;
+  }
+
+  // ---------- Cloudflare Tunnel ----------
+
+  tunnelInfo() {
+    return this.settings().tunnel || null;
+  }
+
+  needDns() {
+    const dns = this.dns();
+    if (!dns) throw new Error('Save a domain and Cloudflare token under Secure connection first');
+    return dns;
+  }
+
+  // Makes the tunnel (or finds the one made before), tells it which names it
+  // answers for, and points the test name at it. Returns the connector token
+  // the tunnel container needs. The main name is not touched.
+  async createTunnel() {
+    const dns = this.needDns();
+    const { domain } = this.getTls();
+    const test = `${TEST_LABEL}.${domain}`;
+    const found = (await dns.findTunnel(TUNNEL_NAME)) || (await dns.createTunnel(TUNNEL_NAME));
+    await dns.configureTunnel(found.id, [test, domain], this.origin);
+    await dns.pointAtTunnel(test, found.id);
+    this.patch({ tunnel: { ...(this.tunnelInfo() || {}), id: found.id, test, createdAt: (this.tunnelInfo() || {}).createdAt || this.now() } });
+    await this.refreshTunnel();
+    return { token: await dns.tunnelToken(found.id) };
+  }
+
+  async tunnelToken() {
+    const t = this.tunnelInfo();
+    if (!t || !t.id) throw new Error('Create the tunnel first');
+    return this.needDns().tunnelToken(t.id);
+  }
+
+  // Asks Cloudflare whether the tunnel container is connected.
+  async refreshTunnel() {
+    const t = this.tunnelInfo();
+    if (!t || !t.id) return null;
+    let next;
+    try {
+      const { status, connections } = await this.needDns().tunnelStatus(t.id);
+      next = { ...t, status, connections, checkedAt: this.now(), error: '' };
+    } catch (err) {
+      next = { ...t, status: 'unknown', connections: 0, checkedAt: this.now(), error: err.message };
+    }
+    this.patch({ tunnel: next });
+    // Tell someone only when it stops (healthy before, down now), not on every look.
+    const was = t.status;
+    if (this.tunnelOn() && this.onTunnelDown && (was === 'healthy' || was === 'degraded') && (next.status === 'down' || next.status === 'inactive')) this.onTunnelDown();
+    return next;
+  }
+
+  // The toggle. 'tunnel': the main name goes through the tunnel and Roostflix
+  // moves to its own direct name. 'direct': the main name goes back to an
+  // ordinary record pointing at home. Neither touches the router or the tunnel.
+  async setRoute(route) {
+    if (route !== 'tunnel' && route !== 'direct') throw new Error('Route must be tunnel or direct');
+    const dns = this.needDns();
+    const { domain } = this.getTls();
+    if (route === this.settings().route || (route === 'direct' && !this.settings().route)) {
+      return this.settings().route || 'direct';
+    }
+    if (route === 'tunnel') {
+      const t = await this.refreshTunnel();
+      if (!t || !t.id) throw new Error('Create the tunnel first');
+      if (t.status !== 'healthy' && t.status !== 'degraded') throw new Error('The tunnel isn’t connected yet. Start the tunnel container, check the test address, then switch');
+      const ip = await this.homeIp();
+      await dns.upsert({ type: 'A', name: this.streamHost(), content: ip, proxied: false });
+      await dns.pointAtTunnel(domain, t.id);
+      this.patch({ route: 'tunnel' });
+      await this.sync({ force: true });
+    } else {
+      const ip = await this.homeIp();
+      await dns.pointAtAddress(domain, ip, Boolean(this.settings().ddns));
+      this.patch({ route: 'direct' });
+      // With "keep pointed home" on, that job owns the record (orange cloud); otherwise leave it as set.
+      if (this.settings().ddns) await this.sync({ force: true });
+    }
+    return route;
   }
 
   // Asks for Roost's own web address from the outside, the way a visitor would.
@@ -166,7 +267,8 @@ class RemoteAccess {
   check() {
     if (!this.busy) {
       this.busy = (async () => {
-        if (this.settings().ddns) await this.sync({ force: true });
+        if (this.settings().ddns || this.tunnelOn()) await this.sync({ force: true });
+        if (this.tunnelOn()) await this.refreshTunnel();
         await this.ping();
       })().finally(() => { this.busy = null; });
     }
@@ -181,8 +283,12 @@ class RemoteAccess {
   }
 
   tick() {
-    if (!this.settings().ddns || this.busy) return;
-    this.busy = this.sync().finally(() => { this.busy = null; });
+    const tunnel = this.tunnelOn();
+    if (!(this.settings().ddns || tunnel) || this.busy) return;
+    this.busy = (async () => {
+      await this.sync();
+      if (tunnel) await this.refreshTunnel();
+    })().finally(() => { this.busy = null; });
   }
 
   stop() {
@@ -200,6 +306,9 @@ class RemoteAccess {
       ddns: Boolean(s.ddns),
       cloudflareOnly: Boolean(s.cloudflareOnly),
       dns,
+      route: s.route === 'tunnel' ? 'tunnel' : 'direct',
+      tunnel: s.tunnel ? { created: Boolean(s.tunnel.id), test: s.tunnel.test || '', status: s.tunnel.status || 'inactive', connections: s.tunnel.connections || 0, checkedAt: s.tunnel.checkedAt || null, error: s.tunnel.error || '' } : null,
+      streamHost: this.streamHost(),
       reach: s.reach || null,
       cgnat: Boolean(dns && dns.cgnat),
     };

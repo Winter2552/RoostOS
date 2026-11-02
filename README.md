@@ -141,7 +141,7 @@ Glint is Roost's own photo library, built on Nest's storage. Open it from **Phot
 - **No double work**: Glint uploads go into `Photos/<year>` in Nest, so they share the storage limit (with the same **Ask for more** link when it is full), the trash and zip downloads. Photos and videos you put in Nest yourself show up in Glint too.
 - **Move to Glint** (Google Photos): export your library with Google Takeout (Google Photos only, .zip), then in Glint open **Move to Glint**, add the zips (they go in a Nest folder called `Move to Glint`, so copying them there over the network works too) and press **Move to Glint**. Roost reads the zips where they are, one photo at a time, with nothing unpacked first. Dates come from the JSON file Google puts beside each photo, favourites and albums carry over (the "Photos from 2019" year folders are not albums), Google's trash is left behind, and the same photo in several albums is stored once (the zip's own size and CRC spot repeats without reading them). Photos already in Glint are skipped. It stops cleanly if the limit or drive is full, carries on where it left off if stopped or restarted (press the button again), and running it twice changes nothing. Tick **Delete each zip when it is done** to free space as it goes, or use **Delete the zips** at the end; zips are never deleted otherwise. Live Photos come in as the photo and its video, as two items.
 - **Light on the server**: Glint does no image processing. The browser that uploads a photo reads its date and draws the small preview (about 30 KB, kept in `.glint/` next to the user's files); older photos get theirs the first time they scroll into view. A format the browser can't draw, such as HEIC on Windows, shows a placeholder and offers a download instead.
-- **Automatic phone backup**: things that run without anyone at the screen (the Roost Android app, an iPhone Shortcut) sign in with a device key (`POST /api/login` with a `device` name returns a `key`) and send photos through the backup API. It skips photos it already sent, by the phone's own photo ids, and files them in `Photos/<year>` like any other upload, so they share the storage limit and show in the timeline. Works at home on Wi-Fi; an outside address through Cloudflare's free plan stops uploads over 100 MB.
+- **Automatic phone backup**: things that run without anyone at the screen (the Roost Android app, an iPhone Shortcut) sign in with a device key (`POST /api/login` with a `device` name returns a `key`) and send photos through the backup API. It skips photos it already sent, by the phone's own photo ids, and files them in `Photos/<year>` like any other upload, so they share the storage limit and show in the timeline. Works at home on Wi-Fi; an outside address through Cloudflare's free plan stops single requests over 100 MB (the Android app sends big videos in pieces; iPhone uses the direct address, see the Cloudflare Tunnel section).
   ```
   POST /api/backup/check    { "items": [{ "id": "<photo id>" }] }                  → { "have": ["<id>", ...] }
   POST /api/backup/uploads  { "id", "device", "name", "size", "type", "taken" }    → { "id", "chunkSize" } or { "have": true }
@@ -217,7 +217,24 @@ With HTTPS set up, **Admin → Remote access** gets Roost reachable away from ho
 3. Press **Check now**. Roost asks for its own address from outside and says what it found. If your internet provider shares one address between homes (CGNAT), Roost says so; ask them for a public address.
 4. Optional: tick **Only accept outside traffic that comes through Cloudflare**, so anyone who finds your home address can't skip Cloudflare. Your home network still gets in directly.
 
-Cloudflare's free plan limits one request to 100 MB, which Nest respects by uploading in 16 MB pieces. It doesn't allow streaming video through it, so Jellyfin from outside the house needs a different route (planned).
+Cloudflare's free plan limits one request to 100 MB, which Nest respects by uploading in 16 MB pieces. It doesn't allow streaming video through it, so Jellyfin from outside the house stays on the direct route (see the tunnel below).
+
+### Cloudflare Tunnel for the main address
+
+Instead of a router port for the main address, **Admin → Network → Cloudflare Tunnel** can put roostos.network behind a Cloudflare Tunnel: a small `cloudflared` container opens a connection out to Cloudflare, and visitors reach Roost through it.
+
+1. In Cloudflare, open Zero Trust once and choose the free plan. Add **Account · Cloudflare Tunnel · Edit** to the API token (keep Zone · DNS · Edit) and save it again under Secure connection.
+2. Press **Create tunnel**. Roost makes the tunnel, points `try.<domain>` at it and shows a secret token once (**Show token** shows it again).
+3. On the server, make a file called `.env` next to the compose file with `COMPOSE_PROFILES=tunnel` and `TUNNEL_TOKEN=<the token>`, then `docker compose up -d`. The card shows the tunnel connected.
+4. Open `https://try.<domain>` on a phone with Wi-Fi off. When it works, switch on **Use the tunnel for the main address**.
+
+What the switch does: the main name becomes a CNAME to the tunnel, and Roostflix moves to `stream.<domain>` (a grey, direct record), because video can't pass the free plan. Visitors who open Roostflix on the main address are sent there. Nova stays on `nova.<domain>`. Keep port 443 forwarded for those two.
+
+Switch it off to go back: Roost points the main name straight at home again within a few minutes. The tunnel and router forward are never removed, so you can flip it as often as you like. If Roost itself is down, in Cloudflare DNS delete the main name's CNAME and add an A record to your home address (grey cloud).
+
+The tunnel container reaches Roost on port 8081 inside Docker (`TUNNEL_PORT`, not published to the network). Anything arriving there counts as outside traffic (Lockdown, Sentinel, account limits, activity log) and gets the visitor's real address from Cloudflare. It doesn't need `BEHIND_PROXY`. The status page shows "Tunnel running · N connections" from Cloudflare and goes red, with an alert, if it drops.
+
+Honest limits: `stream.` and `nova.` are still direct, so the home address can still be found and port 443 stays open. The gain is Cloudflare screening the sign-in page and files. Phone backup of videos over 100 MB: the Android app sends them in pieces; the iPhone Immich app and Shortcut send one request per file, so Profile → Back up an iPhone gives them the direct `stream.` address while the tunnel is on.
 
 ## Coffee Galaxy through Roost
 

@@ -861,6 +861,19 @@
         </div>
         <div class="msg" role="status"></div>
       </form>
+      <form class="card panel" id="tunnel-form" data-sec="network">
+        <h3>Cloudflare Tunnel</h3><span class="mono muted">Send the main address through Cloudflare, with no open port for it</span>
+        <p class="tls-state" id="tunnel-state"><span class="dot"></span><span>Checking…</span></p>
+        <p class="mono muted tls-detail" id="tunnel-detail"></p>
+        <label class="check-line" style="margin-top:18px"><input type="checkbox" name="route" id="tunnel-route"> Use the tunnel for the main address</label>
+        <p class="mono muted tls-help" id="tunnel-help">Roostflix and Nova stay direct (on stream. and nova. names). Switch it off any time to go straight back.</p>
+        <label class="field hidden" id="tunnel-token-field"><span>Tunnel token (secret: paste it into the .env file next to Roost's compose file as TUNNEL_TOKEN)</span><input type="text" id="tunnel-token" readonly spellcheck="false"></label>
+        <div class="row">
+          <button class="btn" type="button" id="tunnel-create">Create tunnel</button>
+          <button class="btn ghost small hidden" type="button" id="tunnel-show">Show token</button>
+        </div>
+        <div class="msg" role="status"></div>
+      </form>
       <form class="card panel" id="coffee-form" data-sec="apps">
         <h3>Coffee Galaxy</h3><span class="mono muted">A private link to the Coffee Galaxy server, opened through Roost at nova.&lt;your domain&gt;/coffee</span>
         <p class="tls-state" id="coffee-state"><span class="dot"></span><span>Checking…</span></p>

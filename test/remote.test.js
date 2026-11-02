@@ -248,3 +248,139 @@ test('with Cloudflare-only on, the server refuses a direct visit and lets Cloudf
   await call('PUT', '/api/admin/remote', { ddns: false, cloudflareOnly: false }, cookie);
   assert.equal((await handleAs('8.8.8.8')).status, 200);
 });
+
+// A stand-in for Cloudflare's tunnel and DNS API that remembers what it was told.
+function fakeCloudflare({ ip = '203.0.113.7', status = 'healthy', records = [] } = {}) {
+  const st = { tunnel: null, config: null, records: records.map((r, i) => ({ id: `r${i}`, ...r })), status, nextId: 10, deleted: [] };
+  const fn = async (url, init = {}) => {
+    const method = init.method || 'GET';
+    const body = init.body ? JSON.parse(init.body) : null;
+    const reply = (code, result) => ({ status: code, ok: code < 400, json: async () => ({ success: code < 400, result }), text: async () => (typeof result === 'string' ? result : JSON.stringify(result)) });
+    const u = new URL(url);
+    if (u.hostname === '1.1.1.1') return { status: 200, ok: true, text: async () => `ip=${ip}\n` };
+    if (u.pathname.endsWith('/zones') ) return reply(200, [{ id: 'zone1', account: { id: 'acct1' } }]);
+    const dns = u.pathname.match(/\/zones\/zone1\/dns_records(?:\/(\w+))?$/);
+    if (dns) {
+      if (method === 'GET') {
+        const name = u.searchParams.get('name');
+        const type = u.searchParams.get('type');
+        return reply(200, st.records.filter((r) => r.name === name && (!type || r.type === type)));
+      }
+      if (method === 'DELETE') { st.records = st.records.filter((r) => r.id !== dns[1]); st.deleted.push(dns[1]); return reply(200, { id: dns[1] }); }
+      if (method === 'POST') { const rec = { id: `r${st.nextId++}`, ...body }; st.records.push(rec); return reply(200, rec); }
+      if (method === 'PUT') { const i = st.records.findIndex((r) => r.id === dns[1]); st.records[i] = { id: dns[1], ...body }; return reply(200, st.records[i]); }
+    }
+    const t = u.pathname.match(/\/accounts\/acct1\/cfd_tunnel(?:\/(\w+))?(?:\/(token|configurations))?$/);
+    if (t) {
+      if (!t[1] && method === 'GET') return reply(200, st.tunnel ? [st.tunnel] : []);
+      if (!t[1] && method === 'POST') { st.tunnel = { id: 'tun1', name: body.name, config_src: body.config_src }; return reply(200, st.tunnel); }
+      if (t[2] === 'configurations') { st.config = body.config; return reply(200, {}); }
+      if (t[2] === 'token') return reply(200, 'secret-connector-token');
+      return reply(200, { ...st.tunnel, status: st.status, connections: st.status === 'healthy' ? [{}, {}] : [] });
+    }
+    throw new Error(`unexpected ${method} ${url}`);
+  };
+  fn.state = st;
+  return fn;
+}
+
+function makeTunnel(opts = {}, settings = {}) {
+  const state = { settings: { ...settings } };
+  const fetchImpl = fakeCloudflare(opts);
+  const r = new RemoteAccess({
+    getSettings: () => state.settings,
+    patch: (f) => { state.settings = { ...state.settings, ...f }; },
+    getTls: () => ({ domain: 'roostos.network', token: 't' }),
+    fetchImpl,
+    cloudflareApi: 'https://cf.test/v4',
+    traceUrl: 'https://1.1.1.1/cdn-cgi/trace',
+  });
+  return { r, state, cf: fetchImpl.state };
+}
+
+test('creating the tunnel sets up the test address and leaves the main address alone', async () => {
+  const { r, cf, state } = makeTunnel({ records: [{ type: 'A', name: 'roostos.network', content: '203.0.113.7', proxied: false }] });
+  const { token } = await r.createTunnel();
+  assert.equal(token, 'secret-connector-token');
+  assert.deepEqual(cf.config.ingress.map((i) => i.hostname || i.service), ['try.roostos.network', 'roostos.network', 'http_status:404']);
+  assert.equal(cf.config.ingress[0].service, 'http://roost:8081');
+  const test = cf.records.find((x) => x.name === 'try.roostos.network');
+  assert.equal(test.type, 'CNAME');
+  assert.equal(test.content, 'tun1.cfargotunnel.com');
+  assert.equal(test.proxied, true);
+  // The main address is still its old direct record.
+  assert.equal(cf.records.find((x) => x.name === 'roostos.network').type, 'A');
+  assert.equal(r.view().route, 'direct');
+  assert.equal(state.settings.tunnel.id, 'tun1');
+  // Running it again finds the same tunnel instead of making a second.
+  await r.createTunnel();
+  assert.equal(cf.records.filter((x) => x.name === 'try.roostos.network').length, 1);
+});
+
+test('switching to the tunnel needs it connected, moves Roostflix to a grey stream name, and switching back restores the direct record', async () => {
+  const { r, cf } = makeTunnel({ status: 'inactive', records: [{ type: 'A', name: 'roostos.network', content: '203.0.113.7', proxied: false }] });
+  await assert.rejects(r.setRoute('tunnel'), /Create the tunnel first/);
+  await r.createTunnel();
+  await assert.rejects(r.setRoute('tunnel'), /isn’t connected yet/);
+  assert.equal(cf.records.find((x) => x.name === 'roostos.network').type, 'A');
+
+  cf.status = 'healthy';
+  await r.setRoute('tunnel');
+  const main = cf.records.filter((x) => x.name === 'roostos.network');
+  assert.equal(main.length, 1);
+  assert.equal(main[0].type, 'CNAME');
+  assert.equal(main[0].proxied, true);
+  const stream = cf.records.find((x) => x.name === 'stream.roostos.network');
+  assert.equal(stream.type, 'A');
+  assert.equal(stream.content, '203.0.113.7');
+  assert.equal(stream.proxied, false);
+  assert.equal(r.view().route, 'tunnel');
+  assert.equal(r.view().streamHost, 'stream.roostos.network');
+
+  await r.setRoute('direct');
+  const back = cf.records.filter((x) => x.name === 'roostos.network');
+  assert.equal(back.length, 1);
+  assert.equal(back[0].type, 'A');
+  assert.equal(back[0].content, '203.0.113.7');
+  assert.equal(back[0].proxied, false);
+  assert.equal(r.view().route, 'direct');
+
+  // And on again, as often as wanted.
+  await r.setRoute('tunnel');
+  assert.equal(cf.records.find((x) => x.name === 'roostos.network').type, 'CNAME');
+});
+
+test('while on the tunnel the keep-pointed-home job leaves the main name alone and keeps stream. grey', async () => {
+  const { r, cf } = makeTunnel({});
+  await r.createTunnel();
+  await r.setRoute('tunnel');
+  const before = cf.records.find((x) => x.name === 'roostos.network').id;
+  const res = await r.sync({ force: true });
+  assert.equal(res.ok, true);
+  assert.equal(res.tunnel, true);
+  assert.equal(cf.records.find((x) => x.name === 'roostos.network').id, before);
+  assert.equal(cf.records.find((x) => x.name === 'roostos.network').type, 'CNAME');
+  assert.equal(cf.records.find((x) => x.name === 'stream.roostos.network').proxied, false);
+});
+
+test('a tunnel that stops is reported once, not on every look', async () => {
+  const { r, cf } = makeTunnel({});
+  let calls = 0;
+  r.onTunnelDown = () => { calls++; };
+  await r.createTunnel();
+  await r.setRoute('tunnel');
+  await r.refreshTunnel();
+  assert.equal(calls, 0);
+  cf.status = 'down';
+  await r.refreshTunnel();
+  assert.equal(calls, 1);
+  await r.refreshTunnel();
+  assert.equal(calls, 1);
+  assert.equal(r.view().tunnel.status, 'down');
+});
+
+test('a token without the Tunnel permission says what is missing', async () => {
+  const { r } = makeTunnel({});
+  r.fetch = async (url, init) => (String(url).includes('cfd_tunnel') ? { status: 403, ok: false, json: async () => ({ success: false, errors: [{ message: 'no' }] }) } : fakeCloudflare({})(url, init));
+  await assert.rejects(r.createTunnel(), /Account · Cloudflare Tunnel · Edit/);
+});
