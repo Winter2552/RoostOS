@@ -206,7 +206,8 @@ function securityChecks({ db, now = Date.now(), entries = [], cert = null, updat
     add('updates', 'info', 'Updates not checked yet', 'Open the Status page to check.');
   }
 
-  if (backup.state === 'ok' || backup.state === 'running') add('backup', 'ok', 'Nightly backup is working');
+  if (backup.state === 'disabled') add('backup', 'info', 'Backups are switched off', 'Switch them on under Admin → Storage & backups once the backup drive is plugged in.');
+  else if (backup.state === 'ok' || backup.state === 'running') add('backup', 'ok', 'Nightly backup is working');
   else if (backup.state === 'off') add('backup', 'warn', 'Backups are not running', 'A backup on a separate drive is the best protection against ransomware. See Admin → Setup.');
   else add('backup', 'warn', 'Backups need attention', backup.message || { late: 'The last good backup is more than a day old.', none: 'No backup has finished yet.', stopped: 'The backup service has stopped.' }[backup.state] || '');
 

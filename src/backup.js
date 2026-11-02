@@ -520,6 +520,7 @@ function config(saved) {
   const s = saved || {};
   const whole = (v, [min, max], fallback) => (Number.isInteger(v) && v >= min && v <= max ? v : fallback);
   return {
+    enabled: s.enabled !== false,
     time: TIME.test(s.time) ? s.time : DEFAULT_TIME,
     keepDaily: whole(s.keepDaily, LIMITS.keepDaily, DEFAULT_KEEP.daily),
     keepWeekly: whole(s.keepWeekly, LIMITS.keepWeekly, DEFAULT_KEEP.weekly),
@@ -532,6 +533,7 @@ function cleanConfig(input) {
   const i = input || {};
   const num = (v) => (v === '' || v === null || v === undefined ? null : Number(v));
   const out = {
+    enabled: i.enabled !== false,
     time: typeof i.time === 'string' ? i.time.trim() : DEFAULT_TIME,
     keepDaily: num(i.keepDaily),
     keepWeekly: num(i.keepWeekly),
@@ -584,7 +586,10 @@ const LATE_AFTER = 50 * HOUR; // two missed nights
 const STOPPED_AFTER = 30 * 60 * 1000; // the service checks in every 10 minutes
 
 // One word for the dashboard: how the backups are doing.
-function summarize(status, now = Date.now()) {
+// `enabled` is the Admin switch: when backups are switched off nothing is
+// reported (no drive or failure warnings), whatever the service last wrote.
+function summarize(status, now = Date.now(), enabled = true) {
+  if (!enabled) return { state: 'disabled' };
   if (!status) return { state: 'off' };
   const out = { lastOk: status.lastOk || null, next: status.next || null };
   if (now - Date.parse(status.updatedAt) > STOPPED_AFTER) return { ...out, state: 'stopped' };

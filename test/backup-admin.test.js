@@ -57,7 +57,7 @@ test('only admins see or control backups', async () => {
 test('before the service has ever reported, Back up now says why not', async () => {
   const res = await admin('GET', '/api/admin/backup');
   assert.equal(res.body.state, 'off');
-  assert.deepEqual(res.body.config, { time: '03:00', keepDaily: 7, keepWeekly: 4, capGb: null });
+  assert.deepEqual(res.body.config, { enabled: true, time: '03:00', keepDaily: 7, keepWeekly: 4, capGb: null });
   const run = await admin('POST', '/api/admin/backup/run');
   assert.equal(run.status, 409);
   assert.match(run.body.error, /isn’t running/);
@@ -114,9 +114,9 @@ test('backup settings are saved, checked, logged and passed to the service', asy
 
   const ok = await admin('PATCH', '/api/admin/settings', { backup: { time: '04:30', keepDaily: '10', keepWeekly: '2', capGb: '500' } });
   assert.equal(ok.status, 200);
-  assert.deepEqual(ok.body.settings.backup, { time: '04:30', keepDaily: 10, keepWeekly: 2, capGb: 500 });
+  assert.deepEqual(ok.body.settings.backup, { enabled: true, time: '04:30', keepDaily: 10, keepWeekly: 2, capGb: 500 });
   assert.equal(clearRequest(), 'reload');
-  assert.deepEqual((await admin('GET', '/api/admin/backup')).body.config, { time: '04:30', keepDaily: 10, keepWeekly: 2, capGb: 500 });
+  assert.deepEqual((await admin('GET', '/api/admin/backup')).body.config, { enabled: true, time: '04:30', keepDaily: 10, keepWeekly: 2, capGb: 500 });
 
   // Saving the same settings again changes nothing, so the service isn't bothered.
   await admin('PATCH', '/api/admin/settings', { backup: { time: '04:30', keepDaily: 10, keepWeekly: 2, capGb: 500 } });
@@ -125,4 +125,27 @@ test('backup settings are saved, checked, logged and passed to the service', asy
   const log = (await admin('GET', '/api/admin/activity')).body.entries;
   assert.ok(log.some((e) => e.type === 'settings-changed' && /backups 04:30, keep 10 nightly \+ 2 weekly, up to 500 GB/.test(e.detail)));
   await admin('POST', '/api/admin/backup/cancel');
+});
+
+test('switching backups off silences the drive-missing state and stops runs; on restores it', async () => {
+  const nodrive = { drive: { ok: false, message: 'Backup drive not found' }, lastOk: null, last: { ok: false, error: 'Backup drive not found' } };
+  service(nodrive);
+  assert.equal((await admin('GET', '/api/backup')).body.state, 'drive');
+
+  const off = await admin('PATCH', '/api/admin/settings', { backup: { enabled: false, time: '03:00', keepDaily: 7, keepWeekly: 4, capGb: '' } });
+  assert.equal(off.status, 200);
+  assert.equal(off.body.settings.backup.enabled, false);
+  assert.equal(clearRequest(), 'reload');
+  assert.equal((await admin('GET', '/api/backup')).body.state, 'disabled');
+  assert.equal((await call('GET', '/api/backup', null, userCookie)).body.state, 'disabled');
+  assert.equal((await admin('GET', '/api/admin/backup')).body.state, 'disabled');
+  assert.equal((await admin('POST', '/api/admin/backup/run')).status, 409);
+  const checks = (await admin('GET', '/api/admin/security')).body.checks;
+  assert.equal(checks.find((c) => c.id === 'backup').status, 'info');
+  const setup = (await admin('GET', '/api/admin/setup')).body;
+  assert.ok(setup.steps.filter((s) => ['backup-drive', 'first-backup'].includes(s.id)).every((s) => s.done));
+
+  await admin('PATCH', '/api/admin/settings', { backup: { enabled: true, time: '03:00', keepDaily: 7, keepWeekly: 4, capGb: '' } });
+  assert.equal((await admin('GET', '/api/backup')).body.state, 'drive');
+  clearRequest();
 });

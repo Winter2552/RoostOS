@@ -929,8 +929,10 @@
 
       <form class="card panel" id="backup-form" data-sec="storage">
         <h3>Backups</h3><span class="mono muted">Every night Roost copies Nest, the apps' settings and its own data to the backup drive. Films and shows aren't included.</span>
+        <label class="glint-toggle mono"><input type="checkbox" name="enabled" checked><span>Nightly backups</span></label>
         <p class="tls-state" id="backup-state"><span class="dot"></span><span>Checking…</span></p>
         <p class="mono muted tls-detail" id="backup-detail"></p>
+        <div id="backup-fields">
         <div class="backup-drive hidden" id="backup-drive">
           <div class="meter" id="backup-meter" role="meter" aria-label="Backup drive used" aria-valuemin="0" aria-valuemax="100"><i></i></div>
           <div class="mono muted" id="backup-drive-text"></div>
@@ -946,6 +948,7 @@
           <button class="btn" type="submit">Save</button>
           <button class="btn ghost small" type="button" id="backup-run">Back up now</button>
           <button class="btn danger small hidden" type="button" id="backup-cancel">Cancel backup</button>
+        </div>
         </div>
         <div class="msg" role="status"></div>
         <ol class="activity" id="backup-history"></ol>
