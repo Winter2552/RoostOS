@@ -20,7 +20,7 @@
     if (c && c.accessToken && c.accessToken()) return { base: c.serverAddress().replace(/\/+$/, ''), token: c.accessToken(), userId: c.getCurrentUserId(), deviceId: c.deviceId ? c.deviceId() : null };
     try {
       const s = JSON.parse(localStorage.getItem('jellyfin_credentials') || '{}').Servers[0];
-      return { base: `${location.origin}/jellyfin`, token: s.AccessToken, userId: s.UserId, deviceId: null };
+      return { base: `${location.origin}/jellyfin`, token: s.AccessToken, userId: s.UserId, deviceId: localStorage.getItem('_deviceId2') || null };
     } catch { return null; }
   }
   const auth = (s) => ({ Authorization: `MediaBrowser Client="Roostflix", Device="Browser", DeviceId="roostflix", Version="1", Token="${s.token}"` });
@@ -209,7 +209,14 @@
     auto = true;
     streakSet(streakGet() + 1);
     remember();
-    playNow(id, 0).catch(() => { auto = false; });
+    // If our own route fails (no session found, API refused), never fail silently:
+    // press Jellyfin's own next button, and as a last resort open the episode page.
+    playNow(id, 0).then((ok) => { if (!ok) throw new Error('no session'); }).catch(() => {
+      auto = false;
+      const nb = document.querySelector('.btnNextItem, .btnNextTrack, .btnNext');
+      if (nb && !nb.disabled) nb.click();
+      else location.hash = `#/details?id=${id}`;
+    });
   }
   function showCard() {
     if (!cur || !cur.next || cur.cancelled || !card.hidden || sleep === 'end') return;
