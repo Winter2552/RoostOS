@@ -184,7 +184,15 @@ class ImmichApi {
     send(res, out.code, out.body);
   }
 
+  // Sign-ins and anything that fails are logged (`docker logs roost`), so a phone that won't connect shows where it stops.
   async handle(req, res, pathname, params) {
+    res.once('finish', () => {
+      if (res.statusCode >= 300 || pathname === '/api/auth/login' || pathname === '/api/users/me') this.log(`${req.method} ${pathname} -> ${res.statusCode}`);
+    });
+    return this.answer(req, res, pathname, params);
+  }
+
+  async answer(req, res, pathname, params) {
     const m = req.method;
     // Open to anyone who can reach the address, like Immich's own: the app checks them before signing in.
     if (m === 'GET' && pathname === '/api/server/ping') return send(res, 200, { res: 'pong' });
@@ -226,7 +234,6 @@ class ImmichApi {
     }
     if (pathname === '/api/sync/ack') return send(res, m === 'GET' ? 200 : 204, m === 'GET' ? [] : undefined);
     if (m === 'GET' && pathname === '/api/albums') return send(res, 200, []);
-    this.log(`${m} ${pathname}${params.toString() ? '?…' : ''}`);
     throw new HttpError(404, 'Not found');
   }
 }

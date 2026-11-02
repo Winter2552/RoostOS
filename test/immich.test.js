@@ -152,6 +152,20 @@ test('photos from the Immich app land in Photos by year, once, and big ones stre
   assert.equal((await post('/api/assets', { ...auth, 'Content-Type': 'multipart/form-data; boundary=zz' }, Buffer.from('--zz\r\nContent-Disposition: form-data; name="a"\r\n\r\nb\r\n--zz--\r\n'))).status, 400);
 });
 
+test('failed requests and sign-ins from the app are logged', async () => {
+  const lines = [];
+  const real = console.log;
+  console.log = (...a) => { lines.push(a.join(' ')); };
+  try {
+    await call('POST', '/api/auth/login', { email: 'sam@roost', password: 'wrong' });
+    await fetch(`${base}/api/albums/x`);
+  } finally {
+    console.log = real;
+  }
+  assert.ok(lines.includes('Immich app: POST /api/auth/login -> 401'), lines.join('|'));
+  assert.ok(lines.includes('Immich app: GET /api/albums/x -> 401'), lines.join('|'));
+});
+
 test('things the app asks for that Roost does not answer are a plain 404', async () => {
   const token = (await call('POST', '/api/auth/login', { email: 'sam@roost', password: 'password1' })).body.accessToken;
   const res = await fetch(`${base}/api/albums/not-there`, { headers: { Authorization: `Bearer ${token}` } });
