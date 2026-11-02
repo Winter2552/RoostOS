@@ -22,6 +22,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { HttpError, send, readJson, str } = require('./http');
 const { Memories } = require('./glint-memories');
+const { Clutter } = require('./glint-clutter');
 const { People } = require('./glint-people');
 
 const PAGE = 240; // photos per timeline page
@@ -202,6 +203,7 @@ class Glint {
     };
     this.pages = new Map();
     this.memories = new Memories({ db: this.db, count: (owner) => this.q.count.get(owner).n });
+    this.clutter = new Clutter({ db: this.db });
     this.people = new People({ db: this.db, glint: this, memories: this.memories });
     this.repairDates();
   }
@@ -675,6 +677,16 @@ class Glint {
     }
     if ((pathname === '/api/glint/people' || pathname.startsWith('/api/glint/people/') || pathname === '/api/glint/faces' || pathname === '/api/glint/faces/todo')
         && await this.people.handle(req, res, user, pathname, params)) return;
+    if (method === 'GET' && pathname === '/api/glint/clutter') {
+      if (this.q.index.run(user.id).changes) this.dirty.add(user.id);
+      this.pair(user);
+      return send(res, 200, { groups: this.clutter.groups(user).map(({ rows, ...g }) => ({ ...g, items: rows.map((r) => photoItem({ ...r, size: r.bytes })) })) });
+    }
+    if (method === 'POST' && pathname === '/api/glint/clutter/keep') {
+      const body = await readJson(req);
+      if (!Array.isArray(body.ids)) throw new HttpError(400, 'Say which photos to keep');
+      return send(res, 200, { kept: this.clutter.keep(user, body.ids) });
+    }
     if (method === 'GET' && pathname === '/api/glint/memories') {
       // New photos are indexed first, as for the timeline, so a fresh upload can appear in a memory.
       if (this.q.index.run(user.id).changes) this.dirty.add(user.id);

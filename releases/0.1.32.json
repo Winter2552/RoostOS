@@ -1,0 +1,13 @@
+{
+  "version": "0.1.32",
+  "date": "2026-11-02",
+  "title": "Clear clutter",
+  "summary": "Glint suggests screenshots, chat saves, tiny pictures and copies to clear out.",
+  "items": [
+    {
+      "title": "Clear clutter in Glint",
+      "text": "Glint gathers screenshots, photos saved from chat apps, tiny pictures and likely copies into groups for you to look through. You choose what goes to the trash; nothing is deleted on its own.",
+      "image": "clear-clutter.png"
+    }
+  ]
+}

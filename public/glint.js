@@ -135,13 +135,13 @@
     const [a, b] = parts;
     if (space !== G.space) G.storage = null;
     G.space = space;
-    const mode = a === 'favourites' ? 'favourites' : a === 'undated' ? 'undated' : a === 'albums' ? 'albums' : a === 'album' && b ? 'album' : a === 'memory' && b ? 'memory' : a === 'people' ? 'people' : a === 'person' && b ? 'person' : a === 'trash' ? 'trash' : a === 'move' ? 'move' : 'photos';
+    const mode = a === 'favourites' ? 'favourites' : a === 'undated' ? 'undated' : a === 'albums' ? 'albums' : a === 'album' && b ? 'album' : a === 'memory' && b ? 'memory' : a === 'people' ? 'people' : a === 'person' && b ? 'person' : a === 'trash' ? 'trash' : a === 'clutter' ? 'clutter' : a === 'move' ? 'move' : 'photos';
     G.mode = mode;
     G.album = mode === 'album' ? { id: b, name: '' } : null;
     G.memory = mode === 'memory' ? { id: b, title: '', sub: '' } : null;
     G.person = mode === 'person' ? { id: b, name: '' } : null;
-    // People are personal: nothing in the family space.
-    if (space && (mode === 'people' || mode === 'person')) { location.hash = '#/glint'; return; }
+    // People and Clear clutter are personal: nothing in the family space.
+    if (space && (mode === 'people' || mode === 'person' || mode === 'clutter')) { location.hash = '#/glint'; return; }
     if (mode !== 'people') scanner.pause();
     readPrefs();
     if (mode !== 'photos') G.memories = [];
@@ -184,6 +184,12 @@
         G.items = d.items;
         G.total = d.items.length;
         G.memory = { id: d.memory.id, title: d.memory.title, sub: d.memory.sub };
+      } else if (G.mode === 'clutter') {
+        const d = await gapi('GET', '/api/glint/clutter');
+        if (token !== G.token) return;
+        G.clutter = d.groups.map(({ items, ...g }) => ({ ...g, ids: new Set(items.map((i) => i.id)) }));
+        G.items = d.groups.flatMap((g) => g.items);
+        G.total = G.items.length;
       } else if (G.mode === 'trash') {
         const d = await gapi('GET', '/api/glint/trash');
         if (token !== G.token) return;
@@ -289,6 +295,7 @@
     if (G.mode === 'albums') return renderAlbums();
     if (G.mode === 'people') return renderPeople();
     if (G.mode === 'trash') return renderTrash();
+    if (G.mode === 'clutter') return renderClutter();
     if (G.mode === 'move') return renderMove();
     renderTimeline();
   }
@@ -309,7 +316,7 @@
   }
 
   function renderCrumbs() {
-    const names = { photos: 'Photos', favourites: 'Favourites', undated: 'Undated', albums: 'Albums', people: 'People', trash: 'Trash', move: 'Move to Glint' };
+    const names = { photos: 'Photos', favourites: 'Favourites', undated: 'Undated', albums: 'Albums', people: 'People', trash: 'Trash', clutter: 'Clear clutter', move: 'Move to Glint' };
     const crumbs = $('#glint-crumbs');
     if (G.mode === 'person') {
       crumbs.replaceChildren(
@@ -345,7 +352,7 @@
         G.items.length ? el('button', { type: 'button', class: 'btn ghost small', text: 'Use file names', onclick: () => dateFromNames(G.items) }) : '');
     }
     else if (G.mode === 'favourites') tools.replaceChildren(zoomButtons());
-    else if (G.mode === 'move') tools.replaceChildren();
+    else if (G.mode === 'move' || G.mode === 'clutter') tools.replaceChildren();
     else if (G.mode === 'people') tools.replaceChildren();
     else if (G.mode === 'person') {
       tools.replaceChildren(
@@ -774,7 +781,9 @@
     if (!items.length) return;
     const btn = (name, text, run) => el('button', { type: 'button', class: 'nsel-btn', onclick: run, title: text }, gi(name), el('span', { text }));
     const allFav = items.every((i) => i.fav);
-    const actions = G.mode === 'trash'
+    const actions = G.mode === 'clutter'
+      ? [btn('check', 'Keep', () => keepClutter(items)), btn('trash', 'Delete', () => trash(items))]
+      : G.mode === 'trash'
       ? [btn('restore', 'Restore', () => restore(items)), btn('trash', 'Delete forever', () => deleteForever(items))]
       : [
         btn(allFav ? 'star' : 'starFill', allFav ? 'Unfavourite' : 'Favourite', () => favourite(items, !allFav)),
@@ -1271,6 +1280,51 @@
       el('span', { class: 'galbum-cover' }, a.cover ? el('img', { src: thumbUrl({ id: a.cover }), alt: '', loading: 'lazy', draggable: 'false', onerror: (e) => e.target.remove() }) : gi('album')),
       el('b', { text: a.name }),
       el('span', { class: 'mono muted', text: plural(a.count, 'item') })))));
+  }
+
+  // ---------- Clear clutter ----------
+
+  // Groups of photos that are probably not worth keeping. Nothing is chosen for the person: each group has
+  // Select all, then Delete (to the trash, 30 days) or Keep (never suggested again).
+  function renderClutter() {
+    if (G.loading && !G.items.length) {
+      body.replaceChildren(el('div', { class: 'muted glint-note', text: 'Looking for clutter…' }));
+      return;
+    }
+    const groups = (G.clutter || []).map((g) => ({ ...g, items: G.items.filter((i) => g.ids.has(i.id)) })).filter((g) => g.items.length);
+    imgObserver.disconnect();
+    if (!groups.length) {
+      body.replaceChildren(el('div', { class: 'nest-empty' }, gi('photo'), el('b', { text: 'No clutter found' }),
+        el('span', { class: 'muted', text: 'Screenshots, saved chat photos, tiny pictures and copies will show up here.' })));
+      return;
+    }
+    const parts = [el('p', { class: 'mono muted glint-note', text: 'Suggestions only. Nothing is deleted until you choose it, and deleted photos wait in Trash for 30 days.' })];
+    for (const g of groups) {
+      const all = g.items.every((i) => G.sel.has(i.id));
+      const more = g.count > g.items.length;
+      parts.push(
+        el('div', { class: 'gclutter-head' },
+          el('div', {},
+            el('h3', { text: g.title }),
+            el('span', { class: 'mono muted', text: `${more ? `${g.items.length} of ${g.count}` : plural(g.items.length, 'photo')} · ${bytes(g.bytes)}` }),
+            el('p', { class: 'muted', text: g.hint })),
+          el('button', { type: 'button', class: 'btn ghost small', text: all ? 'Clear' : 'Select all', onclick: () => {
+            for (const i of g.items) { if (all) G.sel.delete(i.id); else G.sel.add(i.id); }
+            render();
+          } })),
+        el('div', { class: 'glint-grid' }, ...g.items.map(tile)));
+    }
+    body.replaceChildren(...parts);
+    for (const t of body.querySelectorAll('.gtile[data-need]')) tileObserver.observe(t);
+    queueEager(G.items);
+  }
+
+  async function keepClutter(items) {
+    try {
+      await gapi('POST', '/api/glint/clutter/keep', { ids: items.map((i) => i.id) });
+      removeLocal(items.map((i) => i.id));
+      toast(`${plural(items.length, 'photo')} kept. They won’t be suggested again.`);
+    } catch (err) { toast(err.message); }
   }
 
   function renderTrash() {
