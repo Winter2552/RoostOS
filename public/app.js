@@ -2206,8 +2206,9 @@ $('#sign-out-others').addEventListener('click', async () => {
 $('#make-backup-key').addEventListener('click', async () => {
   const panel = $('#backup-key-panel');
   try {
-    const { key } = await api('POST', '/api/me/backup-key', { name: 'iPhone' });
-    $('#backup-key-address').value = location.origin;
+    const { key, directHost } = await api('POST', '/api/me/backup-key', { name: 'iPhone' });
+    // Big videos can't pass the Cloudflare Tunnel (100 MB per request), so phones use the direct name.
+    $('#backup-key-address').value = directHost ? `https://${directHost}` : location.origin;
     $('#backup-key-email').value = `${state.user.username}@roost`;
     $('#backup-key-value').value = key;
     $('#backup-key-out').classList.remove('hidden');
@@ -3411,6 +3412,7 @@ function renderRemote(r) {
   $('#remote-detail').textContent = lines.join(' · ');
   f.ddns.checked = r.ddns;
   f.cloudflareOnly.checked = r.cloudflareOnly;
+  renderTunnel(r);
 }
 
 async function loadRemote() {
@@ -3439,6 +3441,75 @@ $('#remote-check').addEventListener('click', async () => {
   flash(f, 'Checking from outside…');
   try { renderRemote(await api('POST', '/api/admin/remote/check')); flash(f, 'Checked'); } catch (err) { flash(f, err.message, false); }
   btn.disabled = false;
+});
+
+// ---------- Cloudflare Tunnel ----------
+
+function renderTunnel(r) {
+  const f = $('#tunnel-form');
+  const t = r.tunnel;
+  const on = r.route === 'tunnel';
+  const ready = t && t.created;
+  const [kind, headline] = !r.domain || !r.tokenSaved ? ['', 'Set up Secure connection first']
+    : !ready ? ['', 'No tunnel yet']
+    : t.status === 'healthy' ? ['online', on ? `Main address on the tunnel · ${t.connections} connection${t.connections === 1 ? '' : 's'}` : 'Tunnel connected, main address still direct']
+    : t.status === 'degraded' ? ['', 'Tunnel partly connected']
+    : t.status === 'unknown' ? ['', 'Can’t ask Cloudflare']
+    : ['offline', on ? 'Tunnel down' : 'Tunnel not connected yet'];
+  $('#tunnel-state').replaceChildren(el('span', { class: `dot ${kind}` }), el('span', { text: headline }));
+  const lines = [];
+  if (ready && t.error) lines.push(t.error);
+  if (ready && !on && t.status !== 'healthy') lines.push(`Start the tunnel container, then open https://${t.test} on your phone to test`);
+  if (ready && !on && t.status === 'healthy') lines.push(`Test it at https://${t.test}, then switch`);
+  if (on) lines.push(`Roostflix is at ${r.streamHost}`);
+  if (ready && t.checkedAt) lines.push(`Checked ${agoMs(t.checkedAt)}`);
+  $('#tunnel-detail').textContent = lines.join(' · ');
+  const box = $('#tunnel-route');
+  box.checked = on;
+  box.disabled = !ready || !r.domain;
+  $('#tunnel-create').textContent = ready ? 'Check tunnel' : 'Create tunnel';
+  $('#tunnel-show').classList.toggle('hidden', !ready);
+}
+
+function showTunnelToken(token) {
+  $('#tunnel-token').value = token;
+  $('#tunnel-token-field').classList.remove('hidden');
+}
+
+$('#tunnel-create').addEventListener('click', async () => {
+  const f = $('#tunnel-form');
+  const btn = $('#tunnel-create');
+  btn.disabled = true;
+  flash(f, 'Talking to Cloudflare…');
+  try {
+    const r = await api('POST', '/api/admin/remote/tunnel');
+    showTunnelToken(r.token);
+    renderTunnel(r);
+    flash(f, 'Tunnel ready: paste the token into .env as TUNNEL_TOKEN, then run docker compose up -d');
+  } catch (err) { flash(f, err.message, false); }
+  btn.disabled = false;
+});
+
+$('#tunnel-show').addEventListener('click', async () => {
+  const f = $('#tunnel-form');
+  try { showTunnelToken((await api('POST', '/api/admin/remote/tunnel/token')).token); } catch (err) { flash(f, err.message, false); }
+});
+
+$('#tunnel-route').addEventListener('change', async (e) => {
+  const f = $('#tunnel-form');
+  const box = e.target;
+  const want = box.checked ? 'tunnel' : 'direct';
+  box.disabled = true;
+  flash(f, want === 'tunnel' ? 'Switching to the tunnel…' : 'Switching back to direct…');
+  try {
+    const r = await api('PUT', '/api/admin/remote/route', { route: want });
+    renderRemote(r);
+    flash(f, want === 'tunnel' ? 'On the tunnel (DNS may take a few minutes)' : 'Direct again (DNS may take a few minutes)');
+  } catch (err) {
+    box.checked = !box.checked;
+    flash(f, err.message, false);
+  }
+  box.disabled = false;
 });
 
 // ---------- Coffee Galaxy ----------

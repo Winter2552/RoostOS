@@ -87,12 +87,23 @@ class OutsideServices {
 
   // containers: Docker's list (or null when Docker isn't connected).
   // cert: CertManager.status().  → [{ id, name, state, headline, detail, checkedAt }]
-  view({ containers, cert }) {
-    return [this.tunnel(containers, cert), this.letsEncrypt(cert), this.dockerHubLine()];
+  view({ containers, cert, remote }) {
+    return [this.tunnel(containers, cert, remote), this.letsEncrypt(cert), this.dockerHubLine()];
   }
 
-  tunnel(containers, cert) {
+  // `remote` (Roost's own record of the route) is optional: without it the
+  // tunnel is judged from the container list alone.
+  tunnel(containers, cert, remote) {
     const base = { id: 'cloudflare', name: 'Cloudflare', role: 'Tunnel and DNS' };
+    if (remote && remote.route !== 'tunnel') {
+      const cf0 = this.checks.cloudflare;
+      const ready = remote.tunnel && remote.tunnel.created;
+      let state0 = 'unset';
+      let detail0 = ready ? `Tunnel made, main address still direct (test: ${remote.tunnel.test})` : 'The main address goes straight to home. Add a tunnel under Admin → Network';
+      if (cf0 && !cf0.ok && !cf0.unreachable) { state0 = 'watch'; detail0 = cf0.detail; }
+      return { ...base, state: state0, headline: state0 === 'watch' ? 'Token needs attention' : 'Direct route', detail: detail0, checkedAt: cf0 ? new Date(cf0.at).toISOString() : null };
+    }
+    if (remote && remote.route === 'tunnel') return this.tunnelRoute(containers, remote, base);
     const cf = this.checks.cloudflare;
     const tunnel = (containers || []).filter((c) => /cloudflared/i.test(`${c.name} ${c.image}`));
     const lines = [];
@@ -120,6 +131,34 @@ class OutsideServices {
       lines.push('Saved token works');
     }
     return { ...base, state, headline, detail: lines.join(' · '), checkedAt: cf ? new Date(cf.at).toISOString() : null };
+  }
+
+  // The main address is on the tunnel: Cloudflare's own view (connections) first,
+  // then the container, which can say it keeps restarting.
+  tunnelRoute(containers, remote, base) {
+    const t = remote.tunnel || {};
+    const box = (containers || []).find((c) => /cloudflared/i.test(`${c.name} ${c.image}`));
+    const at = t.checkedAt ? new Date(t.checkedAt).toISOString() : null;
+    const n = t.connections || 0;
+    let state = 'good';
+    let headline = `Tunnel running${n ? ` · ${n} connection${n > 1 ? 's' : ''}` : ''}`;
+    const lines = [];
+    if (t.status === 'down' || t.status === 'inactive') {
+      state = 'bad';
+      headline = 'Tunnel down';
+      lines.push('Cloudflare can’t reach the tunnel container, so the main address is offline from outside. Switch to Direct to bring it back at once');
+    } else if (t.status === 'degraded') {
+      state = 'watch';
+      headline = 'Tunnel degraded';
+      lines.push('Only some of the tunnel’s connections are up');
+    } else if (t.status === 'unknown') {
+      state = 'watch';
+      headline = 'Can’t ask Cloudflare';
+      lines.push(t.error || 'Roost couldn’t read the tunnel’s state');
+    }
+    if (box && box.state === 'restarting') { state = 'bad'; headline = 'Tunnel keeps restarting'; }
+    if (box && box.restarts) lines.push(`${box.name} · ${box.restarts} restart${box.restarts > 1 ? 's' : ''}`);
+    return { ...base, state, headline, detail: lines.join(' · '), checkedAt: at };
   }
 
   letsEncrypt(cert) {

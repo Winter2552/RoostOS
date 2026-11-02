@@ -188,7 +188,30 @@ test('the status page gives the list to admins only', async () => {
 
   const seen = await call('GET', '/api/status', null, admin);
   assert.deepEqual(seen.body.outside.map((o) => o.id), ['cloudflare', 'letsencrypt', 'dockerhub']);
-  // Docker isn't reachable here, so the tunnel line says it can't see.
-  assert.equal(seen.body.outside[0].headline, 'Can’t see Docker');
+  // Nothing is routed through a tunnel yet, so the line says the route is direct.
+  assert.equal(seen.body.outside[0].headline, 'Direct route');
   assert.equal((await call('GET', '/api/status', null, mia)).body.outside, null);
+});
+
+test('with the main address on the tunnel, the line follows Cloudflare and the container', () => {
+  const o = new OutsideServices({ fetchImpl: fakeFetch({}) });
+  const remote = (tunnel, route = 'tunnel') => ({ route, tunnel: { created: true, test: 'try.roostos.network', checkedAt: 1000, connections: 0, ...tunnel } });
+  const line = (r, boxes = [tunnelBox()]) => o.tunnel(boxes, { domain: 'roostos.network' }, r);
+  const ok = line(remote({ status: 'healthy', connections: 4 }));
+  assert.equal(ok.state, 'good');
+  assert.equal(ok.headline, 'Tunnel running · 4 connections');
+  assert.equal(line(remote({ status: 'down' })).state, 'bad');
+  assert.equal(line(remote({ status: 'inactive' })).headline, 'Tunnel down');
+  assert.equal(line(remote({ status: 'degraded', connections: 1 })).state, 'watch');
+  assert.equal(line(remote({ status: 'unknown', error: 'Cloudflare: nope' })).detail, 'Cloudflare: nope');
+  assert.equal(line(remote({ status: 'healthy', connections: 1 }), [tunnelBox({ state: 'restarting' })]).headline, 'Tunnel keeps restarting');
+});
+
+test('on the direct route there is no tunnel warning, even with no tunnel container', () => {
+  const o = new OutsideServices({ fetchImpl: fakeFetch({}) });
+  const none = o.tunnel([], { domain: 'roostos.network' }, { route: 'direct', tunnel: null });
+  assert.equal(none.state, 'unset');
+  assert.equal(none.headline, 'Direct route');
+  const made = o.tunnel([], { domain: 'roostos.network' }, { route: 'direct', tunnel: { created: true, test: 'try.roostos.network' } });
+  assert.match(made.detail, /try\.roostos\.network/);
 });

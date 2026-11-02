@@ -100,6 +100,26 @@ services:
       # off the next line, redeploy, and see "Bringing a backup back" in the README.
       # - /DATA/restored:/restore
 
+  # The Cloudflare Tunnel (Admin → Network → Cloudflare Tunnel). Off until you
+  # turn it on: put these two lines in a file called .env next to this one,
+  # with the token Roost shows after "Create tunnel", then run `docker compose up -d`:
+  #   COMPOSE_PROFILES=tunnel
+  #   TUNNEL_TOKEN=<the token>
+  # It only makes an outbound connection to Cloudflare and hands visitors to
+  # Roost's private tunnel port (8081, not published anywhere else).
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - roost
+
   # Roost's own narrow window onto Docker (src/docker-helper.js), built from the
   # same code. It lets Roost read the container list and restart only the
   # containers named below; it refuses starting, stopping, removing, exec and
