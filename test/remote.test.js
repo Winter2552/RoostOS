@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { RemoteAccess, clean, isCloudflare, isHome, isCgnat } = require('../src/remote');
+const { buildToken, tokenLooksRight } = require('../src/cloudflare');
 const { clientIp } = require('../src/activity');
 const { createServer } = require('../src/server');
 const { setUpTwoStep } = require('./helpers');
@@ -270,12 +271,12 @@ function fakeCloudflare({ ip = '203.0.113.7', status = 'healthy', records = [] }
       if (method === 'POST') { const rec = { id: `r${st.nextId++}`, ...body }; st.records.push(rec); return reply(200, rec); }
       if (method === 'PUT') { const i = st.records.findIndex((r) => r.id === dns[1]); st.records[i] = { id: dns[1], ...body }; return reply(200, st.records[i]); }
     }
-    const t = u.pathname.match(/\/accounts\/acct1\/cfd_tunnel(?:\/(\w+))?(?:\/(token|configurations))?$/);
+    const t = u.pathname.match(/\/accounts\/acct1\/cfd_tunnel(?:\/([\w-]+))?(?:\/(token|configurations))?$/);
     if (t) {
       if (!t[1] && method === 'GET') return reply(200, st.tunnel ? [st.tunnel] : []);
-      if (!t[1] && method === 'POST') { st.tunnel = { id: 'tun1', name: body.name, config_src: body.config_src }; return reply(200, st.tunnel); }
+      if (!t[1] && method === 'POST') { st.tunnel = { id: '11111111-2222-3333-4444-555555555555', name: body.name, config_src: body.config_src }; st.secret = body.tunnel_secret; return reply(200, st.tunnel); }
       if (t[2] === 'configurations') { st.config = body.config; return reply(200, {}); }
-      if (t[2] === 'token') return reply(200, 'secret-connector-token');
+      if (t[2] === 'token') return reply(200, st.apiToken !== undefined ? st.apiToken : buildToken('acct1', st.tunnel.id, st.secret));
       return reply(200, { ...st.tunnel, status: st.status, connections: st.status === 'healthy' ? [{}, {}] : [] });
     }
     throw new Error(`unexpected ${method} ${url}`);
@@ -301,17 +302,20 @@ function makeTunnel(opts = {}, settings = {}) {
 test('creating the tunnel sets up the test address and leaves the main address alone', async () => {
   const { r, cf, state } = makeTunnel({ records: [{ type: 'A', name: 'roostos.network', content: '203.0.113.7', proxied: false }] });
   const { token } = await r.createTunnel();
-  assert.equal(token, 'secret-connector-token');
+  // Roost wrote the token itself, from a secret it chose and sent to Cloudflare.
+  assert.ok(tokenLooksRight(token));
+  const inside = JSON.parse(Buffer.from(token, 'base64').toString('utf8'));
+  assert.deepEqual([inside.a, inside.t, inside.s], ['acct1', '11111111-2222-3333-4444-555555555555', cf.secret]);
   assert.deepEqual(cf.config.ingress.map((i) => i.hostname || i.service), ['try.roostos.network', 'roostos.network', 'http_status:404']);
   assert.equal(cf.config.ingress[0].service, 'http://roost:8081');
   const test = cf.records.find((x) => x.name === 'try.roostos.network');
   assert.equal(test.type, 'CNAME');
-  assert.equal(test.content, 'tun1.cfargotunnel.com');
+  assert.equal(test.content, '11111111-2222-3333-4444-555555555555.cfargotunnel.com');
   assert.equal(test.proxied, true);
   // The main address is still its old direct record.
   assert.equal(cf.records.find((x) => x.name === 'roostos.network').type, 'A');
   assert.equal(r.view().route, 'direct');
-  assert.equal(state.settings.tunnel.id, 'tun1');
+  assert.equal(state.settings.tunnel.id, '11111111-2222-3333-4444-555555555555');
   // Running it again finds the same tunnel instead of making a second.
   await r.createTunnel();
   assert.equal(cf.records.filter((x) => x.name === 'try.roostos.network').length, 1);
@@ -383,4 +387,20 @@ test('a token without the Tunnel permission says what is missing', async () => {
   const { r } = makeTunnel({});
   r.fetch = async (url, init) => (String(url).includes('cfd_tunnel') ? { status: 403, ok: false, json: async () => ({ success: false, errors: [{ message: 'no' }] }) } : fakeCloudflare({})(url, init));
   await assert.rejects(r.createTunnel(), /Account · Cloudflare Tunnel · Edit/);
+});
+
+test('an existing tunnel gives its token only if cloudflared can use it', async () => {
+  const { r, cf } = makeTunnel({});
+  await r.createTunnel();
+  // A good token comes back as it is.
+  const again = await r.createTunnel();
+  assert.ok(again.token && !again.note);
+  // One with a secret of the wrong shape is refused, with where to get a working one.
+  cf.apiToken = Buffer.from(JSON.stringify({ a: 'acct1', t: '11111111-2222-3333-4444-555555555555', s: 'not-base64_url-safe-and-way-too-long-for-a-real-secret-not-base64_url-safe-and-way-too-long' })).toString('base64');
+  const bad = await r.createTunnel();
+  assert.equal(bad.token, '');
+  assert.match(bad.note, /dashboard/);
+  await assert.rejects(r.tunnelToken(), /dashboard/);
+  assert.equal(tokenLooksRight('eyJhIjoiwrong'), false);
+  assert.equal(tokenLooksRight(buildToken('acct1', '11111111-2222-3333-4444-555555555555', Buffer.alloc(32, 7).toString('base64'))), true);
 });

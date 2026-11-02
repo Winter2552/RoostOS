@@ -3489,9 +3489,11 @@ $('#tunnel-create').addEventListener('click', async () => {
   flash(f, 'Talking to Cloudflare…');
   try {
     const r = await api('POST', '/api/admin/remote/tunnel');
-    showTunnelToken(r.token);
     renderTunnel(r);
-    flash(f, 'Tunnel ready: paste the token into .env as TUNNEL_TOKEN, then run docker compose up -d');
+    if (r.token) {
+      showTunnelToken(r.token);
+      flash(f, 'Tunnel ready: paste the token into .env as TUNNEL_TOKEN, then run docker compose up -d');
+    } else flash(f, r.note || 'Tunnel checked', Boolean(r.note) === false);
   } catch (err) { flash(f, err.message, false); }
   btn.disabled = false;
 });

@@ -2925,7 +2925,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         throw new HttpError(400, err.message);
       }
       record(req, 'settings-changed', { actor: admin.username, detail: 'Remote access: Cloudflare Tunnel created' });
-      send(res, 200, { ...remote.view(), token: made.token });
+      send(res, 200, { ...remote.view(), token: made.token, note: made.note || '' });
     },
 
     // Shows the connector token again (it is a secret, so only on request).
