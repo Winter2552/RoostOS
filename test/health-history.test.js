@@ -121,3 +121,13 @@ test('the history route is for admins, and returns cost at the saved price', asy
     server.close();
   }
 });
+
+test('an impossible reading is dropped from the chart, peaks and energy', () => {
+  const h = new HealthHistory(null, { now: () => T0 });
+  h.sample({ watts: 10, cpuTemp: 45, driveTemp: 38 }, T0);
+  h.sample({ watts: 561, cpuTemp: 300, driveTemp: 38 }, T0 + FINE_EVERY);
+  const day = h.series('day', T0 + HOUR);
+  assert.equal(day.peaks.w, 10);
+  assert.equal(day.peaks.c, 45);
+  assert.equal(day.kwh, +((10 * (FINE_EVERY / HOUR)) / 1000).toFixed(2));
+});

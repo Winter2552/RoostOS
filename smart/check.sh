@@ -38,8 +38,12 @@ sense() {
           max=$(cat "$rapl/max_energy_range_uj" 2>/dev/null || echo 0)
           d=$((d + max))
         fi
-        [ "$d" -ge 0 ] && lines="$lines
-power_mw=$((d / (now - pt) / 1000))"
+        # A reading over 200 W is a glitched counter, not the CPU: leave it out.
+        if [ "$d" -ge 0 ]; then
+          mw=$((d / (now - pt) / 1000))
+          [ "$mw" -le 200000 ] && lines="$lines
+power_mw=$mw"
+        fi
       fi
       echo "$e $now" > "$OUT/.rapl"
     fi

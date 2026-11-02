@@ -28,6 +28,12 @@ const RANGES = {
   month: { span: 30 * DAY, fine: false },
 };
 
+// A reading no home box could give (a glitched energy counter, say). Watts above
+// this and temperatures outside the range are dropped, never charted or summed.
+const MAX_WATTS = 150;
+const okWatts = (w) => typeof w === 'number' && w >= 0 && w <= MAX_WATTS;
+const okTemp = (c) => typeof c === 'number' && c > 0 && c <= 120;
+
 const round1 = (n) => (n === null ? null : Math.round(n * 10) / 10);
 
 function peak(list, key) {
@@ -51,6 +57,14 @@ class HealthHistory {
     // One snapshot per drive per day, for the trend rules: key (serial or device) →
     // { name, kind, last: readAt, days: [{ d, tx, hours, wear, re, pe, un, wr }] }
     this.drives = data.drives && typeof data.drives === 'object' ? data.drives : {};
+    // Spikes saved before this check existed: blank them rather than chart them.
+    for (const p of this.fine) if (p.w !== null && p.w !== undefined && !okWatts(p.w)) p.w = null;
+    for (const p of this.hourly) {
+      if ((p.wx !== null && p.wx !== undefined && !okWatts(p.wx)) || (p.w !== null && p.w !== undefined && !okWatts(p.w))) {
+        p.w = null;
+        p.wx = null;
+      }
+    }
     this.dirty = false;
     this.savedAt = this.now();
   }
@@ -59,7 +73,10 @@ class HealthHistory {
   // every minute; only every 5th is kept.
   sample(reading, t = this.now()) {
     if (!reading) return;
-    const { watts = null, cpuTemp = null, driveTemp = null, driveHeat = null } = reading;
+    let { watts = null, cpuTemp = null, driveTemp = null, driveHeat = null } = reading;
+    if (!okWatts(watts)) watts = null;
+    if (!okTemp(cpuTemp)) cpuTemp = null;
+    if (!okTemp(driveTemp)) driveTemp = null;
     if (watts === null && cpuTemp === null && driveTemp === null) return;
     const last = this.fine[this.fine.length - 1];
     if (last && t - last.t < FINE_EVERY - 10 * 1000) return;
