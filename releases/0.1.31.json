@@ -1,0 +1,14 @@
+{
+  "version": "0.1.31",
+  "date": "2026-11-02",
+  "title": "A switch for backups",
+  "summary": "Turn nightly backups off until the backup drive arrives.",
+  "items": [
+    {
+      "title": "A switch for backups",
+      "text": "No backup drive yet? Switch nightly backups off in Admin and the drive warnings, failed nights and setup nudges all go quiet. Switch them back on when the drive is plugged in.",
+      "image": "backups-switch.png",
+      "admin": true
+    }
+  ]
+}
