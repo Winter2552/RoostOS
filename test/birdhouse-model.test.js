@@ -356,3 +356,16 @@ test('a stated board is the only stock: what does not fit is flagged with an are
   assert.equal(model.fit(model.clean({ template: 'custom', boards })), null);
   assert.deepEqual(model.fitProblems(model.clean({ template: 'custom', boards: boards.slice(0, 3), stock: { w: 600, l: 700, t: 18 } })), []);
 });
+
+test('the stated board is simulated: parts sit inside it, never overlap, and a tight fit is found', () => {
+  const b = (name, w, d, h, y) => ({ name, x: 0, y, z: 0, w, d, h, join: 'glued' });
+  const boards = [b('Shelf', 600, 170, 18, 0), b('Shelf', 600, 170, 18, 200), b('Shelf', 600, 170, 18, 400), b('Upright', 18, 170, 260, 600), b('Upright', 18, 170, 260, 900)];
+  const f = model.fit(model.clean({ template: 'custom', boards, stock: { w: 600, l: 700, t: 18 } }));
+  assert.deepEqual(f.unplaced, []);
+  const ps = f.sheets[0].pieces;
+  assert.equal(ps.length, 5);
+  for (const p of ps) {
+    assert.ok(p.x >= 0 && p.y >= 0 && p.x + p.w <= 700 && p.y + p.h <= 600);
+    for (const q of ps) if (p !== q) assert.ok(p.x + p.w + 3 <= q.x || q.x + q.w + 3 <= p.x || p.y + p.h + 3 <= q.y || q.y + q.h + 3 <= p.y, 'saw cut kept between boards');
+  }
+});
