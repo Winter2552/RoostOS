@@ -177,9 +177,13 @@ class ImmichApi {
       let path = this.photoBackup.folderFor(taken);
       // The video half of a Live Photo is sent hidden; keep it beside the photo but out of the way.
       if (/hidden/i.test(fields.visibility || '')) path += '/Live Photo videos';
-      await this.photoBackup.storeStream(user, {
+      const stored = await this.photoBackup.storeStream(user, {
         id: key, size: file.size, device: fields.deviceId, name: file.name || 'photo', type: file.type, path, taken,
       }, file.source);
+      // The app sends a Live Photo's video first, then the photo naming it: remember which belong together.
+      if (/hidden/i.test(fields.visibility || '')) this.photoBackup.rememberClip(user, id, stored.item.id);
+      const clip = typeof fields.livePhotoVideoId === 'string' ? fields.livePhotoVideoId.trim().slice(0, 80) : '';
+      if (clip) this.photoBackup.linkLive(user, stored.item.id, clip);
       return { code: 201, body: { id, status: 'created' } };
     });
     send(res, out.code, out.body);
