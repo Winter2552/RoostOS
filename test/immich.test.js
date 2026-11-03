@@ -230,3 +230,14 @@ test('a photo that names its video in the app\'s upload is paired with it whatev
   assert.ok(photo && photo.live, 'the photo has its clip');
   assert.ok(!list.some((p) => p.name.startsWith('ABCD_L0')), 'the clip is not a tile of its own');
 });
+
+test('a Live Photo clip that never found its photo is offered in Clear clutter', async () => {
+  const token = (await call('POST', '/api/auth/login', { email: 'sam@roost', password: 'password1' })).body.accessToken;
+  const m = multipart({ deviceAssetId: 'LONELY_CLIP', deviceId: 'phone-1', fileCreatedAt: '2012-02-02T02:02:02.000Z', fileModifiedAt: '2012-02-02T02:02:02.000Z', visibility: 'hidden' }, 'lonely_L0_001.mov', Buffer.from('c'), 'video/quicktime');
+  assert.equal((await post('/api/assets', { Authorization: `Bearer ${token}`, 'Content-Type': m.type }, m.body)).status, 201);
+  const sam = (await call('POST', '/api/login', { username: 'sam', password: 'password1' })).cookie;
+  await call('GET', '/api/glint/photos', null, sam);
+  const groups = (await call('GET', '/api/glint/clutter', null, sam)).body.groups;
+  const clips = groups.find((g) => g.id === 'clips');
+  assert.ok(clips && clips.items.some((i) => i.name === 'lonely_L0_001.mov'));
+});

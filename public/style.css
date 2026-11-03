@@ -1341,6 +1341,7 @@ button.restore-name:hover { text-decoration: underline; text-underline-offset: 3
 .gclutter-head h3 { margin: 0 0 2px; font-size: 18px; }
 .gclutter-head p { margin: 4px 0 0; font-size: 14px; }
 .gclutter-head .btn { flex: none; min-height: 44px; }
+.gclutter-btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .glint-month { margin: 22px 0 10px; font-size: 12px; font-weight: 400; }
 .glint-month:first-child { margin-top: 6px; }
 
