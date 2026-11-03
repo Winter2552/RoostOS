@@ -35,9 +35,10 @@ function takenMs(raw) {
 }
 
 class PhotoBackup {
-  constructor({ nest, dbFile, onStored = () => {} }) {
+  constructor({ nest, dbFile, onStored = () => {}, onLinked = () => {} }) {
     this.nest = nest;
     this.onStored = onStored;
+    this.onLinked = onLinked;
     this.db = new DatabaseSync(dbFile);
     this.db.exec(`
       PRAGMA journal_mode = WAL;
@@ -50,6 +51,19 @@ class PhotoBackup {
         size INTEGER NOT NULL,
         sent INTEGER NOT NULL,
         PRIMARY KEY (owner, id)
+      );
+      -- The Immich app sends a Live Photo's video first and then the photo, naming the video's id: that is the pairing.
+      CREATE TABLE IF NOT EXISTS clips (
+        owner TEXT NOT NULL,
+        uuid TEXT NOT NULL,
+        node TEXT NOT NULL,
+        PRIMARY KEY (owner, uuid)
+      );
+      CREATE TABLE IF NOT EXISTS live (
+        owner TEXT NOT NULL,
+        still TEXT NOT NULL,
+        uuid TEXT NOT NULL,
+        PRIMARY KEY (owner, still)
       );
       CREATE TABLE IF NOT EXISTS pending (
         upload TEXT PRIMARY KEY,
@@ -66,6 +80,9 @@ class PhotoBackup {
       addPending: q('INSERT OR REPLACE INTO pending (upload, owner, id, device, created) VALUES (?, ?, ?, ?, ?)'),
       pending: q('SELECT * FROM pending WHERE upload = ? AND owner = ?'),
       dropPending: q('DELETE FROM pending WHERE upload = ?'),
+      addClip: q('INSERT OR REPLACE INTO clips (owner, uuid, node) VALUES (?, ?, ?)'),
+      addLive: q('INSERT OR REPLACE INTO live (owner, still, uuid) VALUES (?, ?, ?)'),
+      links: q('SELECT l.still, c.node AS clip FROM live l JOIN clips c ON c.owner = l.owner AND c.uuid = l.uuid WHERE l.owner = ?'),
       stale: q('DELETE FROM pending WHERE created < ?'),
       stats: q('SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes, MAX(sent) AS last FROM sent WHERE owner = ?'),
     };
@@ -171,6 +188,22 @@ class PhotoBackup {
     this.q.addSent.run(user.id, id, last.item.id, cleanName(str(device, 60)) || 'Phone', last.item.size, Date.now());
     this.onStored(user, last.item, taken);
     return { done: true, item: last.item };
+  }
+
+  // The app's id for a Live Photo's video, and later the photo that names it.
+  rememberClip(user, uuid, node) {
+    this.q.addClip.run(user.id, uuid, node);
+    this.onLinked(user);
+  }
+
+  linkLive(user, still, uuid) {
+    this.q.addLive.run(user.id, still, uuid);
+    this.onLinked(user);
+  }
+
+  // [{ still, clip }]: Nest files the app said belong together.
+  liveLinks(user) {
+    return this.q.links.all(user.id);
   }
 
   status(user) {

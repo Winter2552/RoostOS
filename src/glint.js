@@ -26,6 +26,7 @@ const { Clutter } = require('./glint-clutter');
 const { People } = require('./glint-people');
 
 const LIVE_FOLDER = 'Live Photo videos'; // where the Immich app's hidden Live Photo clips are kept (src/immich.js)
+const NEAR_MS = 3000; // how close in time a photo and a hidden clip with a different name must be
 const PAGE = 240; // photos per timeline page
 const THUMB_MAX = 512 * 1024; // previews are about 30 KB; this is a ceiling
 const MAX_IDS = 1000;
@@ -152,6 +153,7 @@ class Glint {
       this.db.exec('PRAGMA user_version = 2');
     }
     this.dirty = new Set(); // owners whose Live Photo pairs need working out again
+    this.liveLinks = () => []; // pairs the phone app named itself: [{ still, clip }] (set by the server)
     this.paired = new Set(); // owners worked out since start-up
     const q = (sql) => this.db.prepare(sql);
     this.q = {
@@ -363,38 +365,49 @@ class Glint {
     if (this.paired.has(user.id) && !this.dirty.has(user.id)) return;
     this.dirty.delete(user.id);
     this.paired.add(user.id);
+    const rows = this.q.pairable.all(user.id);
+    const pairs = new Map(); // photo id -> clip id
+    const used = new Set(); // clips already given to a photo
+    const give = (photo, clip) => {
+      if (pairs.has(photo) || used.has(clip)) return;
+      pairs.set(photo, clip);
+      used.add(clip);
+    };
+    // 1. Pairs the phone app named itself: no guessing.
+    const known = new Set(rows.map((r) => r.id));
+    for (const l of this.liveLinks(user)) if (known.has(l.still) && known.has(l.clip)) give(l.still, l.clip);
+    // 2. The same name in the same folder (IMG_5666.HEIC and IMG_5666.MOV), the clip also counting as in the
+    // folder above "Live Photo videos", where the phone app files it.
     const groups = new Map();
-    const loose = []; // clips the phone sent hidden (in "Live Photo videos") whose name has no photo to match
-    for (const r of this.q.pairable.all(user.id)) {
+    for (const r of rows) {
       const type = mediaType(r);
       const video = type.startsWith('video/');
       if (!video && !type.startsWith('image/')) continue;
       if (video && (r.size > LIVE_MAX_BYTES || r.duration > LIVE_MAX_SECONDS)) continue;
-      // The phone app files the video half of a Live Photo in a folder beside the photos: it belongs to them.
       const hidden = video && r.folder === LIVE_FOLDER;
       const home = hidden ? r.above : r.parent;
       const key = `${r.gone}|${home}|${r.name.replace(/\.[^.]*$/, '').toLowerCase()}`;
-      const g = groups.get(key) || { photo: null, clip: null, home, gone: r.gone, taken: 0 };
-      const slot = video ? 'clip' : 'photo';
-      if (!g[slot] || r.id < g[slot]) { g[slot] = r.id; if (!video) g.taken = r.taken; else g.clipTaken = r.taken; }
-      if (hidden) g.hiddenClip = true;
+      const g = groups.get(key) || { photo: null, clip: null, home, gone: r.gone, taken: 0, hidden: false };
+      if (video) { if (!g.clip || r.id < g.clip) { g.clip = r.id; g.taken = r.taken; } if (hidden) g.hidden = true; }
+      else if (!g.photo || r.id < g.photo) { g.photo = r.id; g.photoTaken = r.taken; }
       groups.set(key, g);
     }
-    // A hidden clip and a photo of the same moment (within two seconds) are a pair even when the names differ,
-    // as long as it is the only photo that fits.
-    const lone = [...groups.values()].filter((g) => g.photo && !g.clip);
-    for (const g of [...groups.values()]) {
-      if (!g.clip || g.photo || !g.hiddenClip) continue;
-      const near = lone.filter((o) => !o.clip && o.home === g.home && o.gone === g.gone && Math.abs(o.taken - g.clipTaken) <= 2000);
-      if (near.length === 1) { near[0].clip = g.clip; g.clip = null; }
+    for (const g of groups.values()) if (g.photo && g.clip) give(g.photo, g.clip);
+    // 3. A hidden clip and a photo taken within three seconds of it, when the names differ and only one photo fits.
+    const lone = [...groups.values()].filter((g) => g.photo && !pairs.has(g.photo) && !g.clip);
+    for (const g of groups.values()) {
+      if (!g.clip || g.photo || !g.hidden || used.has(g.clip)) continue;
+      const near = lone.filter((o) => !pairs.has(o.photo) && o.home === g.home && o.gone === g.gone && Math.abs(o.photoTaken - g.taken) <= NEAR_MS)
+        .sort((a, b) => Math.abs(a.photoTaken - g.taken) - Math.abs(b.photoTaken - g.taken));
+      // The closest photo, as long as no other is nearly as close.
+      if (near.length && (near.length === 1 || Math.abs(near[1].photoTaken - g.taken) - Math.abs(near[0].photoTaken - g.taken) >= 500)) give(near[0].photo, g.clip);
     }
     this.db.exec('BEGIN');
     try {
       this.q.unpair.run(user.id);
-      for (const g of groups.values()) {
-        if (!g.photo || !g.clip) continue;
-        this.q.pairPhoto.run(g.clip, g.photo);
-        this.q.pairClip.run(g.clip);
+      for (const [photo, clip] of pairs) {
+        this.q.pairPhoto.run(clip, photo);
+        this.q.pairClip.run(clip);
       }
       this.db.exec('COMMIT');
     } catch (err) {

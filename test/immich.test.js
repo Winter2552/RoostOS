@@ -214,3 +214,19 @@ test('the hidden half of a Live Photo from the app joins its photo, by name or b
   assert.deepEqual(mine.map((p) => p.name).sort(), ['IMG_0200.HEIC', 'IMG_0201.HEIC']);
   assert.ok(mine.every((p) => p.live));
 });
+
+test('a photo that names its video in the app\'s upload is paired with it whatever the names and dates', async () => {
+  const token = (await call('POST', '/api/auth/login', { email: 'sam@roost', password: 'password1' })).body.accessToken;
+  const send = (id, name, data, created, extra = {}) => {
+    const m = multipart({ deviceAssetId: id, deviceId: 'phone-1', fileCreatedAt: created, fileModifiedAt: created, ...extra }, name, Buffer.from(data), /MOV$/i.test(name) ? 'video/quicktime' : 'image/heic');
+    return post('/api/assets', { Authorization: `Bearer ${token}`, 'Content-Type': m.type }, m.body);
+  };
+  const clip = await send('NAMED_CLIP', 'ABCD_L0_001_999_o_FullSizeRender.mov', 'clip n', '2015-01-02T03:04:05.000Z', { visibility: 'hidden' });
+  const still = await send('NAMED_STILL', 'IMG_7777.HEIC', 'still n', '2015-03-04T05:06:07.000Z', { livePhotoVideoId: clip.body.id });
+  assert.equal(still.status, 201);
+  const sam = (await call('POST', '/api/login', { username: 'sam', password: 'password1' })).cookie;
+  const list = (await call('GET', '/api/glint/photos', null, sam)).body.items;
+  const photo = list.find((p) => p.name === 'IMG_7777.HEIC');
+  assert.ok(photo && photo.live, 'the photo has its clip');
+  assert.ok(!list.some((p) => p.name.startsWith('ABCD_L0')), 'the clip is not a tile of its own');
+});
