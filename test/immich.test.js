@@ -241,3 +241,21 @@ test('a Live Photo clip that never found its photo is offered in Clear clutter',
   const clips = groups.find((g) => g.id === 'clips');
   assert.ok(clips && clips.items.some((i) => i.name === 'lonely_L0_001.mov'));
 });
+
+test('a burst of Live Photos sent without links still pairs one clip to one photo by time', async () => {
+  const token = (await call('POST', '/api/auth/login', { email: 'sam@roost', password: 'password1' })).body.accessToken;
+  const send = (id, name, created, extra = {}) => {
+    const m = multipart({ deviceAssetId: id, deviceId: 'phone-1', fileCreatedAt: created, fileModifiedAt: created, ...extra }, name, Buffer.from(id), /MOV$/i.test(name) ? 'video/quicktime' : 'image/heic');
+    return post('/api/assets', { Authorization: `Bearer ${token}`, 'Content-Type': m.type }, m.body);
+  };
+  const base0 = Date.parse('2011-05-05T05:05:05.000Z');
+  const at = (ms) => new Date(base0 + ms).toISOString();
+  for (let i = 0; i < 3; i++) {
+    await send(`BURST_S${i}`, `IMG_90${i}.HEIC`, at(i * 1000));
+    await send(`BURST_C${i}`, `ZZ${i}_L0_001.MOV`, at(i * 1000 + 200), { visibility: 'hidden' });
+  }
+  const sam = (await call('POST', '/api/login', { username: 'sam', password: 'password1' })).cookie;
+  const items = (await call('GET', '/api/glint/photos', null, sam)).body.items.filter((p) => /^(IMG_90\d|ZZ\d_)/.test(p.name));
+  assert.deepEqual(items.map((p) => p.name).sort(), ['IMG_900.HEIC', 'IMG_901.HEIC', 'IMG_902.HEIC']);
+  assert.equal(new Set(items.map((p) => p.live)).size, 3);
+});

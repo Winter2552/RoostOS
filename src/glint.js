@@ -393,14 +393,22 @@ class Glint {
       groups.set(key, g);
     }
     for (const g of groups.values()) if (g.photo && g.clip) give(g.photo, g.clip);
-    // 3. A hidden clip and a photo taken within three seconds of it, when the names differ and only one photo fits.
+    // 3. Names that differ: a hidden clip goes with the photo taken closest to it, within three seconds, one to one.
+    // Pairs are made nearest first; a tie (two photos equally close) is left alone rather than guessed.
     const lone = [...groups.values()].filter((g) => g.photo && !pairs.has(g.photo) && !g.clip);
+    const cands = [];
     for (const g of groups.values()) {
       if (!g.clip || g.photo || !g.hidden || used.has(g.clip)) continue;
-      const near = lone.filter((o) => !pairs.has(o.photo) && o.home === g.home && o.gone === g.gone && Math.abs(o.photoTaken - g.taken) <= NEAR_MS)
-        .sort((a, b) => Math.abs(a.photoTaken - g.taken) - Math.abs(b.photoTaken - g.taken));
-      // The closest photo, as long as no other is nearly as close.
-      if (near.length && (near.length === 1 || Math.abs(near[1].photoTaken - g.taken) - Math.abs(near[0].photoTaken - g.taken) >= 500)) give(near[0].photo, g.clip);
+      for (const o of lone) {
+        const d = Math.abs(o.photoTaken - g.taken);
+        if (o.home === g.home && o.gone === g.gone && d <= NEAR_MS) cands.push({ clip: g.clip, photo: o.photo, d });
+      }
+    }
+    cands.sort((a, b) => a.d - b.d);
+    for (const c of cands) {
+      if (pairs.has(c.photo) || used.has(c.clip)) continue;
+      const rivals = cands.filter((o) => o !== c && o.d === c.d && !pairs.has(o.photo) && !used.has(o.clip) && (o.photo === c.photo || o.clip === c.clip));
+      if (!rivals.length) give(c.photo, c.clip);
     }
     this.db.exec('BEGIN');
     try {
