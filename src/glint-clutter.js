@@ -13,6 +13,7 @@ const CAP = 600; // photos shown per group; the rest appear once these are dealt
 const PHONE_SCREEN = 1.6; // a phone screenshot is much taller than a photo's 4:3 or 3:2
 
 const GROUPS = [
+  { id: 'clips', title: 'Leftover Live Photo clips', hint: 'Short videos from the Immich app that did not join a photo. Deleting one never touches a photo.' },
   { id: 'screenshots', title: 'Screenshots', hint: 'Pictures of the phone screen.' },
   { id: 'chat', title: 'Saved from chat apps', hint: 'Photos and videos saved from WhatsApp, Telegram and the like.' },
   { id: 'tiny', title: 'Tiny pictures', hint: `Smaller than ${TINY} pixels: stickers, memes and thumbnails.` },
@@ -28,6 +29,8 @@ const SCHEMA = `
 `;
 
 function classify(r) {
+  // The video half of a Live Photo that no photo claimed: the phone app files these in their own folder.
+  if (r.folder === 'Live Photo videos' && ((r.mime || '').startsWith('video/') || /\.(mov|mp4|m4v)$/i.test(r.name))) return 'clips';
   const known = r.width > 0 && r.height > 0;
   const long = Math.max(r.width, r.height);
   const ext = (/\.([a-z0-9]+)$/i.exec(r.name) || [])[1] || '';
@@ -45,7 +48,8 @@ class Clutter {
     this.db = db;
     db.exec(SCHEMA);
     this.q = {
-      rows: db.prepare(`SELECT p.*, n.name, n.mime, n.size AS bytes FROM photos p JOIN nodes n ON n.id = p.id
+      rows: db.prepare(`SELECT p.id, p.owner, p.taken, p.width, p.height, p.duration, p.thumb, p.fav, p.date_src, p.exif, p.live,
+        n.name, n.mime, n.size AS bytes, f.name AS folder FROM photos p JOIN nodes n ON n.id = p.id LEFT JOIN nodes f ON f.id = n.parent
         WHERE p.owner = ? AND n.trash_root IS NULL AND p.hide = 0 AND p.fav = 0 AND p.live IS NULL
         AND NOT EXISTS (SELECT 1 FROM album_photos ap WHERE ap.photo = p.id)
         AND NOT EXISTS (SELECT 1 FROM clutter_keep k WHERE k.owner = p.owner AND k.id = p.id)

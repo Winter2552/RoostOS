@@ -1306,12 +1306,16 @@
         el('div', { class: 'gclutter-head' },
           el('div', {},
             el('h3', { text: g.title }),
-            el('span', { class: 'mono muted', text: `${more ? `${g.items.length} of ${g.count}` : plural(g.items.length, 'photo')} · ${bytes(g.bytes)}` }),
+            el('span', { class: 'mono muted', text: `${more ? `${g.items.length} of ${g.count}` : plural(g.items.length, g.id === 'clips' ? 'clip' : 'photo')} · ${bytes(g.bytes)}` }),
             el('p', { class: 'muted', text: g.hint })),
+          el('span', { class: 'gclutter-btns' },
+          g.id === 'clips' ? el('button', { type: 'button', class: 'btn small danger-fill', text: more ? 'Delete these' : 'Delete all', onclick: async () => {
+            if (await confirmBox({ title: `Delete ${plural(g.items.length, 'clip')}?`, text: 'They go to the trash for 30 days. Photos are never touched.', ok: 'Delete', danger: true })) trash(g.items);
+          } }) : null,
           el('button', { type: 'button', class: 'btn ghost small', text: all ? 'Clear' : 'Select all', onclick: () => {
             for (const i of g.items) { if (all) G.sel.delete(i.id); else G.sel.add(i.id); }
             render();
-          } })),
+          } }))),
         el('div', { class: 'glint-grid' }, ...g.items.map(tile)));
     }
     body.replaceChildren(...parts);
