@@ -21,6 +21,7 @@ const fsp = fs.promises;
 const path = require('path');
 const crypto = require('crypto');
 const { HttpError, send, readJson, str } = require('./http');
+const convert = require('./convert');
 const { Memories } = require('./glint-memories');
 const { Clutter } = require('./glint-clutter');
 const { People } = require('./glint-people');
@@ -81,6 +82,10 @@ const SCHEMA = `
   );
   CREATE INDEX IF NOT EXISTS album_photos_photo ON album_photos (photo);
   CREATE INDEX IF NOT EXISTS nodes_size ON nodes (owner, size);
+  CREATE TABLE IF NOT EXISTS clip_dates (
+    id TEXT PRIMARY KEY,               -- a Live Photo clip
+    made INTEGER NOT NULL              -- when it was filmed, from inside the file (0 if it doesn't say)
+  );
 `;
 
 // Image and video types a browser can show directly. Anything else is sent
@@ -155,6 +160,7 @@ class Glint {
     this.dirty = new Set(); // owners whose Live Photo pairs need working out again
     this.liveLinks = () => []; // pairs the phone app named itself: [{ still, clip }] (set by the server)
     this.paired = new Set(); // owners worked out since start-up
+    this.probing = new Set(); // owners whose clips are being read
     const q = (sql) => this.db.prepare(sql);
     this.q = {
       // New photos in Nest since last time, dated by the file's modified date (the arrival time for a plain upload,
@@ -175,8 +181,13 @@ class Glint {
       count: q(`SELECT COUNT(*) AS n FROM photos p JOIN nodes n ON n.id = p.id
                 WHERE p.owner = ? AND n.trash_root IS NULL AND p.hide = 0`),
       pairable: q(`SELECT p.id, p.duration, p.taken, n.parent, n.name, n.mime, n.size, n.trash_root IS NOT NULL AS gone,
-                     f.name AS folder, f.parent AS above
-                   FROM photos p JOIN nodes n ON n.id = p.id LEFT JOIN nodes f ON f.id = n.parent WHERE p.owner = ?`),
+                     f.name AS folder, f.parent AS above, c.made
+                   FROM photos p JOIN nodes n ON n.id = p.id LEFT JOIN nodes f ON f.id = n.parent
+                   LEFT JOIN clip_dates c ON c.id = p.id WHERE p.owner = ?`),
+      unprobed: q(`SELECT n.id FROM photos p JOIN nodes n ON n.id = p.id JOIN nodes f ON f.id = n.parent
+                   LEFT JOIN clip_dates c ON c.id = p.id
+                   WHERE p.owner = ? AND f.name = ? AND n.kind = 'file' AND p.live IS NULL AND c.id IS NULL LIMIT 200`),
+      addClipDate: q('INSERT OR REPLACE INTO clip_dates (id, made) VALUES (?, ?)'),
       unpair: q('UPDATE photos SET live = NULL, hide = 0 WHERE owner = ? AND (live IS NOT NULL OR hide = 1)'),
       pairPhoto: q('UPDATE photos SET live = ? WHERE id = ?'),
       pairClip: q('UPDATE photos SET hide = 1 WHERE id = ?'),
@@ -233,6 +244,7 @@ class Glint {
     if (!before) {
       if (this.q.index.run(user.id).changes) this.dirty.add(user.id);
       this.pair(user);
+      this.probeClips(user);
     }
     if (album && !this.q.album.get(album, user.id)) throw new HttpError(404, 'That album no longer exists');
     const key = `${Boolean(before)}|${Boolean(album)}|${favourites}|${own}|${undated}|${Boolean(person)}`;
@@ -388,12 +400,12 @@ class Glint {
       const home = hidden ? r.above : r.parent;
       const key = `${r.gone}|${home}|${r.name.replace(/\.[^.]*$/, '').toLowerCase()}`;
       const g = groups.get(key) || { photo: null, clip: null, home, gone: r.gone, taken: 0, hidden: false };
-      if (video) { if (!g.clip || r.id < g.clip) { g.clip = r.id; g.taken = r.taken; } if (hidden) g.hidden = true; }
+      if (video) { if (!g.clip || r.id < g.clip) { g.clip = r.id; g.taken = r.made || r.taken; } if (hidden) g.hidden = true; }
       else if (!g.photo || r.id < g.photo) { g.photo = r.id; g.photoTaken = r.taken; }
       groups.set(key, g);
     }
     for (const g of groups.values()) if (g.photo && g.clip) give(g.photo, g.clip);
-    // 3. Names that differ: a hidden clip goes with the photo taken closest to it, within three seconds, one to one.
+    // 3. Names that differ: a hidden clip goes with the photo taken closest to it, within three seconds, one to one, in whichever year folder the photo is (the app files a clip by when it was written, not when it was filmed).
     // Pairs are made nearest first; a tie (two photos equally close) is left alone rather than guessed.
     const lone = [...groups.values()].filter((g) => g.photo && !pairs.has(g.photo) && !g.clip);
     const cands = [];
@@ -401,7 +413,7 @@ class Glint {
       if (!g.clip || g.photo || !g.hidden || used.has(g.clip)) continue;
       for (const o of lone) {
         const d = Math.abs(o.photoTaken - g.taken);
-        if (o.home === g.home && o.gone === g.gone && d <= NEAR_MS) cands.push({ clip: g.clip, photo: o.photo, d });
+        if (o.gone === g.gone && d <= NEAR_MS) cands.push({ clip: g.clip, photo: o.photo, d });
       }
     }
     cands.sort((a, b) => a.d - b.d);
@@ -422,6 +434,33 @@ class Glint {
       this.db.exec('ROLLBACK');
       throw err;
     }
+  }
+
+  // The phone app writes a Live Photo's clip much later than the photo was taken, so the date in the file is no
+  // use for matching; the moment it was filmed is inside the clip. Read once per clip, in the background (a few
+  // at a time), then pair again.
+  probeClips(user) {
+    if (this.probing.has(user.id)) return;
+    const todo = this.q.unprobed.all(user.id, LIVE_FOLDER).map((r) => r.id);
+    if (!todo.length) return;
+    this.probing.add(user.id);
+    (async () => {
+      try {
+        let next = 0;
+        const worker = async () => {
+          while (next < todo.length) {
+            const id = todo[next++];
+            let made = 0;
+            try { made = await convert.filmedAt(this.nest.diskPath(user, id)); } catch { /* gone meanwhile */ }
+            this.q.addClipDate.run(id, made);
+          }
+        };
+        await Promise.all([worker(), worker()]);
+        this.dirty.add(user.id);
+      } catch { /* try again next time */ } finally {
+        this.probing.delete(user.id);
+      }
+    })();
   }
 
   // The clips that go with these photos, so trashing or deleting a Live Photo takes both files.
