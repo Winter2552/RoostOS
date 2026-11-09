@@ -151,4 +151,19 @@ async function made(src, dir, name, make) {
   return pending.get(out);
 }
 
-module.exports = { convertKind, typeOf, previewFile, posterFile, durationOf, posterName, previewName, previewType, extOf };
+// When a video was really filmed, in ms (0 when it doesn't say). A Live Photo's clip made by the phone app carries
+// the moment the photo was taken inside it, even though the file itself was written much later.
+async function filmedAt(src) {
+  try {
+    const out = await run('ffprobe', ['-v', 'error', '-show_entries', 'format_tags=com.apple.quicktime.creationdate,creation_time', '-of', 'json', src], { capture: true, timeout: 30000 });
+    const tags = (JSON.parse(out).format || {}).tags || {};
+    for (const v of [tags['com.apple.quicktime.creationdate'], tags.creation_time]) {
+      if (typeof v !== 'string') continue;
+      const t = Date.parse(v.replace(/([+-]\d\d)(\d\d)$/, '$1:$2'));
+      if (Number.isFinite(t) && t > Date.UTC(1990, 0, 1)) return t;
+    }
+  } catch { /* not a video ffprobe can read */ }
+  return 0;
+}
+
+module.exports = { filmedAt, convertKind, typeOf, previewFile, posterFile, durationOf, posterName, previewName, previewType, extOf };

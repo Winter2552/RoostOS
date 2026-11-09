@@ -241,3 +241,43 @@ test('a Live Photo clip that never found its photo is offered in Clear clutter',
   const clips = groups.find((g) => g.id === 'clips');
   assert.ok(clips && clips.items.some((i) => i.name === 'lonely_L0_001.mov'));
 });
+
+test('a burst of Live Photos sent without links still pairs one clip to one photo by time', async () => {
+  const token = (await call('POST', '/api/auth/login', { email: 'sam@roost', password: 'password1' })).body.accessToken;
+  const send = (id, name, created, extra = {}) => {
+    const m = multipart({ deviceAssetId: id, deviceId: 'phone-1', fileCreatedAt: created, fileModifiedAt: created, ...extra }, name, Buffer.from(id), /MOV$/i.test(name) ? 'video/quicktime' : 'image/heic');
+    return post('/api/assets', { Authorization: `Bearer ${token}`, 'Content-Type': m.type }, m.body);
+  };
+  const base0 = Date.parse('2011-05-05T05:05:05.000Z');
+  const at = (ms) => new Date(base0 + ms).toISOString();
+  for (let i = 0; i < 3; i++) {
+    await send(`BURST_S${i}`, `IMG_90${i}.HEIC`, at(i * 1000));
+    await send(`BURST_C${i}`, `ZZ${i}_L0_001.MOV`, at(i * 1000 + 200), { visibility: 'hidden' });
+  }
+  const sam = (await call('POST', '/api/login', { username: 'sam', password: 'password1' })).cookie;
+  const items = (await call('GET', '/api/glint/photos', null, sam)).body.items.filter((p) => /^(IMG_90\d|ZZ\d_)/.test(p.name));
+  assert.deepEqual(items.map((p) => p.name).sort(), ['IMG_900.HEIC', 'IMG_901.HEIC', 'IMG_902.HEIC']);
+  assert.equal(new Set(items.map((p) => p.live)).size, 3);
+});
+
+test('a clip written long after its photo is paired by the moment filmed that is inside it', { skip: require('child_process').spawnSync('ffprobe', ['-version']).status !== 0 }, async () => {
+  const cp = require('child_process');
+  const file = path.join(os.tmpdir(), `roost-clip-${process.pid}.mp4`);
+  const made = cp.spawnSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=red:s=64x64:d=1', '-metadata', 'creation_time=2014-04-04T04:04:04Z', '-y', file]);
+  assert.equal(made.status, 0, String(made.stderr));
+  const data = fs.readFileSync(file);
+  const token = (await call('POST', '/api/auth/login', { email: 'sam@roost', password: 'password1' })).body.accessToken;
+  const send = (id, name, body, created, type, extra = {}) => {
+    const m = multipart({ deviceAssetId: id, deviceId: 'phone-1', fileCreatedAt: created, fileModifiedAt: created, ...extra }, name, body, type);
+    return post('/api/assets', { Authorization: `Bearer ${token}`, 'Content-Type': m.type }, m.body);
+  };
+  await send('FILMED_S', 'IMG_4444.HEIC', Buffer.from('still'), '2014-04-04T04:04:04.000Z', 'image/heic');
+  await send('FILMED_C', 'ABCD_L0_001_o_FullSizeRender.mov', data, '2030-01-01T00:00:00.000Z', 'video/quicktime', { visibility: 'hidden' });
+  const sam = (await call('POST', '/api/login', { username: 'sam', password: 'password1' })).cookie;
+  let photo;
+  for (let i = 0; i < 20 && !(photo && photo.live); i++) {
+    await new Promise((r) => setTimeout(r, 300));
+    photo = (await call('GET', '/api/glint/photos', null, sam)).body.items.find((p) => p.name === 'IMG_4444.HEIC');
+  }
+  assert.ok(photo && photo.live, 'the photo got its clip');
+});
