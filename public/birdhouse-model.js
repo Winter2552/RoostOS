@@ -639,7 +639,7 @@ Rules for custom designs:
   function layout(d, opts) {
     const [SW, SH] = (opts && opts.sheet) || SHEET;
     const kerf = opts && opts.kerf !== undefined ? opts.kerf : KERF;
-    const rows = parts(d);
+    const rows = (opts && opts.rows) || parts(d);
     const pieces = [];
     rows.forEach((r, part) => { for (let i = 0; i < r.qty; i++) pieces.push({ part, l: r.length, w: r.width, t: r.thickness }); });
     // Narrow boards (strips) come from lengths of timber; the rest from sheets.
@@ -801,8 +801,7 @@ Rules for custom designs:
   // price on each line is a rough starter guess (pounds), only there until the
   // person sets their own; `search` is what to type into a shop's search box.
   //   -> [{ key, label, qty, search, estimate }]
-  function materials(d, opts) {
-    const l = layout(d, opts);
+  function stockLines(l) {
     const out = [];
     const sheetsBy = {};
     for (const sh of l.sheets) {
@@ -816,6 +815,11 @@ Rules for custom designs:
       const have = g.bars.filter((b) => b.owned).length;
       out.push({ key: `timber-${g.width}x${g.thickness}`, label: `${g.width} × ${g.thickness} timber, ${g.stock} mm length`, qty: g.bars.length - have, have, search: `${g.width}x${g.thickness} timber ${g.stock / 1000}m`, estimate: Math.round(0.00264 * g.width * g.thickness * 100) / 100 });
     }
+    return out;
+  }
+  // Screws, glue, hinges and the anti-tip kit for one design.
+  function fixingLines(d) {
+    const out = [];
     const c = clean(d);
     const boards = solids(c).length;
     if (c.style === 'framed' || c.template === 'custom') out.push({ key: 'screws', label: '60 mm wood screws, box of 200', qty: Math.max(1, Math.ceil((boards * 6) / 200)), have: 0, search: '60mm wood screws box 200', estimate: 8 });
@@ -824,6 +828,27 @@ Rules for custom designs:
     if (c.doors) out.push({ key: 'hinges', label: 'Cabinet hinges, pair', qty: c.doors, have: 0, search: 'cabinet hinges pair', estimate: 3 });
     if (checks(c).some((k) => k.tip)) out.push({ key: 'antitip', label: 'Anti-tip wall bracket kit', qty: 1, have: 0, search: 'furniture anti tip wall bracket', estimate: 4 });
     return out;
+  }
+  function materials(d, opts) {
+    return [...stockLines(layout(d, opts)), ...fixingLines(d)];
+  }
+
+  // Several designs cut from the same sheets and timber, so offcuts from one go
+  // to the next. Boards are named "1 Side" (design number, then the part).
+  //   -> { layout, rows: [{ ...part, project }], materials, apart }
+  // apart is the sheets and timber lengths the same designs need one at a time.
+  function combine(designs, opts) {
+    const ds = designs.map(clean);
+    const rows = ds.flatMap((d, i) => parts(d).map((r) => ({ ...r, name: `${i + 1} ${r.name}`, project: i })));
+    const l = layout(ds[0], { ...opts, rows });
+    const lines = new Map();
+    const add = (m) => { const e = lines.get(m.key); if (e) e.qty += m.qty; else lines.set(m.key, { ...m }); };
+    stockLines(l).forEach(add);
+    ds.flatMap(fixingLines).forEach(add);
+    if (lines.has('glue')) lines.get('glue').qty = Math.max(1, Math.ceil(ds.length / 2));
+    const count = (m) => m.filter((x) => /^(sheet|timber)-/.test(x.key)).reduce((a, x) => a + x.qty, 0);
+    const apart = ds.reduce((a, d) => a + count(materials(d, opts)), 0);
+    return { layout: l, rows, materials: [...lines.values()], apart, together: count([...lines.values()]) };
   }
 
   // Things worth knowing before building: it might tip, sag or rack. Each is
@@ -1015,7 +1040,7 @@ Rules for custom designs:
   // Every tool the steps need, once each.
   const toolsFor = (list) => [...new Set(list.flatMap((st) => st.tools))];
 
-  const exported = { FINISHES, cleanBuild, steps, schedule, toolsFor, fit, fitProblems, cleanStock, TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, layout, materials, project, parse, ownedStock, checks, sanitizeBoards, boardProblems, designInstructions, readDesign, describeDesign, reviseRequest };
+  const exported = { combine, FINISHES, cleanBuild, steps, schedule, toolsFor, fit, fitProblems, cleanStock, TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, layout, materials, project, parse, ownedStock, checks, sanitizeBoards, boardProblems, designInstructions, readDesign, describeDesign, reviseRequest };
   if (typeof module !== 'undefined' && module.exports) module.exports = exported;
   else window.birdhouseModel = exported;
 })();

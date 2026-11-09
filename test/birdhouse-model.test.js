@@ -411,3 +411,15 @@ test('build steps come from the design, waiting is kept apart from work, and the
   assert.deepEqual(model.cleanBuild({ start: 'nonsense', hours: 99, finish: 'gold', done: ['cut', '../x', 'cut'] }), { start: '', hours: 4, finish: 'none', done: ['cut'] });
   assert.equal(model.cleanBuild({ start: '2026-11-14', hours: 2.5 }).start, '2026-11-14');
 });
+
+test('projects cut together share sheets and need no more than one at a time, with fixings added up', () => {
+  const a = model.clean({ template: 'bookshelf', style: 'panel' });
+  const b = model.clean({ template: 'box' });
+  const c = model.combine([a, b]);
+  assert.ok(c.together <= c.apart);
+  const total = (l) => l.sheets.reduce((n, s) => n + s.pieces.length, 0) + l.timber.reduce((n, g) => n + g.bars.reduce((m, x) => m + x.pieces.length, 0), 0);
+  assert.equal(total(c.layout), c.rows.reduce((n, r) => n + r.qty, 0), 'every board of every project is placed once');
+  assert.ok(c.rows.some((r) => r.name.startsWith('2 ')));
+  assert.equal(c.materials.filter((m) => m.key === 'glue').length, 1);
+  assert.equal(model.combine([a]).together, model.combine([a]).apart);
+});

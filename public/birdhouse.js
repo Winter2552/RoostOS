@@ -876,7 +876,7 @@
       thumb(model.defaults(id)), h('span', { text: model.TEMPLATES[id].name })))));
     const askBtn = h('button', { type: 'button', class: 'bh-btn', text: 'Ask Claude', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', onclick: (e) => openAsk(e.currentTarget) });
     box.replaceChildren(
-      h('div', { class: 'bh-bar' }, h('h2', { class: 'bh-name', text: 'Projects' }), h('span', { class: 'bh-barbtns' }, askBtn, h('a', { class: 'bh-btn', href: '#/birdhouse/workshop', text: 'Workshop' }))),
+      h('div', { class: 'bh-bar' }, h('h2', { class: 'bh-name', text: 'Projects' }), h('span', { class: 'bh-barbtns' }, askBtn, h('a', { class: 'bh-btn', href: '#/birdhouse/shopping', text: 'Shopping list' }), h('a', { class: 'bh-btn', href: '#/birdhouse/workshop', text: 'Workshop' }))),
       ask,
       h('p', { class: 'bh-say', id: 'bh-homesay', 'aria-live': 'polite' }),
       h('h3', { class: 'bh-h', text: 'Start something new' }), starters,
@@ -943,6 +943,37 @@
       h('p', { class: 'bh-note', text: 'Sheet and timber sizes are what the shops sell; the Sheets tab and shopping list are worked out on them.' }));
   }
 
+  // ---------- one shopping list for several projects ----------
+  // Tick projects; they are cut from the same sheets and timber, so offcuts
+  // from one go to the next, and the list is what to buy for all of them.
+  function drawShopping() {
+    const box = $('#bh-shopping');
+    const plans = S.data.plans.slice().sort((a, b) => b.updated.localeCompare(a.updated));
+    if (!S.pick) S.pick = new Set(plans.slice(0, 3).map((p) => p.id));
+    const chosen = plans.filter((p) => S.pick.has(p.id)).slice(0, 12);
+    const rows = plans.map((p) => {
+      const c = h('input', { type: 'checkbox', checked: S.pick.has(p.id), 'aria-label': p.name });
+      c.addEventListener('change', () => { if (c.checked) S.pick.add(p.id); else S.pick.delete(p.id); drawShopping(); });
+      return h('li', {}, h('label', {}, c, ` ${p.name}`));
+    });
+    const out = [h('div', { class: 'bh-bar' }, h('h2', { class: 'bh-name', text: 'Shopping list' }), h('a', { class: 'bh-btn', href: '#/birdhouse', text: '‹ Projects' })),
+      h('p', { class: 'bh-note', text: 'Tick the projects you will build together. They share sheets and timber, minus wood already in your workshop.' }),
+      plans.length ? h('ul', { class: 'bh-tools' }, ...rows) : h('p', { class: 'bh-note', text: 'No projects yet.' })];
+    if (chosen.length) {
+      const c = model.combine(chosen.map((p) => p.plan), lay());
+      const items = c.materials;
+      const total = items.reduce((a, m) => a + m.qty * priceOf(m), 0);
+      out.push(h('h3', { class: 'bh-h', text: 'What to buy' }),
+        h('table', { class: 'bh-table bh-cost' },
+          h('thead', {}, h('tr', {}, h('th', { text: 'Material' }), h('th', { text: 'Need' }), h('th', { text: 'Each' }), h('th', { text: 'Cost' }))),
+          h('tbody', {}, ...items.map((m) => h('tr', {}, h('td', { text: `${m.label}${m.have ? ` (${m.have} from workshop)` : ''}` }), h('td', { class: 'bh-num', text: String(m.qty) }), h('td', { class: 'bh-num', text: money(priceOf(m)) }), h('td', { class: 'bh-num', text: money(m.qty * priceOf(m)) })))),
+          h('tfoot', {}, h('tr', {}, h('td', { text: 'Estimate' }), h('td'), h('td'), h('td', { class: 'bh-num' }, h('b', { text: money(total) }))))),
+        h('p', { class: 'bh-note', text: c.together < c.apart ? `Together that is ${c.together} sheets and lengths, against ${c.apart} one project at a time. Prices come from your price book; set them on a project's Cost tab.` : 'Prices come from your price book; set them on a project’s Cost tab.' }));
+      if (c.layout.tooBig.length) out.push(h('p', { class: 'bh-warn', text: `${plural(c.layout.tooBig.length, 'board')} too big for a ${fmt(c.layout.width)} × ${fmt(c.layout.height)} sheet; open that project to see which.` }));
+    }
+    box.replaceChildren(...out);
+  }
+
   // ---------- one project ----------
   function showEditor(plan) {
     S.id = plan.id;
@@ -959,7 +990,7 @@
     paint();
   }
 
-  const screens = { home: '#bh-home', shop: '#bh-shop', editor: '#bh-editor' };
+  const screens = { home: '#bh-home', shop: '#bh-shop', shopping: '#bh-shopping', editor: '#bh-editor' };
   function show(name) {
     S.screen = name === 'editor' ? 'editor' : name;
     for (const [k, sel] of Object.entries(screens)) $(sel).classList.toggle('hidden', k !== name);
@@ -992,6 +1023,7 @@
     }
     if (ticket !== S.ask) return; // another page was opened while this loaded
     if (route === 'workshop') { show('shop'); drawShop(); return; }
+    if (route === 'shopping') { show('shopping'); drawShopping(); return; }
     if (route) {
       const plan = S.data.plans.find((p) => p.id === route);
       if (plan) { show('editor'); showEditor(plan); return; }
