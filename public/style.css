@@ -1878,6 +1878,20 @@ input.bh-name:hover, input.bh-name:focus { border-bottom-color: var(--bp-ink); o
 .bh-saw { margin: 0 0 14px; font-size: 13px; }
 .bh-saw summary { cursor: pointer; color: var(--bp-soft); }
 .bh-cuts { margin: 6px 0 0; padding-left: 1.6em; }
+.bh-steps input[type=date] { min-width: 9.5em; }
+.bh-steps select, .bh-steps input[type=date] { background: rgba(0, 0, 0, 0.12); color: var(--bp-ink); border: 1px solid var(--bp-line); border-radius: 4px; padding: 4px 6px; font: inherit; font-size: 13px; color-scheme: dark; }
+.bh-steprow { display: grid; grid-template-columns: 26px minmax(0, 1.6fr) minmax(0, 3fr); gap: 8px; align-items: center; padding: 6px 0; border-top: 1px dashed var(--bp-line); font-size: 13px; }
+.bh-steprow small { color: var(--bp-soft); }
+.bh-steprow.done > span { text-decoration: line-through; opacity: 0.7; }
+.bh-steprow.axis { border-top: 0; padding: 0; }
+.bh-axis { position: relative; height: 16px; font-size: 11px; color: var(--bp-soft); }
+.bh-axis span { position: absolute; top: 0; white-space: nowrap; }
+.bh-track { position: relative; height: 16px; background: rgba(0, 0, 0, 0.18); border-radius: 3px; }
+.bh-track b { position: absolute; top: 0; height: 16px; border-radius: 3px; background: var(--bp-ink); }
+.bh-track b.wait { background: repeating-linear-gradient(45deg, rgba(242, 246, 254, 0.35), rgba(242, 246, 254, 0.35) 4px, transparent 4px, transparent 8px); border: 1px dashed var(--bp-ink); box-sizing: border-box; }
+.bh-tools { list-style: none; margin: 6px 0 0; padding: 0; columns: 2; font-size: 13px; }
+.bh-progress { display: block; color: var(--bp-ink); }
+@media (max-width: 700px) { .bh-steprow { grid-template-columns: 26px minmax(0, 1fr); } .bh-steprow .bh-track, .bh-steprow.axis .bh-axis { grid-column: 1 / -1; } .bh-tools { columns: 1; } }
 .bh-key { color: var(--bp-soft); width: 1.6em; }
 .bh-warn { margin: 8px 0 0; font-size: 12px; border: 1.5px solid var(--bp-ink); border-radius: 4px; padding: 6px 10px; }
 .bh-sheets .bh-bars { max-height: none; margin-bottom: 14px; }

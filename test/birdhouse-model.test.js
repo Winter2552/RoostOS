@@ -395,3 +395,19 @@ test('sheet packing: boards keep a saw cut apart, cuts are numbered, offcuts are
   const rows = model.parts(panelOf('table'));
   for (const s of g.sheets) for (const p of s.pieces) assert.equal(p.w, rows[p.part].length);
 });
+
+test('build steps come from the design, waiting is kept apart from work, and the build record is cleaned', () => {
+  const none = model.steps(shelf, 'none');
+  assert.deepEqual(none.map((st) => st.id), ['cut', 'sand', 'build', 'wall']);
+  const framed = model.steps(model.clean({ template: 'bookshelf', style: 'framed' }), 'paint');
+  assert.deepEqual(framed.map((st) => st.id), ['cut', 'sand', 'build', 'fit', 'coat1', 'coat2', 'wall']);
+  assert.ok(framed.every((st) => st.work >= 0.5 && st.tools.length));
+  const sch = model.schedule(framed, 4);
+  assert.equal(sch.work, framed.reduce((a, st) => a + st.work, 0));
+  assert.equal(sch.waiting, framed.reduce((a, st) => a + st.wait, 0));
+  for (let i = 1; i < sch.steps.length; i++) assert.ok(sch.steps[i].at >= sch.steps[i - 1].at + sch.steps[i - 1].len - 1e-9, 'no step starts before the last one ends');
+  assert.ok(model.schedule(framed, 8).days < sch.days, 'more hours a day finishes sooner');
+  assert.ok(model.toolsFor(framed).includes('Clamps'));
+  assert.deepEqual(model.cleanBuild({ start: 'nonsense', hours: 99, finish: 'gold', done: ['cut', '../x', 'cut'] }), { start: '', hours: 4, finish: 'none', done: ['cut'] });
+  assert.equal(model.cleanBuild({ start: '2026-11-14', hours: 2.5 }).start, '2026-11-14');
+});

@@ -948,7 +948,74 @@ Rules for custom designs:
     return { template, set, unused };
   }
 
-  const exported = { fit, fitProblems, cleanStock, TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, layout, materials, project, parse, ownedStock, checks, sanitizeBoards, boardProblems, designInstructions, readDesign, describeDesign, reviseRequest };
+  // ---------- build steps and the timeline ----------
+  // The saved part of a project's build: when it starts, hours a day to spend,
+  // the finish, and which steps are ticked off.
+  const FINISHES = { none: 'No finish', oil: 'Oil', paint: 'Paint', varnish: 'Varnish' };
+  const FINISH_COATS = { oil: { coats: 2, wait: [6, 12] }, paint: { coats: 2, wait: [4, 12] }, varnish: { coats: 3, wait: [6, 12] } };
+  function cleanBuild(input) {
+    const i = input && typeof input === 'object' ? input : {};
+    const hours = Math.round(Number(i.hours) * 2) / 2;
+    return {
+      start: /^\d{4}-\d{2}-\d{2}$/.test(String(i.start)) && !Number.isNaN(Date.parse(i.start)) ? String(i.start) : '',
+      hours: Number.isFinite(hours) && hours >= 1 && hours <= 12 ? hours : 4,
+      finish: FINISHES[i.finish] ? i.finish : 'none',
+      done: [...new Set((Array.isArray(i.done) ? i.done : []).map(String).filter((v) => /^[a-z0-9]{2,12}$/.test(v)))].slice(0, 30),
+    };
+  }
+
+  // The steps to build a design, in order. work and wait are hours; wait is the
+  // time to leave it alone afterwards (glue, finish). tools are what each step
+  // needs. Rough, from the number of boards, and the same every time.
+  //   -> [{ id, name, work, wait, waitName, tools: [] }]
+  function steps(d, finish) {
+    const n = Math.max(1, parts(d).reduce((a, r) => a + r.qty, 0));
+    const half = (v) => Math.max(0.5, Math.round(v * 2) / 2);
+    const framed = d.style === 'framed';
+    const out = [
+      { id: 'cut', name: 'Cut the boards', work: half(0.3 + 0.12 * n), wait: 0, tools: ['Saw (circular or panel)', 'Tape and square'] },
+      { id: 'sand', name: 'Sand every part', work: half(0.05 * n + 0.3), wait: 0, tools: ['Sander and sandpaper'] },
+      { id: 'build', name: framed ? 'Glue and screw the frames' : 'Glue and screw it together', work: half(0.4 + 0.15 * n), wait: 12, waitName: 'Glue dries', tools: ['Drill and pilot bit', 'Clamps', 'Wood glue'] },
+    ];
+    if (framed) out.push({ id: 'fit', name: 'Fit the shelves and skins', work: half(0.3 + 0.08 * n), wait: 0, tools: ['Drill and pilot bit'] });
+    const f = FINISH_COATS[finish];
+    if (f) {
+      for (let c = 1; c <= f.coats; c++) {
+        out.push({ id: `coat${c}`, name: `${FINISHES[finish]}, coat ${c}`, work: half(0.2 + 0.05 * n), wait: c === f.coats ? f.wait[1] : f.wait[0], waitName: `Coat ${c} dries`, tools: ['Brush and rag'] });
+      }
+    }
+    if (d.template === 'bookshelf' || d.template === 'cabinet') out.push({ id: 'wall', name: 'Fix it to the wall (anti-tip)', work: 0.5, wait: 0, tools: ['Drill and pilot bit', 'Spirit level'] });
+    return out;
+  }
+
+  // Lays the steps out in days from the start. hoursPerDay is the time you give
+  // it each day; waiting runs on the clock. Positions are in days (fractions
+  // of a day), so a bar is drawn at its position and length.
+  //   -> { steps: [{ ...step, at, len, waitAt, waitLen }], days, ready, work, waiting }
+  function schedule(list, hoursPerDay) {
+    const perDay = Math.min(12, Math.max(1, Number(hoursPerDay) || 4));
+    let t = 0;
+    let work = 0;
+    let waiting = 0;
+    const out = list.map((st) => {
+      const row = { ...st, at: t, len: st.work / perDay, waitAt: 0, waitLen: 0 };
+      t += row.len;
+      work += st.work;
+      if (st.wait) {
+        row.waitAt = t;
+        row.waitLen = st.wait / 24;
+        t += row.waitLen;
+        waiting += st.wait;
+      }
+      return row;
+    });
+    return { steps: out, days: t, ready: Math.max(1, Math.ceil(t - 1e-9)), work, waiting };
+  }
+
+  // Every tool the steps need, once each.
+  const toolsFor = (list) => [...new Set(list.flatMap((st) => st.tools))];
+
+  const exported = { FINISHES, cleanBuild, steps, schedule, toolsFor, fit, fitProblems, cleanStock, TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, layout, materials, project, parse, ownedStock, checks, sanitizeBoards, boardProblems, designInstructions, readDesign, describeDesign, reviseRequest };
   if (typeof module !== 'undefined' && module.exports) module.exports = exported;
   else window.birdhouseModel = exported;
 })();

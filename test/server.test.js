@@ -641,7 +641,7 @@ test('Birdhouse keeps each person\'s plans, workshop wood and prices on their ac
   assert.ok((await call('GET', '/api/apps', null, adminCookie)).body.apps.some((a) => a.id === 'birdhouse'));
   await call('DELETE', `/api/admin/users/${joinerMade.body.user.id}`, null, adminCookie);
   const first = await call('GET', '/api/birdhouse/data', null, adminCookie);
-  assert.deepEqual(first.body, { plans: [], stock: [], prices: {}, prefs: { units: 'mm', sheet: [2440, 1220], timber: 2400, kerf: 3, trim: 0, grain: false } });
+  assert.deepEqual(first.body, { plans: [], stock: [], prices: {}, prefs: { units: 'mm', sheet: [2440, 1220], timber: 2400, kerf: 3, trim: 0, grain: false, tools: [] } });
 
   // A plan is cleaned to what its template allows, and saving again updates it.
   const made = await call('POST', '/api/birdhouse/plans', { name: '  Hall shelves ', plan: { template: 'bookshelf', width: 99999, height: 1800 } }, adminCookie);
@@ -650,6 +650,9 @@ test('Birdhouse keeps each person\'s plans, workshop wood and prices on their ac
   assert.ok(made.body.plan.width < 99999);
   const again = await call('POST', '/api/birdhouse/plans', { id: made.body.id, name: 'Hall shelves 2', plan: made.body.plan }, adminCookie);
   assert.equal(again.body.id, made.body.id);
+  assert.equal(again.body.build.hours, 4, 'a plan with no build record gets the defaults');
+  const timed = await call('POST', '/api/birdhouse/plans', { id: made.body.id, name: 'Hall shelves 2', plan: made.body.plan, build: { start: '2026-11-14', hours: 3, finish: 'oil', done: ['cut'] } }, adminCookie);
+  assert.deepEqual(timed.body.build, { start: '2026-11-14', hours: 3, finish: 'oil', done: ['cut'] });
   assert.equal((await call('GET', '/api/birdhouse/data', null, adminCookie)).body.plans.length, 1);
 
   // Workshop wood: bad rows are dropped, good ones kept.
@@ -669,7 +672,7 @@ test('Birdhouse keeps each person\'s plans, workshop wood and prices on their ac
   assert.equal(prices.body.prices['sheet-18@wickes'].url, 'https://www.wickes.co.uk/p/1');
 
   const prefs = await call('PUT', '/api/birdhouse/prefs', { units: 'in', sheet: [1220, 2500], timber: 99999, kerf: 99, trim: -4, grain: true }, adminCookie);
-  assert.deepEqual(prefs.body, { units: 'in', sheet: [2500, 1220], timber: 2400, kerf: 3, trim: 0, grain: true });
+  assert.deepEqual(prefs.body, { units: 'in', sheet: [2500, 1220], timber: 2400, kerf: 3, trim: 0, grain: true, tools: [] });
 
   const del = await call('DELETE', `/api/birdhouse/plans/${made.body.id}`, null, adminCookie); assert.equal(del.status, 200, JSON.stringify(del.body));
   assert.equal((await call('DELETE', `/api/birdhouse/plans/${made.body.id}`, null, adminCookie)).status, 404);

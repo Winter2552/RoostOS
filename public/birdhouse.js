@@ -108,7 +108,7 @@
     const plan = S.data.plans.find((p) => p.id === S.id);
     if (!plan) return;
     try {
-      const saved = await api('POST', '/api/birdhouse/plans', { id: plan.id, name: S.name, plan: S.d });
+      const saved = await api('POST', '/api/birdhouse/plans', { id: plan.id, name: S.name, plan: S.d, build: S.build });
       Object.assign(plan, saved);
       const say = $('#bh-saved');
       if (say && S.screen === 'editor') say.textContent = 'Saved.';
@@ -120,7 +120,7 @@
   const queueSave = later(writePlan, 800);
   const remember = () => {
     if (!S.id) return;
-    const sig = JSON.stringify([S.d, S.name]);
+    const sig = JSON.stringify([S.d, S.name, S.build]);
     if (sig === S.sig) return;
     S.sig = sig;
     S.dirty = true;
@@ -441,7 +441,65 @@
     return box;
   }
 
-  const VIEWS = [['front', 'Front', () => drawFlat('front', 'Front')], ['side', 'Side', () => drawFlat('side', 'Side')], ['top', 'Top', () => drawFlat('top', 'Top')], ['3d', '3D', draw3d], ['sheets', 'Sheets', drawSheets], ['cost', 'Cost', drawCost]];
+  // ---------- the steps and timeline ----------
+  const dayName = (start, n) => {
+    const t = new Date(`${start}T12:00:00`);
+    t.setDate(t.getDate() + n);
+    return t.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+  };
+  const hoursText = (v) => (v >= 1 ? `${Math.floor(v)} h${v % 1 ? ' 30' : ''}` : '30 min');
+  const stepList = () => model.steps(S.d, S.build.finish);
+
+  function drawSteps() {
+    const b = S.build;
+    const list = stepList();
+    const sch = model.schedule(list, b.hours);
+    const box = h('div', { class: 'bh-steps' });
+    const start = h('input', { type: 'date', value: b.start, 'aria-label': 'Start date' });
+    start.addEventListener('change', () => { b.start = start.value; paint(); });
+    const hours = h('input', { type: 'number', min: '1', max: '12', step: '0.5', inputmode: 'decimal', value: String(b.hours), 'aria-label': 'Hours per day' });
+    hours.addEventListener('change', () => { b.hours = model.cleanBuild({ hours: hours.value }).hours; paint(); });
+    const finish = h('select', { 'aria-label': 'Finish' }, ...Object.entries(model.FINISHES).map(([id, name]) => h('option', { value: id, text: name, selected: b.finish === id })));
+    finish.addEventListener('change', () => { b.finish = finish.value; b.done = b.done.filter((id) => list.some((st) => st.id === id)); paint(); });
+    box.append(h('div', { class: 'bh-optim' },
+      h('label', { class: 'bh-field inline' }, h('span', { text: 'Start' }), start),
+      h('label', { class: 'bh-field inline' }, h('span', { text: 'Hours a day' }), hours),
+      h('label', { class: 'bh-field inline' }, h('span', { text: 'Finish' }), finish)));
+    // A scale of days above the bars.
+    const days = Math.max(1, sch.ready);
+    const every = days > 14 ? 7 : 1;
+    const axis = h('div', { class: 'bh-axis', 'aria-hidden': 'true' });
+    for (let i = 0; i < days; i += every) axis.append(h('span', { style: `left:${(i / days) * 100}%`, text: b.start ? dayName(b.start, i).split(' ')[0] : `Day ${i + 1}` }));
+    box.append(h('div', { class: 'bh-steprow axis' }, h('span'), h('span'), axis));
+    const next = list.find((st) => !b.done.includes(st.id));
+    sch.steps.forEach((st, i) => {
+      const done = b.done.includes(st.id);
+      const tick = h('input', { type: 'checkbox', checked: done, 'aria-label': `${st.name} done` });
+      tick.addEventListener('change', () => { b.done = tick.checked ? [...new Set([...b.done, st.id])] : b.done.filter((id) => id !== st.id); paint(); });
+      const track = h('div', { class: 'bh-track' }, h('b', { style: `left:${(st.at / days) * 100}%;width:${Math.max(1.5, (st.len / days) * 100)}%` }),
+        st.wait ? h('b', { class: 'wait', style: `left:${(st.waitAt / days) * 100}%;width:${(st.waitLen / days) * 100}%` }) : null);
+      box.append(h('div', { class: `bh-steprow${done ? ' done' : ''}` }, tick,
+        h('span', {}, `${i + 1} ${st.name}`, h('br'), h('small', { text: `${hoursText(st.work)}${st.wait ? ` · then ${st.waitName.toLowerCase()}, wait ${st.wait} h` : ''}` })),
+        track));
+    });
+    const ready = b.start ? ` · ready to use ${dayName(b.start, sch.ready)}` : '';
+    box.append(h('p', { class: 'bh-note', text: `${Math.round(sch.work * 2) / 2} h of work, ${sch.waiting} h waiting${ready}. Solid bars are your time, hatched bars are waiting.` }));
+    if (!b.start) box.append(h('p', { class: 'bh-note', text: 'Pick a start date to see calendar days and when it will be ready.' }));
+    // Tools: tick what you own; the rest is what to find.
+    const own = prefs().tools || (prefs().tools = []);
+    const tools = model.toolsFor(list);
+    const missing = tools.filter((t) => !own.includes(t));
+    box.append(h('h3', { class: 'bh-h', text: missing.length ? `Tools needed (${missing.length} to find)` : 'Tools needed (you have them all)' }),
+      h('ul', { class: 'bh-tools' }, ...tools.map((t) => {
+        const c = h('input', { type: 'checkbox', checked: own.includes(t), 'aria-label': `I have ${t}` });
+        c.addEventListener('change', () => { prefs().tools = c.checked ? [...new Set([...own, t])] : own.filter((x) => x !== t); savePrefs(); paint(); });
+        return h('li', {}, h('label', {}, c, ` ${t}`));
+      })),
+      h('p', { class: 'bh-note', text: next ? `Next up: ${next.name}.` : 'All steps done.' }));
+    return box;
+  }
+
+  const VIEWS = [['front', 'Front', () => drawFlat('front', 'Front')], ['side', 'Side', () => drawFlat('side', 'Side')], ['top', 'Top', () => drawFlat('top', 'Top')], ['3d', '3D', draw3d], ['sheets', 'Sheets', drawSheets], ['cost', 'Cost', drawCost], ['steps', 'Steps', drawSteps]];
 
   function tabs() {
     return VIEWS.map(([id, name]) => h('button', {
@@ -774,6 +832,15 @@
     }
   }
 
+  // "Step 3 of 6" once any step is ticked off.
+  function progress(plan) {
+    const b = model.cleanBuild(plan.build);
+    const list = model.steps(plan.plan, b.finish);
+    const done = list.filter((st) => b.done.includes(st.id)).length;
+    if (!done) return null;
+    return h('small', { class: 'bh-progress', text: done >= list.length ? 'Built' : `Step ${done + 1} of ${list.length}: ${list[done].name.toLowerCase()}` });
+  }
+
   function planCard(plan) {
     const s = model.size(plan.plan);
     const asking = h('div', { class: 'bh-confirm hidden' },
@@ -784,7 +851,8 @@
       h('a', { class: 'bh-open', href: `#/birdhouse/${plan.id}`, 'aria-label': `Open ${plan.name}` },
         thumb(plan.plan),
         h('b', { text: plan.name }),
-        h('small', { text: `${model.TEMPLATES[plan.plan.template].name} · ${fmt(s.width)} × ${fmt(s.height)} · ${new Date(plan.updated).toLocaleDateString()}` })),
+        h('small', { text: `${model.TEMPLATES[plan.plan.template].name} · ${fmt(s.width)} × ${fmt(s.height)} · ${new Date(plan.updated).toLocaleDateString()}` }),
+        progress(plan)),
       h('div', { class: 'bh-cardbtns' },
         h('button', { type: 'button', class: 'bh-link-btn', text: 'Copy', 'aria-label': `Copy ${plan.name}`, onclick: () => copyPlan(plan) }),
         h('button', { type: 'button', class: 'bh-link-btn', text: 'Delete', 'aria-label': `Delete ${plan.name}`, onclick: () => asking.classList.remove('hidden') })),
@@ -880,8 +948,9 @@
     S.id = plan.id;
     S.name = plan.name;
     S.d = model.clean(plan.plan);
+    S.build = model.cleanBuild(plan.build);
     S.by = {};
-    S.sig = JSON.stringify([S.d, S.name]);
+    S.sig = JSON.stringify([S.d, S.name, S.build]);
     S.dirty = false;
     closeCard();
     $('#bh-say').textContent = '';
