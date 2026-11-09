@@ -75,7 +75,9 @@
   const savePrefs = later(() => api('PUT', '/api/birdhouse/prefs', prefs()).catch(() => {}), 400);
 
   // What the layout is given: the wood on hand and the sizes shops sell.
-  const lay = () => ({ stock: S.data.stock, sheet: prefs().sheet, timber: prefs().timber });
+  // Offcuts saved from this very project are left out, or it would be cut from its own leftovers.
+  const offcutNote = () => `Offcut · ${model.info(S.d).name}`;
+  const lay = () => ({ stock: S.data.stock.filter((it) => it.note !== offcutNote()), sheet: prefs().sheet, timber: prefs().timber, kerf: prefs().kerf, trim: prefs().trim, grain: prefs().grain });
   const layout = () => model.layout(S.d, lay());
   const materials = () => model.materials(S.d, lay());
 
@@ -106,7 +108,7 @@
     const plan = S.data.plans.find((p) => p.id === S.id);
     if (!plan) return;
     try {
-      const saved = await api('POST', '/api/birdhouse/plans', { id: plan.id, name: S.name, plan: S.d });
+      const saved = await api('POST', '/api/birdhouse/plans', { id: plan.id, name: S.name, plan: S.d, build: S.build });
       Object.assign(plan, saved);
       const say = $('#bh-saved');
       if (say && S.screen === 'editor') say.textContent = 'Saved.';
@@ -118,7 +120,7 @@
   const queueSave = later(writePlan, 800);
   const remember = () => {
     if (!S.id) return;
-    const sig = JSON.stringify([S.d, S.name]);
+    const sig = JSON.stringify([S.d, S.name, S.build]);
     if (sig === S.sig) return;
     S.sig = sig;
     S.dirty = true;
@@ -372,6 +374,17 @@
     const f = model.fit(S.d);
     const l = f ? f.layout : layout();
     const box = h('div', { class: 'bh-sheets' });
+    const p = prefs();
+    const kerfIn = h('input', { type: 'number', min: '0', max: '10', step: '0.5', inputmode: 'decimal', value: String(p.kerf), 'aria-label': 'Saw cut width in millimetres' });
+    const trimIn = h('input', { type: 'number', min: '0', max: '50', step: '1', inputmode: 'decimal', value: String(p.trim), 'aria-label': 'Edge trim in millimetres' });
+    const change = () => { p.kerf = Math.min(10, Math.max(0, Number(kerfIn.value) || 0)); p.trim = Math.min(50, Math.max(0, Number(trimIn.value) || 0)); savePrefs(); paint(); };
+    kerfIn.addEventListener('change', change);
+    trimIn.addEventListener('change', change);
+    box.append(h('div', { class: 'bh-optim' },
+      h('label', { class: 'bh-field inline' }, h('span', { text: 'Saw cut (mm)' }), kerfIn),
+      h('label', { class: 'bh-field inline' }, h('span', { text: 'Edge trim (mm)' }), trimIn),
+      h('button', { type: 'button', class: `bh-pick${p.grain ? ' on' : ''}`, 'aria-pressed': String(!!p.grain), text: 'Grain along length', onclick: () => { p.grain = !p.grain; savePrefs(); paint(); } })));
+    const saveOffcuts = [];
     l.sheets.forEach((sheet, n) => {
       const root = svg('svg', { viewBox: `-20 -20 ${sheet.width + 40} ${sheet.height + 40}`, role: 'img', 'aria-label': `Sheet ${n + 1}, ${spoken(sheet.thickness)} board, ${plural(sheet.pieces.length, 'piece')}${sheet.owned ? ', from your workshop' : ''}` });
       root.append(svg('rect', { x: 0, y: 0, width: sheet.width, height: sheet.height, class: 'bh-stock' }));
@@ -379,7 +392,20 @@
         root.append(svg('rect', { x: p.x, y: p.y, width: p.w, height: p.h, class: 'bh-board' }));
         if (Math.min(p.w, p.h) > 90) root.append(svg('text', { x: p.x + p.w / 2, y: p.y + p.h / 2 + 30, 'text-anchor': 'middle', 'font-size': 90, class: 'bh-label' }, letter(p.part)));
       }
+      for (const o of sheet.offcuts) {
+        root.append(svg('rect', { x: o.x, y: o.y, width: o.w, height: o.h, class: 'bh-offcut' }));
+        if (o.w > 420 && o.h > 200) root.append(svg('text', { x: o.x + o.w / 2, y: o.y + o.h / 2 + 22, 'text-anchor': 'middle', 'font-size': 60, class: 'bh-note-svg' }, `${fmt(Math.round(o.w))} × ${fmt(Math.round(o.h))}`));
+      }
+      for (const c of sheet.cuts) {
+        const [cx, cy] = c.dir === 'h' ? [c.from + 40, c.at + 2] : [c.at + 2, c.from + 40];
+        root.append(svg('circle', { cx, cy, r: 36, class: 'bh-cutdot' }), svg('text', { x: cx, y: cy + 14, 'text-anchor': 'middle', 'font-size': 44, class: 'bh-cutnum' }, String(c.n)));
+      }
       box.append(h('h3', { class: 'bh-h', text: `Sheet ${n + 1} · ${fmt(sheet.thickness)} · ${fmt(sheet.width)} × ${fmt(sheet.height)}${sheet.owned ? ' · from your workshop' : ''}` }), root);
+      if (sheet.cuts.length) {
+        const steps = h('ol', { class: 'bh-cuts' }, ...sheet.cuts.map((c) => h('li', { text: `${c.dir === 'h' ? 'Along the sheet' : 'Across the sheet'}, ${fmtU(Math.round(c.at))} from the ${c.dir === 'h' ? 'top' : 'left'} edge${c.to - c.from < (c.dir === 'h' ? sheet.width : sheet.height) - 2 * prefs().trim - 1 ? ` (${fmtU(Math.round(c.from))} to ${fmtU(Math.round(c.to))})` : ''}` })));
+        box.append(h('details', { class: 'bh-saw' }, h('summary', { text: `Saw cuts in order (${sheet.cuts.length})` }), steps));
+      }
+      for (const o of sheet.offcuts) saveOffcuts.push({ kind: 'sheet', thick: sheet.thickness, w: Math.round(Math.max(o.w, o.h)), l: Math.round(Math.min(o.w, o.h)), qty: 1, note: offcutNote() });
     });
     for (const g of l.timber) {
       const bars = g.bars.length;
@@ -400,13 +426,80 @@
     const bits = [];
     if (l.sheets.length) bits.push(`${plural(l.sheets.length, 'sheet')}, ${waste}% left over`);
     if (l.timber.length) { const n = l.timber.reduce((a, g) => a + g.bars.length, 0); bits.push(`${plural(n, 'length')} of timber`); }
-    box.append(h('p', { class: 'bh-note', text: `${bits.join(' · ')} · 3 mm saw cut between boards · letters match the cut list` }));
+    box.append(h('p', { class: 'bh-note', text: `${bits.join(' · ')} · ${fmtU(prefs().kerf)} saw cut between boards · letters match the cut list` }));
+    if (saveOffcuts.length) {
+      const say = h('span', { class: 'bh-say', 'aria-live': 'polite' });
+      box.append(h('p', { class: 'bh-note', text: `${plural(saveOffcuts.length, 'offcut')} worth keeping (dashed, 150 mm or more each way).` }),
+        h('button', { type: 'button', class: 'bh-btn', text: 'Save offcuts to Workshop', onclick: () => {
+          S.data.stock = [...S.data.stock.filter((it) => it.note !== offcutNote()), ...saveOffcuts.slice(0, 20).map((o) => ({ id: '', ...o }))].slice(0, 200);
+          saveStock();
+          say.textContent = ' Saved. Your next plan uses them first.';
+        } }), say);
+    }
     if (l.tooBig.length) box.append(h('p', { class: 'bh-warn', text: `Too big for a ${fmt(l.width)} × ${fmt(l.height)} sheet: ${[...new Set(l.tooBig.map((t) => letter(t.part)))].join(', ')}. Make it smaller or join boards.` }));
     if (f) for (const text of model.fitProblems(S.d)) box.append(h('p', { class: 'bh-warn', text: `Careful: ${text}` }));
     return box;
   }
 
-  const VIEWS = [['front', 'Front', () => drawFlat('front', 'Front')], ['side', 'Side', () => drawFlat('side', 'Side')], ['top', 'Top', () => drawFlat('top', 'Top')], ['3d', '3D', draw3d], ['sheets', 'Sheets', drawSheets], ['cost', 'Cost', drawCost]];
+  // ---------- the steps and timeline ----------
+  const dayName = (start, n) => {
+    const t = new Date(`${start}T12:00:00`);
+    t.setDate(t.getDate() + n);
+    return t.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+  };
+  const hoursText = (v) => (v >= 1 ? `${Math.floor(v)} h${v % 1 ? ' 30' : ''}` : '30 min');
+  const stepList = () => model.steps(S.d, S.build.finish);
+
+  function drawSteps() {
+    const b = S.build;
+    const list = stepList();
+    const sch = model.schedule(list, b.hours);
+    const box = h('div', { class: 'bh-steps' });
+    const start = h('input', { type: 'date', value: b.start, 'aria-label': 'Start date' });
+    start.addEventListener('change', () => { b.start = start.value; paint(); });
+    const hours = h('input', { type: 'number', min: '1', max: '12', step: '0.5', inputmode: 'decimal', value: String(b.hours), 'aria-label': 'Hours per day' });
+    hours.addEventListener('change', () => { b.hours = model.cleanBuild({ hours: hours.value }).hours; paint(); });
+    const finish = h('select', { 'aria-label': 'Finish' }, ...Object.entries(model.FINISHES).map(([id, name]) => h('option', { value: id, text: name, selected: b.finish === id })));
+    finish.addEventListener('change', () => { b.finish = finish.value; b.done = b.done.filter((id) => list.some((st) => st.id === id)); paint(); });
+    box.append(h('div', { class: 'bh-optim' },
+      h('label', { class: 'bh-field inline' }, h('span', { text: 'Start' }), start),
+      h('label', { class: 'bh-field inline' }, h('span', { text: 'Hours a day' }), hours),
+      h('label', { class: 'bh-field inline' }, h('span', { text: 'Finish' }), finish)));
+    // A scale of days above the bars.
+    const days = Math.max(1, sch.ready);
+    const every = days > 14 ? 7 : 1;
+    const axis = h('div', { class: 'bh-axis', 'aria-hidden': 'true' });
+    for (let i = 0; i < days; i += every) axis.append(h('span', { style: `left:${(i / days) * 100}%`, text: b.start ? dayName(b.start, i).split(' ')[0] : `Day ${i + 1}` }));
+    box.append(h('div', { class: 'bh-steprow axis' }, h('span'), h('span'), axis));
+    const next = list.find((st) => !b.done.includes(st.id));
+    sch.steps.forEach((st, i) => {
+      const done = b.done.includes(st.id);
+      const tick = h('input', { type: 'checkbox', checked: done, 'aria-label': `${st.name} done` });
+      tick.addEventListener('change', () => { b.done = tick.checked ? [...new Set([...b.done, st.id])] : b.done.filter((id) => id !== st.id); paint(); });
+      const track = h('div', { class: 'bh-track' }, h('b', { style: `left:${(st.at / days) * 100}%;width:${Math.max(1.5, (st.len / days) * 100)}%` }),
+        st.wait ? h('b', { class: 'wait', style: `left:${(st.waitAt / days) * 100}%;width:${(st.waitLen / days) * 100}%` }) : null);
+      box.append(h('div', { class: `bh-steprow${done ? ' done' : ''}` }, tick,
+        h('span', {}, `${i + 1} ${st.name}`, h('br'), h('small', { text: `${hoursText(st.work)}${st.wait ? ` · then ${st.waitName.toLowerCase()}, wait ${st.wait} h` : ''}` })),
+        track));
+    });
+    const ready = b.start ? ` · ready to use ${dayName(b.start, sch.ready)}` : '';
+    box.append(h('p', { class: 'bh-note', text: `${Math.round(sch.work * 2) / 2} h of work, ${sch.waiting} h waiting${ready}. Solid bars are your time, hatched bars are waiting.` }));
+    if (!b.start) box.append(h('p', { class: 'bh-note', text: 'Pick a start date to see calendar days and when it will be ready.' }));
+    // Tools: tick what you own; the rest is what to find.
+    const own = prefs().tools || (prefs().tools = []);
+    const tools = model.toolsFor(list);
+    const missing = tools.filter((t) => !own.includes(t));
+    box.append(h('h3', { class: 'bh-h', text: missing.length ? `Tools needed (${missing.length} to find)` : 'Tools needed (you have them all)' }),
+      h('ul', { class: 'bh-tools' }, ...tools.map((t) => {
+        const c = h('input', { type: 'checkbox', checked: own.includes(t), 'aria-label': `I have ${t}` });
+        c.addEventListener('change', () => { prefs().tools = c.checked ? [...new Set([...own, t])] : own.filter((x) => x !== t); savePrefs(); paint(); });
+        return h('li', {}, h('label', {}, c, ` ${t}`));
+      })),
+      h('p', { class: 'bh-note', text: next ? `Next up: ${next.name}.` : 'All steps done.' }));
+    return box;
+  }
+
+  const VIEWS = [['front', 'Front', () => drawFlat('front', 'Front')], ['side', 'Side', () => drawFlat('side', 'Side')], ['top', 'Top', () => drawFlat('top', 'Top')], ['3d', '3D', draw3d], ['sheets', 'Sheets', drawSheets], ['cost', 'Cost', drawCost], ['steps', 'Steps', drawSteps]];
 
   function tabs() {
     return VIEWS.map(([id, name]) => h('button', {
@@ -739,6 +832,15 @@
     }
   }
 
+  // "Step 3 of 6" once any step is ticked off.
+  function progress(plan) {
+    const b = model.cleanBuild(plan.build);
+    const list = model.steps(plan.plan, b.finish);
+    const done = list.filter((st) => b.done.includes(st.id)).length;
+    if (!done) return null;
+    return h('small', { class: 'bh-progress', text: done >= list.length ? 'Built' : `Step ${done + 1} of ${list.length}: ${list[done].name.toLowerCase()}` });
+  }
+
   function planCard(plan) {
     const s = model.size(plan.plan);
     const asking = h('div', { class: 'bh-confirm hidden' },
@@ -749,7 +851,8 @@
       h('a', { class: 'bh-open', href: `#/birdhouse/${plan.id}`, 'aria-label': `Open ${plan.name}` },
         thumb(plan.plan),
         h('b', { text: plan.name }),
-        h('small', { text: `${model.TEMPLATES[plan.plan.template].name} · ${fmt(s.width)} × ${fmt(s.height)} · ${new Date(plan.updated).toLocaleDateString()}` })),
+        h('small', { text: `${model.TEMPLATES[plan.plan.template].name} · ${fmt(s.width)} × ${fmt(s.height)} · ${new Date(plan.updated).toLocaleDateString()}` }),
+        progress(plan)),
       h('div', { class: 'bh-cardbtns' },
         h('button', { type: 'button', class: 'bh-link-btn', text: 'Copy', 'aria-label': `Copy ${plan.name}`, onclick: () => copyPlan(plan) }),
         h('button', { type: 'button', class: 'bh-link-btn', text: 'Delete', 'aria-label': `Delete ${plan.name}`, onclick: () => asking.classList.remove('hidden') })),
@@ -773,7 +876,7 @@
       thumb(model.defaults(id)), h('span', { text: model.TEMPLATES[id].name })))));
     const askBtn = h('button', { type: 'button', class: 'bh-btn', text: 'Ask Claude', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', onclick: (e) => openAsk(e.currentTarget) });
     box.replaceChildren(
-      h('div', { class: 'bh-bar' }, h('h2', { class: 'bh-name', text: 'Projects' }), h('span', { class: 'bh-barbtns' }, askBtn, h('a', { class: 'bh-btn', href: '#/birdhouse/workshop', text: 'Workshop' }))),
+      h('div', { class: 'bh-bar' }, h('h2', { class: 'bh-name', text: 'Projects' }), h('span', { class: 'bh-barbtns' }, askBtn, h('a', { class: 'bh-btn', href: '#/birdhouse/shopping', text: 'Shopping list' }), h('a', { class: 'bh-btn', href: '#/birdhouse/workshop', text: 'Workshop' }))),
       ask,
       h('p', { class: 'bh-say', id: 'bh-homesay', 'aria-live': 'polite' }),
       h('h3', { class: 'bh-h', text: 'Start something new' }), starters,
@@ -840,13 +943,45 @@
       h('p', { class: 'bh-note', text: 'Sheet and timber sizes are what the shops sell; the Sheets tab and shopping list are worked out on them.' }));
   }
 
+  // ---------- one shopping list for several projects ----------
+  // Tick projects; they are cut from the same sheets and timber, so offcuts
+  // from one go to the next, and the list is what to buy for all of them.
+  function drawShopping() {
+    const box = $('#bh-shopping');
+    const plans = S.data.plans.slice().sort((a, b) => b.updated.localeCompare(a.updated));
+    if (!S.pick) S.pick = new Set(plans.slice(0, 3).map((p) => p.id));
+    const chosen = plans.filter((p) => S.pick.has(p.id)).slice(0, 12);
+    const rows = plans.map((p) => {
+      const c = h('input', { type: 'checkbox', checked: S.pick.has(p.id), 'aria-label': p.name });
+      c.addEventListener('change', () => { if (c.checked) S.pick.add(p.id); else S.pick.delete(p.id); drawShopping(); });
+      return h('li', {}, h('label', {}, c, ` ${p.name}`));
+    });
+    const out = [h('div', { class: 'bh-bar' }, h('h2', { class: 'bh-name', text: 'Shopping list' }), h('a', { class: 'bh-btn', href: '#/birdhouse', text: '‹ Projects' })),
+      h('p', { class: 'bh-note', text: 'Tick the projects you will build together. They share sheets and timber, minus wood already in your workshop.' }),
+      plans.length ? h('ul', { class: 'bh-tools' }, ...rows) : h('p', { class: 'bh-note', text: 'No projects yet.' })];
+    if (chosen.length) {
+      const c = model.combine(chosen.map((p) => p.plan), lay());
+      const items = c.materials;
+      const total = items.reduce((a, m) => a + m.qty * priceOf(m), 0);
+      out.push(h('h3', { class: 'bh-h', text: 'What to buy' }),
+        h('table', { class: 'bh-table bh-cost' },
+          h('thead', {}, h('tr', {}, h('th', { text: 'Material' }), h('th', { text: 'Need' }), h('th', { text: 'Each' }), h('th', { text: 'Cost' }))),
+          h('tbody', {}, ...items.map((m) => h('tr', {}, h('td', { text: `${m.label}${m.have ? ` (${m.have} from workshop)` : ''}` }), h('td', { class: 'bh-num', text: String(m.qty) }), h('td', { class: 'bh-num', text: money(priceOf(m)) }), h('td', { class: 'bh-num', text: money(m.qty * priceOf(m)) })))),
+          h('tfoot', {}, h('tr', {}, h('td', { text: 'Estimate' }), h('td'), h('td'), h('td', { class: 'bh-num' }, h('b', { text: money(total) }))))),
+        h('p', { class: 'bh-note', text: c.together < c.apart ? `Together that is ${c.together} sheets and lengths, against ${c.apart} one project at a time. Prices come from your price book; set them on a project's Cost tab.` : 'Prices come from your price book; set them on a project’s Cost tab.' }));
+      if (c.layout.tooBig.length) out.push(h('p', { class: 'bh-warn', text: `${plural(c.layout.tooBig.length, 'board')} too big for a ${fmt(c.layout.width)} × ${fmt(c.layout.height)} sheet; open that project to see which.` }));
+    }
+    box.replaceChildren(...out);
+  }
+
   // ---------- one project ----------
   function showEditor(plan) {
     S.id = plan.id;
     S.name = plan.name;
     S.d = model.clean(plan.plan);
+    S.build = model.cleanBuild(plan.build);
     S.by = {};
-    S.sig = JSON.stringify([S.d, S.name]);
+    S.sig = JSON.stringify([S.d, S.name, S.build]);
     S.dirty = false;
     closeCard();
     $('#bh-say').textContent = '';
@@ -855,7 +990,7 @@
     paint();
   }
 
-  const screens = { home: '#bh-home', shop: '#bh-shop', editor: '#bh-editor' };
+  const screens = { home: '#bh-home', shop: '#bh-shop', shopping: '#bh-shopping', editor: '#bh-editor' };
   function show(name) {
     S.screen = name === 'editor' ? 'editor' : name;
     for (const [k, sel] of Object.entries(screens)) $(sel).classList.toggle('hidden', k !== name);
@@ -888,6 +1023,7 @@
     }
     if (ticket !== S.ask) return; // another page was opened while this loaded
     if (route === 'workshop') { show('shop'); drawShop(); return; }
+    if (route === 'shopping') { show('shopping'); drawShopping(); return; }
     if (route) {
       const plan = S.data.plans.find((p) => p.id === route);
       if (plan) { show('editor'); showEditor(plan); return; }

@@ -567,10 +567,79 @@ Rules for custom designs:
   const STRIP = 100; // boards this narrow or less are cut from timber lengths
   const TIMBER = 2400;
 
+  // Guillotine packing of boards onto sheets, first fit by sheet and best short
+  // side fit by free space. Wood in the workshop (have) is used first. Returns
+  // the sheets with pieces, the saw cuts in order ({ n, dir: 'h' | 'v', at,
+  // from, to }: 'h' runs along the sheet, 'v' across it) and the leftovers
+  // worth keeping (offcuts, at least 150 mm each way).
+  const OFFCUT = 150;
+  function packSheets(flats, haveSheets, o) {
+    const { SW, SH, kerf, noBuy, trim, grain } = o;
+    const mk = (thickness, W, H, owned) => ({ thickness, W, H, owned, pieces: [], cuts: [], free: [{ x: trim, y: trim, w: W - 2 * trim, h: H - 2 * trim, depth: 0 }] });
+    const sheets = haveSheets.map((s) => mk(s.thick, s.w, s.l, true));
+    const tooBig = [];
+    const unplaced = [];
+    const other = [];
+    const waysFor = (p, W, H) => (grain ? [[p.l, p.w]] : [[p.l, p.w], [p.w, p.l]]).filter(([w, h]) => w <= W && h <= H);
+    const fitIn = (sheet, p) => {
+      let hit = null;
+      sheet.free.forEach((r, i) => {
+        for (const [w, h] of waysFor(p, r.w, r.h)) {
+          const lose = Math.min(r.w - w, r.h - h);
+          if (!hit || lose < hit.lose) hit = { i, w, h, lose };
+        }
+      });
+      return hit;
+    };
+    const place = (sheet, hit, p) => {
+      const r = sheet.free[hit.i];
+      const { w, h } = hit;
+      const cw = Math.min(w + kerf, r.w);
+      const ch = Math.min(h + kerf, r.h);
+      const rw = r.w - cw;
+      const rh = r.h - ch;
+      sheet.pieces.push({ part: p.part, x: r.x, y: r.y, w, h });
+      const next = [];
+      const d = r.depth;
+      const cut = (dir, at, from, to, depth) => sheet.cuts.push({ dir, at, from, to, depth });
+      if (rw < rh) {
+        if (rh > 0) cut('h', r.y + h, r.x, r.x + r.w, d);
+        if (rw > 0) cut('v', r.x + w, r.y, r.y + h, d + 1);
+        next.push({ x: r.x + cw, y: r.y, w: rw, h: ch, depth: d + 2 }, { x: r.x, y: r.y + ch, w: r.w, h: rh, depth: d + 1 });
+      } else {
+        if (rw > 0) cut('v', r.x + w, r.y, r.y + r.h, d);
+        if (rh > 0) cut('h', r.y + h, r.x, r.x + w, d + 1);
+        next.push({ x: r.x + cw, y: r.y, w: rw, h: r.h, depth: d + 1 }, { x: r.x, y: r.y + ch, w: cw, h: rh, depth: d + 2 });
+      }
+      sheet.free.splice(hit.i, 1, ...next.filter((n) => n.w > 0 && n.h > 0));
+    };
+    for (const p of flats) {
+      let done = false;
+      for (const sheet of sheets) {
+        if (sheet.thickness !== p.t) continue;
+        const hit = fitIn(sheet, p);
+        if (hit) { place(sheet, hit, p); done = true; break; }
+      }
+      if (done) continue;
+      if (noBuy) { (sheets.some((sh) => sh.thickness === p.t) ? unplaced : other).push(p.part); continue; }
+      const sheet = mk(p.t, SW, SH, false);
+      const hit = fitIn(sheet, p);
+      if (!hit) { tooBig.push({ part: p.part, w: p.l, h: p.w }); continue; }
+      place(sheet, hit, p);
+      sheets.push(sheet);
+    }
+    for (const sh of sheets) {
+      sh.cuts.sort((a, b) => a.depth - b.depth);
+      sh.cuts.forEach((c, i) => { c.n = i + 1; delete c.depth; });
+      sh.offcuts = sh.free.filter((f) => Math.min(f.w, f.h) >= OFFCUT).sort((a, b) => b.w * b.h - a.w * a.h).map((f) => ({ x: f.x, y: f.y, w: f.w, h: f.h }));
+    }
+    return { sheets, tooBig, unplaced, other };
+  }
+
   function layout(d, opts) {
     const [SW, SH] = (opts && opts.sheet) || SHEET;
     const kerf = opts && opts.kerf !== undefined ? opts.kerf : KERF;
-    const rows = parts(d);
+    const rows = (opts && opts.rows) || parts(d);
     const pieces = [];
     rows.forEach((r, part) => { for (let i = 0; i < r.qty; i++) pieces.push({ part, l: r.length, w: r.width, t: r.thickness }); });
     // Narrow boards (strips) come from lengths of timber; the rest from sheets.
@@ -583,7 +652,6 @@ Rules for custom designs:
     flats.sort((a, b) => b.t - a.t || b.l - a.l || b.w - a.w);
     const have = ownedStock(opts && opts.stock);
     // Wood already in the workshop goes in first, biggest pieces first.
-    const sheets = have.sheets.map((s) => ({ thickness: s.thick, W: s.w, H: s.l, owned: true, rows: [], pieces: [] }));
     const tooBig = [];
     const timber = [];
     const stock = (opts && opts.timber) || TIMBER;
@@ -600,46 +668,36 @@ Rules for custom designs:
       if (p.l > stock) { tooBig.push({ part: p.part, w: p.l, h: p.w }); continue; }
       group.bars.push({ len: stock, owned: false, pieces: [{ part: p.part, x: 0, len: p.l }], left: stock - p.l - kerf });
     }
-    const waysFor = (p, W, H) => [[p.l, p.w], [p.w, p.l]].filter(([w, h]) => w <= W && h <= H);
-    for (const p of flats) {
-      let done = false;
-      for (const sheet of sheets) {
-        if (sheet.thickness !== p.t) continue;
-        // Long way along the sheet first, then turned a quarter if that does not fit.
-        for (const [w, h] of waysFor(p, sheet.W, sheet.H)) {
-          // Into a row with room beside it and height to spare ...
-          const row = sheet.rows.find((r) => r.h >= h && sheet.W - r.x >= w);
-          if (row) {
-            sheet.pieces.push({ part: p.part, x: row.x, y: row.y, w, h });
-            row.x += w + kerf;
-            done = true;
-            break;
-          }
-          // ... or a new row under the last one.
-          const y = sheet.rows.length ? sheet.rows[sheet.rows.length - 1].y + sheet.rows[sheet.rows.length - 1].h + kerf : 0;
-          if (y + h <= sheet.H) {
-            sheet.rows.push({ y, h, x: w + kerf });
-            sheet.pieces.push({ part: p.part, x: 0, y, w, h });
-            done = true;
-            break;
-          }
-        }
-        if (done) break;
-      }
-      if (done) continue;
-      if (noBuy) { (sheets.some((sh) => sh.thickness === p.t) ? unplaced : other).push(p.part); continue; }
-      const ways = waysFor(p, SW, SH);
-      if (!ways.length) { tooBig.push({ part: p.part, w: p.l, h: p.w }); continue; }
-      const [w, h] = ways[0];
-      sheets.push({ thickness: p.t, W: SW, H: SH, owned: false, rows: [{ y: 0, h, x: w + kerf }], pieces: [{ part: p.part, x: 0, y: 0, w, h }] });
+    // Sheets: guillotine packing (every saw cut runs edge to edge), tried in a
+    // few board orders; the one that buys fewest sheets, then uses fewest, then
+    // needs fewest cuts, wins.
+    const o = { SW, SH, kerf, noBuy, trim: Math.max(0, Number(opts && opts.trim) || 0), grain: !!(opts && opts.grain) };
+    const orders = [
+      (a, b) => b.t - a.t || b.l - a.l || b.w - a.w,
+      (a, b) => b.t - a.t || b.l * b.w - a.l * a.w,
+      (a, b) => b.t - a.t || b.w - a.w || b.l - a.l,
+      (a, b) => b.t - a.t || Math.max(b.l, b.w) - Math.max(a.l, a.w) || b.l * b.w - a.l * a.w,
+    ];
+    let best = null;
+    for (const cmp of orders) {
+      const r = packSheets([...flats].sort(cmp), have.sheets, o);
+      const bought = r.sheets.filter((sh) => sh.pieces.length && !sh.owned).length;
+      const used = r.sheets.filter((sh) => sh.pieces.length).length;
+      const cuts = r.sheets.reduce((n, sh) => n + sh.cuts.length, 0);
+      const score = [r.tooBig.length + r.unplaced.length + r.other.length, bought, used, cuts];
+      if (!best || score.findIndex((v, i) => v !== best.score[i]) >= 0 && score[score.findIndex((v, i) => v !== best.score[i])] < best.score[score.findIndex((v, i) => v !== best.score[i])]) best = { r, score };
     }
+    const { sheets, tooBig: tooBigSheets } = best.r;
+    unplaced.push(...best.r.unplaced);
+    other.push(...best.r.other);
+    tooBig.push(...tooBigSheets);
     // Owned wood nothing was cut from is left on the shelf.
     const cut = sheets.filter((sh) => sh.pieces.length);
     const area = cut.reduce((a, sh) => a + sh.W * sh.H, 0);
     const used = cut.reduce((a, sh) => a + sh.pieces.reduce((b, q) => b + q.w * q.h, 0), 0);
     return {
       width: SW, height: SH,
-      sheets: cut.map((sh) => ({ thickness: sh.thickness, width: sh.W, height: sh.H, owned: sh.owned, pieces: sh.pieces })),
+      sheets: cut.map((sh) => ({ thickness: sh.thickness, width: sh.W, height: sh.H, owned: sh.owned, pieces: sh.pieces, cuts: sh.cuts, offcuts: sh.offcuts })),
       tooBig, area, used, unplaced, other,
       timber: timber.map((g) => ({ width: g.width, thickness: g.thickness, stock: g.stock, bars: g.bars.filter((b) => b.pieces.length).map((b) => ({ len: b.len, owned: b.owned, pieces: b.pieces })) })).filter((g) => g.bars.length),
     };
@@ -743,8 +801,7 @@ Rules for custom designs:
   // price on each line is a rough starter guess (pounds), only there until the
   // person sets their own; `search` is what to type into a shop's search box.
   //   -> [{ key, label, qty, search, estimate }]
-  function materials(d, opts) {
-    const l = layout(d, opts);
+  function stockLines(l) {
     const out = [];
     const sheetsBy = {};
     for (const sh of l.sheets) {
@@ -758,6 +815,11 @@ Rules for custom designs:
       const have = g.bars.filter((b) => b.owned).length;
       out.push({ key: `timber-${g.width}x${g.thickness}`, label: `${g.width} × ${g.thickness} timber, ${g.stock} mm length`, qty: g.bars.length - have, have, search: `${g.width}x${g.thickness} timber ${g.stock / 1000}m`, estimate: Math.round(0.00264 * g.width * g.thickness * 100) / 100 });
     }
+    return out;
+  }
+  // Screws, glue, hinges and the anti-tip kit for one design.
+  function fixingLines(d) {
+    const out = [];
     const c = clean(d);
     const boards = solids(c).length;
     if (c.style === 'framed' || c.template === 'custom') out.push({ key: 'screws', label: '60 mm wood screws, box of 200', qty: Math.max(1, Math.ceil((boards * 6) / 200)), have: 0, search: '60mm wood screws box 200', estimate: 8 });
@@ -766,6 +828,27 @@ Rules for custom designs:
     if (c.doors) out.push({ key: 'hinges', label: 'Cabinet hinges, pair', qty: c.doors, have: 0, search: 'cabinet hinges pair', estimate: 3 });
     if (checks(c).some((k) => k.tip)) out.push({ key: 'antitip', label: 'Anti-tip wall bracket kit', qty: 1, have: 0, search: 'furniture anti tip wall bracket', estimate: 4 });
     return out;
+  }
+  function materials(d, opts) {
+    return [...stockLines(layout(d, opts)), ...fixingLines(d)];
+  }
+
+  // Several designs cut from the same sheets and timber, so offcuts from one go
+  // to the next. Boards are named "1 Side" (design number, then the part).
+  //   -> { layout, rows: [{ ...part, project }], materials, apart }
+  // apart is the sheets and timber lengths the same designs need one at a time.
+  function combine(designs, opts) {
+    const ds = designs.map(clean);
+    const rows = ds.flatMap((d, i) => parts(d).map((r) => ({ ...r, name: `${i + 1} ${r.name}`, project: i })));
+    const l = layout(ds[0], { ...opts, rows });
+    const lines = new Map();
+    const add = (m) => { const e = lines.get(m.key); if (e) e.qty += m.qty; else lines.set(m.key, { ...m }); };
+    stockLines(l).forEach(add);
+    ds.flatMap(fixingLines).forEach(add);
+    if (lines.has('glue')) lines.get('glue').qty = Math.max(1, Math.ceil(ds.length / 2));
+    const count = (m) => m.filter((x) => /^(sheet|timber)-/.test(x.key)).reduce((a, x) => a + x.qty, 0);
+    const apart = ds.reduce((a, d) => a + count(materials(d, opts)), 0);
+    return { layout: l, rows, materials: [...lines.values()], apart, together: count([...lines.values()]) };
   }
 
   // Things worth knowing before building: it might tip, sag or rack. Each is
@@ -890,7 +973,74 @@ Rules for custom designs:
     return { template, set, unused };
   }
 
-  const exported = { fit, fitProblems, cleanStock, TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, layout, materials, project, parse, ownedStock, checks, sanitizeBoards, boardProblems, designInstructions, readDesign, describeDesign, reviseRequest };
+  // ---------- build steps and the timeline ----------
+  // The saved part of a project's build: when it starts, hours a day to spend,
+  // the finish, and which steps are ticked off.
+  const FINISHES = { none: 'No finish', oil: 'Oil', paint: 'Paint', varnish: 'Varnish' };
+  const FINISH_COATS = { oil: { coats: 2, wait: [6, 12] }, paint: { coats: 2, wait: [4, 12] }, varnish: { coats: 3, wait: [6, 12] } };
+  function cleanBuild(input) {
+    const i = input && typeof input === 'object' ? input : {};
+    const hours = Math.round(Number(i.hours) * 2) / 2;
+    return {
+      start: /^\d{4}-\d{2}-\d{2}$/.test(String(i.start)) && !Number.isNaN(Date.parse(i.start)) ? String(i.start) : '',
+      hours: Number.isFinite(hours) && hours >= 1 && hours <= 12 ? hours : 4,
+      finish: FINISHES[i.finish] ? i.finish : 'none',
+      done: [...new Set((Array.isArray(i.done) ? i.done : []).map(String).filter((v) => /^[a-z0-9]{2,12}$/.test(v)))].slice(0, 30),
+    };
+  }
+
+  // The steps to build a design, in order. work and wait are hours; wait is the
+  // time to leave it alone afterwards (glue, finish). tools are what each step
+  // needs. Rough, from the number of boards, and the same every time.
+  //   -> [{ id, name, work, wait, waitName, tools: [] }]
+  function steps(d, finish) {
+    const n = Math.max(1, parts(d).reduce((a, r) => a + r.qty, 0));
+    const half = (v) => Math.max(0.5, Math.round(v * 2) / 2);
+    const framed = d.style === 'framed';
+    const out = [
+      { id: 'cut', name: 'Cut the boards', work: half(0.3 + 0.12 * n), wait: 0, tools: ['Saw (circular or panel)', 'Tape and square'] },
+      { id: 'sand', name: 'Sand every part', work: half(0.05 * n + 0.3), wait: 0, tools: ['Sander and sandpaper'] },
+      { id: 'build', name: framed ? 'Glue and screw the frames' : 'Glue and screw it together', work: half(0.4 + 0.15 * n), wait: 12, waitName: 'Glue dries', tools: ['Drill and pilot bit', 'Clamps', 'Wood glue'] },
+    ];
+    if (framed) out.push({ id: 'fit', name: 'Fit the shelves and skins', work: half(0.3 + 0.08 * n), wait: 0, tools: ['Drill and pilot bit'] });
+    const f = FINISH_COATS[finish];
+    if (f) {
+      for (let c = 1; c <= f.coats; c++) {
+        out.push({ id: `coat${c}`, name: `${FINISHES[finish]}, coat ${c}`, work: half(0.2 + 0.05 * n), wait: c === f.coats ? f.wait[1] : f.wait[0], waitName: `Coat ${c} dries`, tools: ['Brush and rag'] });
+      }
+    }
+    if (d.template === 'bookshelf' || d.template === 'cabinet') out.push({ id: 'wall', name: 'Fix it to the wall (anti-tip)', work: 0.5, wait: 0, tools: ['Drill and pilot bit', 'Spirit level'] });
+    return out;
+  }
+
+  // Lays the steps out in days from the start. hoursPerDay is the time you give
+  // it each day; waiting runs on the clock. Positions are in days (fractions
+  // of a day), so a bar is drawn at its position and length.
+  //   -> { steps: [{ ...step, at, len, waitAt, waitLen }], days, ready, work, waiting }
+  function schedule(list, hoursPerDay) {
+    const perDay = Math.min(12, Math.max(1, Number(hoursPerDay) || 4));
+    let t = 0;
+    let work = 0;
+    let waiting = 0;
+    const out = list.map((st) => {
+      const row = { ...st, at: t, len: st.work / perDay, waitAt: 0, waitLen: 0 };
+      t += row.len;
+      work += st.work;
+      if (st.wait) {
+        row.waitAt = t;
+        row.waitLen = st.wait / 24;
+        t += row.waitLen;
+        waiting += st.wait;
+      }
+      return row;
+    });
+    return { steps: out, days: t, ready: Math.max(1, Math.ceil(t - 1e-9)), work, waiting };
+  }
+
+  // Every tool the steps need, once each.
+  const toolsFor = (list) => [...new Set(list.flatMap((st) => st.tools))];
+
+  const exported = { combine, FINISHES, cleanBuild, steps, schedule, toolsFor, fit, fitProblems, cleanStock, TEMPLATES, IDS, clean, defaults, info, solids, size, view, parts, layout, materials, project, parse, ownedStock, checks, sanitizeBoards, boardProblems, designInstructions, readDesign, describeDesign, reviseRequest };
   if (typeof module !== 'undefined' && module.exports) module.exports = exported;
   else window.birdhouseModel = exported;
 })();

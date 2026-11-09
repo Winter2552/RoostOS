@@ -369,3 +369,57 @@ test('the stated board is simulated: parts sit inside it, never overlap, and a t
     for (const q of ps) if (p !== q) assert.ok(p.x + p.w + 3 <= q.x || q.x + q.w + 3 <= p.x || p.y + p.h + 3 <= q.y || q.y + q.h + 3 <= p.y, 'saw cut kept between boards');
   }
 });
+
+test('sheet packing: boards keep a saw cut apart, cuts are numbered, offcuts are worth keeping, grain and trim are respected', () => {
+  for (const d of [shelf, panelOf('table'), { ...shelf, height: 2400, width: 2400, depth: 800, shelves: 12 }]) {
+    for (const opts of [undefined, { trim: 10 }, { grain: true }, { kerf: 5 }]) {
+      const l = model.layout(d, opts);
+      const kerf = (opts && opts.kerf) ?? 3;
+      const trim = (opts && opts.trim) || 0;
+      for (const s of l.sheets) {
+        for (const p of s.pieces) assert.ok(p.x >= trim && p.y >= trim && p.x + p.w <= s.width - trim && p.y + p.h <= s.height - trim, 'inside the trimmed sheet');
+        for (const a of s.pieces) for (const b of s.pieces) {
+          if (a === b) continue;
+          assert.ok(a.x + a.w + kerf <= b.x || b.x + b.w + kerf <= a.x || a.y + a.h + kerf <= b.y || b.y + b.h + kerf <= a.y, 'a saw cut apart');
+        }
+        assert.deepEqual(s.cuts.map((c) => c.n), s.cuts.map((_, i) => i + 1));
+        for (const o of s.offcuts) assert.ok(Math.min(o.w, o.h) >= 150);
+      }
+    }
+  }
+  const l = model.layout(shelf);
+  assert.ok(l.sheets[0].cuts.length >= 2 && l.sheets[0].cuts.every((c) => ['h', 'v'].includes(c.dir)));
+  assert.ok(l.sheets[0].offcuts.length >= 1, 'the default shelf leaves a usable offcut');
+  // Grain lock: every board lies with its length along the sheet.
+  const g = model.layout(panelOf('table'), { grain: true });
+  const rows = model.parts(panelOf('table'));
+  for (const s of g.sheets) for (const p of s.pieces) assert.equal(p.w, rows[p.part].length);
+});
+
+test('build steps come from the design, waiting is kept apart from work, and the build record is cleaned', () => {
+  const none = model.steps(shelf, 'none');
+  assert.deepEqual(none.map((st) => st.id), ['cut', 'sand', 'build', 'wall']);
+  const framed = model.steps(model.clean({ template: 'bookshelf', style: 'framed' }), 'paint');
+  assert.deepEqual(framed.map((st) => st.id), ['cut', 'sand', 'build', 'fit', 'coat1', 'coat2', 'wall']);
+  assert.ok(framed.every((st) => st.work >= 0.5 && st.tools.length));
+  const sch = model.schedule(framed, 4);
+  assert.equal(sch.work, framed.reduce((a, st) => a + st.work, 0));
+  assert.equal(sch.waiting, framed.reduce((a, st) => a + st.wait, 0));
+  for (let i = 1; i < sch.steps.length; i++) assert.ok(sch.steps[i].at >= sch.steps[i - 1].at + sch.steps[i - 1].len - 1e-9, 'no step starts before the last one ends');
+  assert.ok(model.schedule(framed, 8).days < sch.days, 'more hours a day finishes sooner');
+  assert.ok(model.toolsFor(framed).includes('Clamps'));
+  assert.deepEqual(model.cleanBuild({ start: 'nonsense', hours: 99, finish: 'gold', done: ['cut', '../x', 'cut'] }), { start: '', hours: 4, finish: 'none', done: ['cut'] });
+  assert.equal(model.cleanBuild({ start: '2026-11-14', hours: 2.5 }).start, '2026-11-14');
+});
+
+test('projects cut together share sheets and need no more than one at a time, with fixings added up', () => {
+  const a = model.clean({ template: 'bookshelf', style: 'panel' });
+  const b = model.clean({ template: 'box' });
+  const c = model.combine([a, b]);
+  assert.ok(c.together <= c.apart);
+  const total = (l) => l.sheets.reduce((n, s) => n + s.pieces.length, 0) + l.timber.reduce((n, g) => n + g.bars.reduce((m, x) => m + x.pieces.length, 0), 0);
+  assert.equal(total(c.layout), c.rows.reduce((n, r) => n + r.qty, 0), 'every board of every project is placed once');
+  assert.ok(c.rows.some((r) => r.name.startsWith('2 ')));
+  assert.equal(c.materials.filter((m) => m.key === 'glue').length, 1);
+  assert.equal(model.combine([a]).together, model.combine([a]).apart);
+});
