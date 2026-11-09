@@ -1,22 +1,3 @@
 {
-  "items": [
-    {
-      "title": "Smarter cut plans in Birdhouse",
-      "text": "The Sheets tab now packs boards so every saw cut runs edge to edge, numbers the cuts in order, shows the offcuts worth keeping, and lets you set the saw cut, edge trim and grain direction. Save the offcuts to your Workshop so the next plan uses them first.",
-      "image": "birdhouse-sheets.png",
-      "admin": true
-    },
-    {
-      "title": "Build steps and a timeline in Birdhouse",
-      "text": "A new Steps tab turns a plan into build steps with how long each takes, shows glue and finish drying as waiting time, and gives a ready-to-use date from your start day and hours a day. Tick steps off, pick a finish, and see which tools you still need to find.",
-      "image": "birdhouse-steps.png",
-      "admin": true
-    },
-    {
-      "title": "One shopping list for several projects",
-      "text": "Tick the projects you will build together in Birdhouse and get a single list of sheets, timber and fixings. They are cut from the same boards, so you buy fewer, and wood in your workshop is used first.",
-      "image": "birdhouse-shopping.png",
-      "admin": true
-    }
-  ]
+  "items": []
 }
