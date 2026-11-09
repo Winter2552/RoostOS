@@ -138,7 +138,7 @@
     cur.sid = me.Id;
     const s = session();
     let item = null;
-    try { item = await call('GET', `/Users/${s.userId}/Items/${id}?Fields=Chapters,MediaStreams,MediaSources`); } catch { /* no extras */ }
+    try { item = await call('GET', `/Users/${s.userId}/Items/${id}?Fields=Chapters,MediaStreams,MediaSources,Trickplay`); } catch { /* no extras */ }
     if (!item || cur.id !== id) return;
     cur.item = item;
     cur.chapters = (item.Chapters || []).filter((c) => typeof c.StartPositionTicks === 'number');
@@ -311,6 +311,47 @@
   // ---------- chapters on the scrubber ----------
   const tip = h('div', 'rf-chaptip');
   tip.hidden = true;
+  const thumb = h('div', 'rf-thumb');
+  thumb.hidden = true;
+  const tipText = h('span', 'rf-chaptext');
+  tip.append(thumb, tipText);
+  const clock = (t) => {
+    const x = Math.max(0, Math.floor(t));
+    const m = Math.floor(x / 60);
+    const sec = String(x % 60).padStart(2, '0');
+    return x >= 3600 ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+  };
+  // Jellyfin's hover pictures ("trickplay"): sheets of small frames. Only there
+  // when the library has trickplay generation on; if not, we show the name only.
+  function trickplayFor(item) {
+    try {
+      const src = (item.MediaSources && item.MediaSources[0] && item.MediaSources[0].Id) || item.Id;
+      const sets = (item.Trickplay && (item.Trickplay[src] || Object.values(item.Trickplay)[0])) || null;
+      if (!sets || !safe(src)) return null;
+      const widths = Object.keys(sets).map(Number).filter((n) => n > 0).sort((a, b) => a - b);
+      const w = widths.find((n) => n >= 240) || widths[widths.length - 1];
+      const info = w && sets[w];
+      if (!info || !info.Interval || !info.TileWidth || !info.TileHeight || !info.Width || !info.Height) return null;
+      return { src, w, info };
+    } catch { return null; }
+  }
+  function paintThumb(tp, at) {
+    const s = session();
+    if (!tp || !s || !safe(cur.id)) { thumb.hidden = true; return; }
+    const { info } = tp;
+    const per = info.TileWidth * info.TileHeight;
+    const count = info.ThumbnailCount || Infinity;
+    const idx = Math.min(count - 1, Math.max(0, Math.floor((at * 1000) / info.Interval)));
+    const sheet = Math.floor(idx / per);
+    const inSheet = idx % per;
+    const url = `${s.base}/Videos/${cur.id}/Trickplay/${tp.w}/${sheet}.jpg?MediaSourceId=${tp.src}&api_key=${encodeURIComponent(s.token)}`;
+    thumb.style.width = `${info.Width}px`;
+    thumb.style.height = `${info.Height}px`;
+    thumb.style.backgroundImage = `url("${url}")`;
+    thumb.style.backgroundSize = `${info.Width * info.TileWidth}px ${info.Height * info.TileHeight}px`;
+    thumb.style.backgroundPosition = `-${(inSheet % info.TileWidth) * info.Width}px -${Math.floor(inSheet / info.TileWidth) * info.Height}px`;
+    thumb.hidden = false;
+  }
   function mountScrubber() {
     let n = 0;
     const go = () => {
@@ -320,7 +361,7 @@
       box.querySelectorAll('.rf-ticks').forEach((e) => e.remove());
       const run = cur.item.RunTimeTicks || 0;
       const runS = run / 1e7;
-      if (!run || cur.marks.length < 2) return;
+      if (!run) return;
       if (getComputedStyle(box).position === 'static') box.style.position = 'relative';
       const wrap = h('div', 'rf-ticks');
       cur.marks.forEach((m) => {
@@ -333,15 +374,21 @@
       if (!slider.dataset.rf) {
         slider.dataset.rf = '1';
         const at = (e) => {
-          if (!cur || !cur.marks || !cur.marks.length) return;
+          if (!cur || !cur.marks) return;
           const r = slider.getBoundingClientRect();
           const f = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
           const at = f * runS;
           let name = '';
           cur.marks.forEach((m) => { if (m.at <= at) name = m.name; });
-          tip.textContent = name;
-          tip.hidden = !name;
-          tip.style.left = `${f * 100}%`;
+          const tp = cur.trickplay === undefined ? (cur.trickplay = trickplayFor(cur.item)) : cur.trickplay;
+          paintThumb(tp, at);
+          tipText.textContent = tp ? (name ? `${clock(at)} · ${name}` : clock(at)) : name;
+          tip.hidden = !tp && !name;
+          // keep the picture on screen at both ends of the bar
+          const half = (tip.offsetWidth || 0) / 2;
+          const b = box.getBoundingClientRect();
+          const px = Math.min(b.width, Math.max(0, e.clientX - b.left));
+          tip.style.left = `${half ? Math.min(Math.max(px, half), b.width - half) : px}px`;
         };
         slider.addEventListener('pointermove', at);
         slider.addEventListener('pointerleave', () => { tip.hidden = true; });
