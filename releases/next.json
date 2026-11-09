@@ -1,3 +1,10 @@
 {
-  "items": []
+  "items": [
+    {
+      "title": "Smarter cut plans in Birdhouse",
+      "text": "The Sheets tab now packs boards so every saw cut runs edge to edge, numbers the cuts in order, shows the offcuts worth keeping, and lets you set the saw cut, edge trim and grain direction. Save the offcuts to your Workshop so the next plan uses them first.",
+      "image": "birdhouse-sheets.png",
+      "admin": true
+    }
+  ]
 }

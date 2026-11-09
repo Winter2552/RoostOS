@@ -567,6 +567,75 @@ Rules for custom designs:
   const STRIP = 100; // boards this narrow or less are cut from timber lengths
   const TIMBER = 2400;
 
+  // Guillotine packing of boards onto sheets, first fit by sheet and best short
+  // side fit by free space. Wood in the workshop (have) is used first. Returns
+  // the sheets with pieces, the saw cuts in order ({ n, dir: 'h' | 'v', at,
+  // from, to }: 'h' runs along the sheet, 'v' across it) and the leftovers
+  // worth keeping (offcuts, at least 150 mm each way).
+  const OFFCUT = 150;
+  function packSheets(flats, haveSheets, o) {
+    const { SW, SH, kerf, noBuy, trim, grain } = o;
+    const mk = (thickness, W, H, owned) => ({ thickness, W, H, owned, pieces: [], cuts: [], free: [{ x: trim, y: trim, w: W - 2 * trim, h: H - 2 * trim, depth: 0 }] });
+    const sheets = haveSheets.map((s) => mk(s.thick, s.w, s.l, true));
+    const tooBig = [];
+    const unplaced = [];
+    const other = [];
+    const waysFor = (p, W, H) => (grain ? [[p.l, p.w]] : [[p.l, p.w], [p.w, p.l]]).filter(([w, h]) => w <= W && h <= H);
+    const fitIn = (sheet, p) => {
+      let hit = null;
+      sheet.free.forEach((r, i) => {
+        for (const [w, h] of waysFor(p, r.w, r.h)) {
+          const lose = Math.min(r.w - w, r.h - h);
+          if (!hit || lose < hit.lose) hit = { i, w, h, lose };
+        }
+      });
+      return hit;
+    };
+    const place = (sheet, hit, p) => {
+      const r = sheet.free[hit.i];
+      const { w, h } = hit;
+      const cw = Math.min(w + kerf, r.w);
+      const ch = Math.min(h + kerf, r.h);
+      const rw = r.w - cw;
+      const rh = r.h - ch;
+      sheet.pieces.push({ part: p.part, x: r.x, y: r.y, w, h });
+      const next = [];
+      const d = r.depth;
+      const cut = (dir, at, from, to, depth) => sheet.cuts.push({ dir, at, from, to, depth });
+      if (rw < rh) {
+        if (rh > 0) cut('h', r.y + h, r.x, r.x + r.w, d);
+        if (rw > 0) cut('v', r.x + w, r.y, r.y + h, d + 1);
+        next.push({ x: r.x + cw, y: r.y, w: rw, h: ch, depth: d + 2 }, { x: r.x, y: r.y + ch, w: r.w, h: rh, depth: d + 1 });
+      } else {
+        if (rw > 0) cut('v', r.x + w, r.y, r.y + r.h, d);
+        if (rh > 0) cut('h', r.y + h, r.x, r.x + w, d + 1);
+        next.push({ x: r.x + cw, y: r.y, w: rw, h: r.h, depth: d + 1 }, { x: r.x, y: r.y + ch, w: cw, h: rh, depth: d + 2 });
+      }
+      sheet.free.splice(hit.i, 1, ...next.filter((n) => n.w > 0 && n.h > 0));
+    };
+    for (const p of flats) {
+      let done = false;
+      for (const sheet of sheets) {
+        if (sheet.thickness !== p.t) continue;
+        const hit = fitIn(sheet, p);
+        if (hit) { place(sheet, hit, p); done = true; break; }
+      }
+      if (done) continue;
+      if (noBuy) { (sheets.some((sh) => sh.thickness === p.t) ? unplaced : other).push(p.part); continue; }
+      const sheet = mk(p.t, SW, SH, false);
+      const hit = fitIn(sheet, p);
+      if (!hit) { tooBig.push({ part: p.part, w: p.l, h: p.w }); continue; }
+      place(sheet, hit, p);
+      sheets.push(sheet);
+    }
+    for (const sh of sheets) {
+      sh.cuts.sort((a, b) => a.depth - b.depth);
+      sh.cuts.forEach((c, i) => { c.n = i + 1; delete c.depth; });
+      sh.offcuts = sh.free.filter((f) => Math.min(f.w, f.h) >= OFFCUT).sort((a, b) => b.w * b.h - a.w * a.h).map((f) => ({ x: f.x, y: f.y, w: f.w, h: f.h }));
+    }
+    return { sheets, tooBig, unplaced, other };
+  }
+
   function layout(d, opts) {
     const [SW, SH] = (opts && opts.sheet) || SHEET;
     const kerf = opts && opts.kerf !== undefined ? opts.kerf : KERF;
@@ -583,7 +652,6 @@ Rules for custom designs:
     flats.sort((a, b) => b.t - a.t || b.l - a.l || b.w - a.w);
     const have = ownedStock(opts && opts.stock);
     // Wood already in the workshop goes in first, biggest pieces first.
-    const sheets = have.sheets.map((s) => ({ thickness: s.thick, W: s.w, H: s.l, owned: true, rows: [], pieces: [] }));
     const tooBig = [];
     const timber = [];
     const stock = (opts && opts.timber) || TIMBER;
@@ -600,46 +668,36 @@ Rules for custom designs:
       if (p.l > stock) { tooBig.push({ part: p.part, w: p.l, h: p.w }); continue; }
       group.bars.push({ len: stock, owned: false, pieces: [{ part: p.part, x: 0, len: p.l }], left: stock - p.l - kerf });
     }
-    const waysFor = (p, W, H) => [[p.l, p.w], [p.w, p.l]].filter(([w, h]) => w <= W && h <= H);
-    for (const p of flats) {
-      let done = false;
-      for (const sheet of sheets) {
-        if (sheet.thickness !== p.t) continue;
-        // Long way along the sheet first, then turned a quarter if that does not fit.
-        for (const [w, h] of waysFor(p, sheet.W, sheet.H)) {
-          // Into a row with room beside it and height to spare ...
-          const row = sheet.rows.find((r) => r.h >= h && sheet.W - r.x >= w);
-          if (row) {
-            sheet.pieces.push({ part: p.part, x: row.x, y: row.y, w, h });
-            row.x += w + kerf;
-            done = true;
-            break;
-          }
-          // ... or a new row under the last one.
-          const y = sheet.rows.length ? sheet.rows[sheet.rows.length - 1].y + sheet.rows[sheet.rows.length - 1].h + kerf : 0;
-          if (y + h <= sheet.H) {
-            sheet.rows.push({ y, h, x: w + kerf });
-            sheet.pieces.push({ part: p.part, x: 0, y, w, h });
-            done = true;
-            break;
-          }
-        }
-        if (done) break;
-      }
-      if (done) continue;
-      if (noBuy) { (sheets.some((sh) => sh.thickness === p.t) ? unplaced : other).push(p.part); continue; }
-      const ways = waysFor(p, SW, SH);
-      if (!ways.length) { tooBig.push({ part: p.part, w: p.l, h: p.w }); continue; }
-      const [w, h] = ways[0];
-      sheets.push({ thickness: p.t, W: SW, H: SH, owned: false, rows: [{ y: 0, h, x: w + kerf }], pieces: [{ part: p.part, x: 0, y: 0, w, h }] });
+    // Sheets: guillotine packing (every saw cut runs edge to edge), tried in a
+    // few board orders; the one that buys fewest sheets, then uses fewest, then
+    // needs fewest cuts, wins.
+    const o = { SW, SH, kerf, noBuy, trim: Math.max(0, Number(opts && opts.trim) || 0), grain: !!(opts && opts.grain) };
+    const orders = [
+      (a, b) => b.t - a.t || b.l - a.l || b.w - a.w,
+      (a, b) => b.t - a.t || b.l * b.w - a.l * a.w,
+      (a, b) => b.t - a.t || b.w - a.w || b.l - a.l,
+      (a, b) => b.t - a.t || Math.max(b.l, b.w) - Math.max(a.l, a.w) || b.l * b.w - a.l * a.w,
+    ];
+    let best = null;
+    for (const cmp of orders) {
+      const r = packSheets([...flats].sort(cmp), have.sheets, o);
+      const bought = r.sheets.filter((sh) => sh.pieces.length && !sh.owned).length;
+      const used = r.sheets.filter((sh) => sh.pieces.length).length;
+      const cuts = r.sheets.reduce((n, sh) => n + sh.cuts.length, 0);
+      const score = [r.tooBig.length + r.unplaced.length + r.other.length, bought, used, cuts];
+      if (!best || score.findIndex((v, i) => v !== best.score[i]) >= 0 && score[score.findIndex((v, i) => v !== best.score[i])] < best.score[score.findIndex((v, i) => v !== best.score[i])]) best = { r, score };
     }
+    const { sheets, tooBig: tooBigSheets } = best.r;
+    unplaced.push(...best.r.unplaced);
+    other.push(...best.r.other);
+    tooBig.push(...tooBigSheets);
     // Owned wood nothing was cut from is left on the shelf.
     const cut = sheets.filter((sh) => sh.pieces.length);
     const area = cut.reduce((a, sh) => a + sh.W * sh.H, 0);
     const used = cut.reduce((a, sh) => a + sh.pieces.reduce((b, q) => b + q.w * q.h, 0), 0);
     return {
       width: SW, height: SH,
-      sheets: cut.map((sh) => ({ thickness: sh.thickness, width: sh.W, height: sh.H, owned: sh.owned, pieces: sh.pieces })),
+      sheets: cut.map((sh) => ({ thickness: sh.thickness, width: sh.W, height: sh.H, owned: sh.owned, pieces: sh.pieces, cuts: sh.cuts, offcuts: sh.offcuts })),
       tooBig, area, used, unplaced, other,
       timber: timber.map((g) => ({ width: g.width, thickness: g.thickness, stock: g.stock, bars: g.bars.filter((b) => b.pieces.length).map((b) => ({ len: b.len, owned: b.owned, pieces: b.pieces })) })).filter((g) => g.bars.length),
     };

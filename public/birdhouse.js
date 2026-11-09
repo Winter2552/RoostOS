@@ -75,7 +75,9 @@
   const savePrefs = later(() => api('PUT', '/api/birdhouse/prefs', prefs()).catch(() => {}), 400);
 
   // What the layout is given: the wood on hand and the sizes shops sell.
-  const lay = () => ({ stock: S.data.stock, sheet: prefs().sheet, timber: prefs().timber });
+  // Offcuts saved from this very project are left out, or it would be cut from its own leftovers.
+  const offcutNote = () => `Offcut · ${model.info(S.d).name}`;
+  const lay = () => ({ stock: S.data.stock.filter((it) => it.note !== offcutNote()), sheet: prefs().sheet, timber: prefs().timber, kerf: prefs().kerf, trim: prefs().trim, grain: prefs().grain });
   const layout = () => model.layout(S.d, lay());
   const materials = () => model.materials(S.d, lay());
 
@@ -372,6 +374,17 @@
     const f = model.fit(S.d);
     const l = f ? f.layout : layout();
     const box = h('div', { class: 'bh-sheets' });
+    const p = prefs();
+    const kerfIn = h('input', { type: 'number', min: '0', max: '10', step: '0.5', inputmode: 'decimal', value: String(p.kerf), 'aria-label': 'Saw cut width in millimetres' });
+    const trimIn = h('input', { type: 'number', min: '0', max: '50', step: '1', inputmode: 'decimal', value: String(p.trim), 'aria-label': 'Edge trim in millimetres' });
+    const change = () => { p.kerf = Math.min(10, Math.max(0, Number(kerfIn.value) || 0)); p.trim = Math.min(50, Math.max(0, Number(trimIn.value) || 0)); savePrefs(); paint(); };
+    kerfIn.addEventListener('change', change);
+    trimIn.addEventListener('change', change);
+    box.append(h('div', { class: 'bh-optim' },
+      h('label', { class: 'bh-field inline' }, h('span', { text: 'Saw cut (mm)' }), kerfIn),
+      h('label', { class: 'bh-field inline' }, h('span', { text: 'Edge trim (mm)' }), trimIn),
+      h('button', { type: 'button', class: `bh-pick${p.grain ? ' on' : ''}`, 'aria-pressed': String(!!p.grain), text: 'Grain along length', onclick: () => { p.grain = !p.grain; savePrefs(); paint(); } })));
+    const saveOffcuts = [];
     l.sheets.forEach((sheet, n) => {
       const root = svg('svg', { viewBox: `-20 -20 ${sheet.width + 40} ${sheet.height + 40}`, role: 'img', 'aria-label': `Sheet ${n + 1}, ${spoken(sheet.thickness)} board, ${plural(sheet.pieces.length, 'piece')}${sheet.owned ? ', from your workshop' : ''}` });
       root.append(svg('rect', { x: 0, y: 0, width: sheet.width, height: sheet.height, class: 'bh-stock' }));
@@ -379,7 +392,20 @@
         root.append(svg('rect', { x: p.x, y: p.y, width: p.w, height: p.h, class: 'bh-board' }));
         if (Math.min(p.w, p.h) > 90) root.append(svg('text', { x: p.x + p.w / 2, y: p.y + p.h / 2 + 30, 'text-anchor': 'middle', 'font-size': 90, class: 'bh-label' }, letter(p.part)));
       }
+      for (const o of sheet.offcuts) {
+        root.append(svg('rect', { x: o.x, y: o.y, width: o.w, height: o.h, class: 'bh-offcut' }));
+        if (o.w > 420 && o.h > 200) root.append(svg('text', { x: o.x + o.w / 2, y: o.y + o.h / 2 + 22, 'text-anchor': 'middle', 'font-size': 60, class: 'bh-note-svg' }, `${fmt(Math.round(o.w))} × ${fmt(Math.round(o.h))}`));
+      }
+      for (const c of sheet.cuts) {
+        const [cx, cy] = c.dir === 'h' ? [c.from + 40, c.at + 2] : [c.at + 2, c.from + 40];
+        root.append(svg('circle', { cx, cy, r: 36, class: 'bh-cutdot' }), svg('text', { x: cx, y: cy + 14, 'text-anchor': 'middle', 'font-size': 44, class: 'bh-cutnum' }, String(c.n)));
+      }
       box.append(h('h3', { class: 'bh-h', text: `Sheet ${n + 1} · ${fmt(sheet.thickness)} · ${fmt(sheet.width)} × ${fmt(sheet.height)}${sheet.owned ? ' · from your workshop' : ''}` }), root);
+      if (sheet.cuts.length) {
+        const steps = h('ol', { class: 'bh-cuts' }, ...sheet.cuts.map((c) => h('li', { text: `${c.dir === 'h' ? 'Along the sheet' : 'Across the sheet'}, ${fmtU(Math.round(c.at))} from the ${c.dir === 'h' ? 'top' : 'left'} edge${c.to - c.from < (c.dir === 'h' ? sheet.width : sheet.height) - 2 * prefs().trim - 1 ? ` (${fmtU(Math.round(c.from))} to ${fmtU(Math.round(c.to))})` : ''}` })));
+        box.append(h('details', { class: 'bh-saw' }, h('summary', { text: `Saw cuts in order (${sheet.cuts.length})` }), steps));
+      }
+      for (const o of sheet.offcuts) saveOffcuts.push({ kind: 'sheet', thick: sheet.thickness, w: Math.round(Math.max(o.w, o.h)), l: Math.round(Math.min(o.w, o.h)), qty: 1, note: offcutNote() });
     });
     for (const g of l.timber) {
       const bars = g.bars.length;
@@ -400,7 +426,16 @@
     const bits = [];
     if (l.sheets.length) bits.push(`${plural(l.sheets.length, 'sheet')}, ${waste}% left over`);
     if (l.timber.length) { const n = l.timber.reduce((a, g) => a + g.bars.length, 0); bits.push(`${plural(n, 'length')} of timber`); }
-    box.append(h('p', { class: 'bh-note', text: `${bits.join(' · ')} · 3 mm saw cut between boards · letters match the cut list` }));
+    box.append(h('p', { class: 'bh-note', text: `${bits.join(' · ')} · ${fmtU(prefs().kerf)} saw cut between boards · letters match the cut list` }));
+    if (saveOffcuts.length) {
+      const say = h('span', { class: 'bh-say', 'aria-live': 'polite' });
+      box.append(h('p', { class: 'bh-note', text: `${plural(saveOffcuts.length, 'offcut')} worth keeping (dashed, 150 mm or more each way).` }),
+        h('button', { type: 'button', class: 'bh-btn', text: 'Save offcuts to Workshop', onclick: () => {
+          S.data.stock = [...S.data.stock.filter((it) => it.note !== offcutNote()), ...saveOffcuts.slice(0, 20).map((o) => ({ id: '', ...o }))].slice(0, 200);
+          saveStock();
+          say.textContent = ' Saved. Your next plan uses them first.';
+        } }), say);
+    }
     if (l.tooBig.length) box.append(h('p', { class: 'bh-warn', text: `Too big for a ${fmt(l.width)} × ${fmt(l.height)} sheet: ${[...new Set(l.tooBig.map((t) => letter(t.part)))].join(', ')}. Make it smaller or join boards.` }));
     if (f) for (const text of model.fitProblems(S.d)) box.append(h('p', { class: 'bh-warn', text: `Careful: ${text}` }));
     return box;

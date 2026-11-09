@@ -172,9 +172,10 @@ function cleanPrices(map) {
 function cleanPrefs(input) {
   const i = input && typeof input === 'object' ? input : {};
   const dim = (v, fallback) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n >= 300 && n <= 6000 ? n : fallback; };
+  const num = (v, lo, hi, fallback) => { const n = Math.round(Number(v) * 10) / 10; return Number.isFinite(n) && n >= lo && n <= hi ? n : fallback; };
   const a = dim(i.sheet && i.sheet[0], 2440);
   const b = dim(i.sheet && i.sheet[1], 1220);
-  return { units: i.units === 'in' ? 'in' : 'mm', sheet: [Math.max(a, b), Math.min(a, b)], timber: dim(i.timber, 2400) };
+  return { units: i.units === 'in' ? 'in' : 'mm', sheet: [Math.max(a, b), Math.min(a, b)], timber: dim(i.timber, 2400), kerf: num(i.kerf, 0, 10, 3), trim: num(i.trim, 0, 50, 0), grain: i.grain === true };
 }
 
 // The person's record, made on first use.
