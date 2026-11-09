@@ -39,10 +39,38 @@
     return (list || []).find((x) => x.DeviceId === s.deviceId) || null;
   }
   // Start an item in this browser's player, from a given point.
+  // Jellyfin's remote command travels over its WebSocket, which never rides the
+  // tunnel (stream.roostos.network): the server says OK and nothing happens. So
+  // after sending it we watch for the video actually starting (no polling: the
+  // video's own loadstart event) and, if it does not, open the item's page and
+  // press its Play button like a person would.
+  let loads = 0;
+  document.addEventListener('loadstart', (e) => { if (isMainVideo(e.target)) loads++; }, true);
+  function isMainVideo(v) { return v && v.tagName === 'VIDEO' && v.classList.contains('htmlvideoplayer'); }
+  function pressPlay(id) {
+    location.hash = `#/details?id=${id}`;
+    let n = 0;
+    const t = setInterval(() => {
+      const b = [...document.querySelectorAll('.btnResume, .btnPlay')].find((x) => x.offsetParent && !x.classList.contains('hide') && !x.disabled);
+      if (b) { clearInterval(t); b.click(); } else if (++n > 25) clearInterval(t);
+    }, 300);
+  }
   async function playNow(id, ticks) {
-    const me = await mySession();
-    if (!me || !safe(id)) return false;
-    await call('POST', `/Sessions/${me.Id}/Playing?playCommand=PlayNow&itemIds=${id}&startPositionTicks=${Math.max(0, ticks | 0)}`);
+    if (!safe(id)) return false;
+    const before = loads;
+    let sent = false;
+    try {
+      const me = await mySession();
+      if (me) {
+        await call('POST', `/Sessions/${me.Id}/Playing?playCommand=PlayNow&itemIds=${id}&startPositionTicks=${Math.max(0, ticks | 0)}`);
+        sent = true;
+      }
+    } catch { /* fall through to the page */ }
+    if (sent) {
+      await new Promise((r) => setTimeout(r, 3500));
+      if (loads > before) return true;
+    }
+    pressPlay(id);
     return true;
   }
   window.RF = { session, call, safe, mySession, playNow };
