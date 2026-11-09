@@ -1706,6 +1706,11 @@
     const img = el('img', { src: mediaUrl(p), alt: p.name, class: 'gview-media', draggable: 'false' });
     const clip = el('video', { src: sp(`/api/glint/media/${p.live}`), playsinline: true, loop: true, preload: 'none', class: 'gview-media gview-clip hidden' });
     const badge = el('button', { type: 'button', class: 'gview-live mono', text: 'LIVE', 'aria-label': 'Hold to play' });
+    // HEIC on Windows and Android: the server's JPEG copy, then the small preview, rather than a broken picture.
+    let step = 0;
+    img.addEventListener('error', () => { step += 1; if (step === 1) img.src = mediaUrl(p, true); else if (step === 2 && p.thumb === 1) img.src = thumbUrl(p); });
+    let clipTried = false;
+    clip.addEventListener('error', () => { if (!clipTried) { clipTried = true; clip.src = `${sp(`/api/glint/media/${p.live}`)}${sp(`/api/glint/media/${p.live}`).includes('?') ? '&' : '?'}preview=1`; } });
     const wrap = el('div', { class: 'gview-livewrap' }, img, clip, badge);
     let timer = 0;
     // With sound, as a Live Photo has. A browser that won't start sound without a tap (a hold on the picture) gets it silent.
