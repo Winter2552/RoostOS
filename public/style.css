@@ -2094,3 +2094,42 @@ a.bh-btn { text-decoration: none; display: inline-block; }
 @keyframes cx-chirp { to { transform: rotate(16deg); } }
 @keyframes cx-bob { 50% { transform: translateY(-1.6px) rotate(-2deg); } }
 @media (prefers-reduced-motion: reduce) { .cx-eye, .cx-avatar.speaking .cx-beak-low, .cx-logo.speaking .cx-beak-low, .cx-avatar.speaking .cx-bird, .cx-logo.speaking .cx-bird { animation: none; } }
+
+/* Cars: the garage and a car's page (public/cars.js). Same black and white as the rest. */
+.cars-page { max-width: 760px; margin: 0 auto; padding: 8px 14px 40px; }
+.car-bar { display: flex; align-items: center; gap: 12px; margin: 6px 0 10px; }
+.car-bar h2 { margin: 0; flex: 1; font-size: 28px; }
+.car-say { min-height: 1.2em; margin: 0 0 8px; color: var(--bad); font-size: 12px; }
+.car-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px; margin-top: 8px; }
+.car-tile { display: flex; flex-direction: column; overflow: hidden; text-decoration: none; color: var(--ink); }
+.car-photo { aspect-ratio: 2 / 1; background: linear-gradient(135deg, #2a2a2a, #161616); display: grid; place-items: center; overflow: hidden; border-bottom: 1px solid var(--line); }
+.car-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.car-ph { opacity: 0.55; color: var(--ink); }
+.car-hero { aspect-ratio: 16 / 9; border: 2px solid var(--ink); border-radius: var(--radius); }
+.car-info { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; }
+.car-info .muted { font-size: 13px; }
+.car-empty { text-align: center; padding: 40px 10px; }
+.car-old { margin-top: 24px; }
+.car-old summary, .car-edit summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.car-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.car-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 14px 0; }
+.car-facts dt { color: var(--muted); font-size: 12px; align-self: center; }
+.car-facts dd { margin: 0; text-transform: capitalize; }
+.car-facts dd:nth-of-type(1) { text-transform: none; }
+.car-form { display: flex; flex-direction: column; gap: 12px; margin: 12px 0; }
+.car-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.car-form input, .car-form select, .car-person select, .car-confirm input { background: var(--panel); color: var(--ink); border: 1.5px solid var(--line); border-radius: 12px; padding: 11px 12px; font: inherit; font-size: 16px; }
+.car-form input:focus-visible, .car-form select:focus-visible, .car-person select:focus-visible, .car-confirm input:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+.car-two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.car-share { padding: 16px 18px; margin: 22px 0 10px; }
+.car-share h3 { margin: 0 0 4px; }
+.car-person { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+.car-person > span, .car-person > select:first-child { flex: 1; min-width: 0; }
+.car-danger { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
+.car-confirm { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.car-soon { font-size: 13px; }
+.car-pick { position: fixed; inset: 5vh 5vw; z-index: 50; overflow: auto; padding: 16px; max-width: 640px; margin: 0 auto; }
+.car-picks { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+.car-pickbtn { padding: 0; border: 1.5px solid var(--line); border-radius: 10px; overflow: hidden; background: none; cursor: pointer; aspect-ratio: 1; }
+.car-pickbtn img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.car-pickbtn:focus-visible { outline: 2px solid var(--ink); }

@@ -1,3 +1,10 @@
 {
-  "items": []
+  "items": [
+    {
+      "title": "Cars: a garage for every car",
+      "text": "Add your cars with a photo (from Glint or your camera) and decide who else can see each one. Dates, fuel and service history are coming next.",
+      "image": "cars-garage.png",
+      "admin": true
+    }
+  ]
 }

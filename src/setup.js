@@ -764,6 +764,7 @@ const NO_STEP = {
   serverName: 'works as "Roost" until renamed under Admin → Server',
   defaultLimitGb: 'starts at 50 GB, changed under Admin → Server',
   birdhouseFetch: 'off by default, switched under Admin → Server (Birdhouse may read a shop page when asked)',
+  carsAdded: 'Roost\'s own record that the Cars app was added once',
   birdhouseAdded: 'Roost\'s own record that the Birdhouse app was added once',
   cockerelAdded: 'Roost\'s own record that the Cockerel app was added once',
   setupTicked: 'this checklist\'s own record',
