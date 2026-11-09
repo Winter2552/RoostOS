@@ -445,10 +445,21 @@
     renderTools();
   }
 
+  // On a computer there is no swipe, so the strip has arrows that appear while there is more to see that way.
   function memoryStrip() {
-    return el('div', { class: 'glint-memories', role: 'list', 'aria-label': 'Memories' }, ...G.memories.map((m) => el('a', { class: 'gmem', role: 'listitem', href: `${base()}/memory/${m.id}` },
+    const strip = el('div', { class: 'glint-memories', role: 'list', 'aria-label': 'Memories' }, ...G.memories.map((m) => el('a', { class: 'gmem', role: 'listitem', href: `${base()}/memory/${m.id}` },
       el('img', { src: thumbUrl({ id: m.cover }), alt: '', loading: 'lazy', draggable: 'false', onerror: (e) => e.target.remove() }),
       el('span', { class: 'gmem-text' }, el('b', { text: m.title }), el('small', { text: m.sub })))));
+    const go = (dir) => strip.scrollBy({ left: dir * Math.max(200, strip.clientWidth * 0.8), behavior: 'smooth' });
+    const prev = el('button', { type: 'button', class: 'gmem-arrow prev hidden', 'aria-label': 'Earlier memories', onclick: () => go(-1) }, gi('left'));
+    const next = el('button', { type: 'button', class: 'gmem-arrow next hidden', 'aria-label': 'More memories', onclick: () => go(1) }, gi('right'));
+    const sync = () => {
+      prev.classList.toggle('hidden', strip.scrollLeft < 8);
+      next.classList.toggle('hidden', strip.scrollLeft + strip.clientWidth >= strip.scrollWidth - 8);
+    };
+    strip.addEventListener('scroll', sync, { passive: true });
+    new ResizeObserver(sync).observe(strip);
+    return el('div', { class: 'glint-memwrap' }, strip, prev, next);
   }
 
   function tile(p) {

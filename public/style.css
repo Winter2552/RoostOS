@@ -1415,6 +1415,11 @@ button.restore-name:hover { text-decoration: underline; text-underline-offset: 3
 /* Memories: the cards above the timeline, the memory page and the slideshow */
 .glint-memories { display: flex; gap: 10px; overflow-x: auto; margin: 0 0 18px; padding-bottom: 4px; scroll-snap-type: x proximity; scrollbar-width: none; }
 .glint-memories::-webkit-scrollbar { display: none; }
+.glint-memwrap { position: relative; }
+.gmem-arrow { display: none; position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 44px; height: 44px; margin-top: -2px; border: 1.5px solid var(--line); border-radius: 50%; background: rgba(0, 0, 0, 0.75); color: #fff; align-items: center; justify-content: center; cursor: pointer; }
+.gmem-arrow.prev { left: 6px; }
+.gmem-arrow.next { right: 6px; }
+@media (hover: hover) and (pointer: fine) { .gmem-arrow:not(.hidden) { display: flex; } }
 .gmem { position: relative; flex: none; width: 132px; height: 176px; overflow: hidden; border: 1.5px solid var(--line); border-radius: 16px; background: var(--panel); text-decoration: none; color: #fff; scroll-snap-align: start; }
 .gmem img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .gmem::after { content: ''; position: absolute; inset: 0; background: linear-gradient(rgba(0, 0, 0, 0) 45%, rgba(0, 0, 0, 0.78)); }
