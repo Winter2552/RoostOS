@@ -6,7 +6,7 @@
 (() => {
   const REFRESH_MS = 6000;
   const S = { built: false, timer: null, busy: false, steps: false, last: '', open: false, d: null, seen: null, typing: false, again: false };
-  const STAGES = ['Requested', 'Finding', 'Downloading', 'Added'];
+  const STAGES = ['Requested', 'Finding', 'Downloading', 'Adding', 'Added'];
   const IDEAS = ["What's new on Roostflix?", 'Research something for me', 'Find a film for me'];
 
   // His mark: the Roost bird with a comb, a two-part beak and a wattle. The
@@ -43,10 +43,11 @@
   function job(j) {
     const at = STAGES.indexOf(j.state);
     const failed = j.state === 'Failed';
-    const pct = failed ? 100 : Math.round(((at + (j.state === 'Downloading' && j.progress ? j.progress / 100 : 0.5)) / STAGES.length) * 100);
+    // While downloading the bar is the real percentage; before and after it is a stage.
+    const pct = failed ? 100 : j.state === 'Downloading' ? Math.max(3, j.progress || 0) : j.state === 'Adding' ? 99 : Math.round(((at + 0.5) / STAGES.length) * 100);
     return el('div', { class: `cx-job${failed ? ' failed' : ''}${j.state === 'Added' ? ' done' : ''}` },
       el('span', { class: 'cx-job-name', text: j.title || 'Job' }),
-      el('span', { class: 'cx-job-state', text: failed ? 'Failed' : j.state }),
+      el('span', { class: 'cx-job-state', text: failed ? 'Failed' : j.state === 'Downloading' && j.detail ? `${j.progress || 0}% · ${j.detail}` : j.state === 'Adding' ? 'Adding to Roostflix' : j.state }),
       el('span', { class: 'cx-track' }, el('i', { style: `width:${j.state === 'Added' ? 100 : pct}%` })));
   }
 

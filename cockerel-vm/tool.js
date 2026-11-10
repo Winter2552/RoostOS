@@ -118,6 +118,15 @@ async function fetchJob(link, opt) {
   writeJson(jobFile(id), meta);
   await hook({ type: 'job', id, title: name, state: 'Finding', requester: meta.requester });
 
+  // Folders first: a share he can't write to would fail the download (or the filing) later.
+  const blocked = [INCOMING, path.join(MEDIA, 'Movies'), path.join(MEDIA, 'Series')].map(lib.writableProblem).find(Boolean);
+  if (blocked) {
+    writeJson(jobFile(id), { ...meta, status: 'failed' });
+    await hook({ type: 'job', id, state: 'Failed' });
+    await hook({ type: 'log', text: `Did not start ${name}: I can't write to the Roostflix folders (${blocked}). On the Optiplex: sudo chmod -R a+rwX /media/roosthdd/media/roostflix (and check the media share is read-write for my user).` });
+    fail(`I can't write to the Roostflix folders (${blocked}). Tell Raven the Roostflix incoming, Movies and Series folders need write access for my share user; the fix is in the log.`);
+  }
+
   if (source === 'other' && !approved(`entitled-${id}`)) {
     await hook({ type: 'ask', askId: `entitled-${id}`, text: `${name} would come from a source I don't normally use. Are you entitled to download this one yourself (you own it, or it is free to share)?`, options: ["Yes, I'm entitled to this", 'Cancel'] });
     return console.log('Asked Raven whether he is entitled to this download. Stop here and wait: he will answer and you will be woken to continue.');
@@ -137,14 +146,68 @@ async function fetchJob(link, opt) {
   await hook({ type: 'spend', bytes: size });
   const dir = path.join(INCOMING, id);
   fs.mkdirSync(dir, { recursive: true });
-  const args = ['--seed-time=0', '--max-overall-upload-limit=1K', '--file-allocation=none', '--auto-file-renaming=false', '--summary-interval=0', '--console-log-level=warn', `--on-download-complete=${HOOK_DONE}`, `--on-download-error=${HOOK_ERROR}`, `-d${dir}`, torrent || link];
+  const rpc = { port: await freePort(), secret: require('crypto').randomBytes(16).toString('hex') };
+  const args = [...lib.NO_SEED, '--file-allocation=none', '--auto-file-renaming=false', '--summary-interval=0', '--console-log-level=warn', '--enable-rpc=true', '--rpc-listen-all=false', `--rpc-listen-port=${rpc.port}`, `--rpc-secret=${rpc.secret}`, `--on-download-complete=${HOOK_DONE}`, `--on-download-error=${HOOK_ERROR}`, `-d${dir}`, torrent || link];
   if (/^https:/i.test(link) && !torrent) args.unshift('--max-redirect=5', '--check-certificate=true');
   const child = spawn('aria2c', args, { detached: true, stdio: 'ignore', env: { ...process.env, COCKEREL_JOB: id } });
   child.unref();
-  writeJson(jobFile(id), { ...meta, status: 'downloading', size });
-  await hook({ type: 'job', id, state: 'Downloading', progress: 0 });
+  writeJson(jobFile(id), { ...meta, status: 'downloading', size, pid: child.pid, rpc });
+  // A small watcher reports progress while this one download runs, then exits.
+  spawn(process.execPath, [__filename, 'watch', id], { detached: true, stdio: 'ignore', env: process.env }).unref();
+  await hook({ type: 'job', id, state: 'Downloading', progress: 0, detail: 'Finding peers' });
   await hook({ type: 'log', text: `Started downloading ${name} (${size ? lib.human(size) : 'size unknown'}).` });
   console.log(`Download started for job ${id}. He is told when it finishes; nothing more to do now.`);
+}
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const srv = require('net').createServer();
+    srv.listen(0, '127.0.0.1', () => { const { port } = srv.address(); srv.close(() => resolve(port)); });
+    srv.on('error', reject);
+  });
+}
+
+// ---------- progress (runs beside aria2, only while the download runs) ----------
+// Asks aria2 on this machine's own loopback every 5 s. It tells Roost only when
+// the whole percent changes, and leaves the numbers in state/progress.json for
+// the VM screen. It stops when the job is no longer downloading.
+const PROGRESS = path.join(STATE, 'progress.json');
+function setProgress(id, entry) {
+  const all = readJson(PROGRESS, {});
+  if (entry) all[id] = entry; else delete all[id];
+  writeJson(PROGRESS, all);
+}
+
+async function watch(id) {
+  if (!lib.jobIdOk(id)) fail('bad job');
+  let last = -1;
+  let misses = 0;
+  for (;;) {
+    const meta = readJson(jobFile(id), null);
+    if (!meta || meta.status !== 'downloading' || !meta.rpc) break;
+    let st = null;
+    try {
+      const res = await fetch(`http://127.0.0.1:${meta.rpc.port}/jsonrpc`, { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 'w', method: 'aria2.tellActive', params: [`token:${meta.rpc.secret}`, ['completedLength', 'totalLength', 'downloadSpeed']] }), signal: AbortSignal.timeout(4000) });
+      const list = ((await res.json()).result || []).sort((a, b) => Number(b.totalLength) - Number(a.totalLength));
+      st = list[0] || null;
+      misses = 0;
+    } catch { misses++; }
+    if (misses >= 6) { await failed(id, 'the download stopped answering'); break; }
+    if (st && Number(st.totalLength) > 0) {
+      const total = Number(st.totalLength);
+      const got = Number(st.completedLength);
+      const pct = Math.min(99, Math.floor((got / total) * 100));
+      const detail = `${pct}%${lib.progressText(Number(st.downloadSpeed), total - got) ? ` · ${lib.progressText(Number(st.downloadSpeed), total - got)}` : ''}`;
+      setProgress(id, { name: meta.name, pct, detail, at: Date.now() });
+      if (pct !== last) {
+        last = pct;
+        try { await hook({ type: 'job', id, state: 'Downloading', progress: pct, detail: lib.progressText(Number(st.downloadSpeed), total - got) }); } catch { /* Roost busy; try on the next change */ }
+        if (pct % 10 === 0) await hook({ type: 'log', text: `${meta.name}: ${detail}` }).catch(() => {});
+      }
+    }
+    await new Promise((r) => setTimeout(r, 5000));
+  }
+  setProgress(id, null);
 }
 
 // ---------- when aria2 finishes (called by hook.sh) ----------
@@ -192,6 +255,7 @@ async function done(id) {
       const probe = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'format=duration', '-of', 'csv=p=0', f], { encoding: 'utf8' });
       if (probe.status !== 0 || !(Number(probe.stdout) > 60)) throw new Error(`${path.basename(f)} does not look like a video`);
     }
+    await hook({ type: 'job', id, state: 'Adding', progress: 99 });
     const target = (f) => (meta.kind === 'show' ? lib.episodePath(MEDIA, meta.name, path.basename(f)) : lib.moviePath(MEDIA, meta.name, meta.year, path.extname(f).toLowerCase()));
     if (files.some((f) => !target(f))) throw new Error('could not tell the episode numbers from the file names');
     for (const f of files) {
@@ -201,6 +265,7 @@ async function done(id) {
     }
     fs.rmSync(dir, { recursive: true, force: true });
     writeJson(jobFile(id), { ...meta, status: 'added' });
+    stopAria(meta.pid);
     await hook({ type: 'refresh' });
     await hook({ type: 'job', id, state: 'Added', progress: 100 });
     await hook({ type: 'log', text: `${meta.name} is on Roostflix.` });
@@ -210,10 +275,18 @@ async function done(id) {
   }
 }
 
+// Belt and braces: once the file is filed, nothing of his keeps running or sharing.
+function stopAria(pid) {
+  try {
+    if (pid && /aria2c/.test(fs.readFileSync(`/proc/${pid}/comm`, 'utf8'))) process.kill(pid, 'SIGTERM');
+  } catch { /* already gone */ }
+}
+
 async function failed(id, why = 'the download failed') {
   const meta = readJson(jobFile(id), null);
   if (!meta || meta.status === 'added' || meta.status === 'failed') return;
   writeJson(jobFile(id), { ...meta, status: 'failed' });
+  stopAria(meta.pid);
   await hook({ type: 'job', id, state: 'Failed' });
   await hook({ type: 'log', text: `${meta.name}: ${why}. The files stay in incoming/${id} for a look.` });
 }
@@ -241,6 +314,7 @@ const COMMANDS = {
   },
   log: async ([text]) => { await hook({ type: 'log', text: String(text || '').slice(0, 1000) }); },
   job: async ([id, state], opt) => { await hook({ type: 'job', id, state, title: opt.title, progress: Number(opt.progress), requester: opt.requester }); },
+  watch: async ([id]) => { await watch(id); },
   ask: async ([askId, text, ...options]) => { await hook({ type: 'ask', askId, text, options: options.length ? options : undefined }); console.log('Asked. Stop and wait; he will answer and you will be woken.'); },
   library: async ([term]) => {
     const out = await hook({ type: 'library', term });
@@ -313,7 +387,7 @@ const COMMANDS = {
 (async () => {
   const [cmd, ...rest] = process.argv.slice(2);
   const run = COMMANDS[cmd];
-  if (!run) fail(`Commands: ${Object.keys(COMMANDS).filter((c) => c !== 'done' && c !== 'failed').join(', ')}`);
+  if (!run) fail(`Commands: ${Object.keys(COMMANDS).filter((c) => !['done', 'failed', 'watch'].includes(c)).join(', ')}`);
   const { pos, opt } = parse(rest);
   await run(pos, opt);
 })().catch((err) => fail(err.message));

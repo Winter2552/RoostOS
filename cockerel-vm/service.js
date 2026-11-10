@@ -183,6 +183,7 @@ function status() {
     diskPct: Number((df.match(/(\d+)%/) || [])[1]) || 0,
     runsToday: (read('usage.json', {}).runs) || 0,
     maxRuns: MAX_RUNS,
+    downloads: Object.values(read('progress.json', {})).filter((d) => Date.now() - d.at < 60000).map((d) => ({ name: d.name, pct: d.pct, detail: d.detail })),
     updateApi: 2, // 2 = understands {action:'check'}
     update: updateStatus(),
   };

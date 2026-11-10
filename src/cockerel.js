@@ -157,7 +157,8 @@ class Cockerel {
       if (c.jobs.length > JOB_MAX) c.jobs.splice(0, c.jobs.length - JOB_MAX);
     }
     if (job.title) j.title = clip(job.title, 120);
-    if (STATES.includes(job.state)) j.state = job.state;
+    if (STATES.includes(job.state)) { j.state = job.state; if (job.state !== 'Downloading') j.detail = ''; }
+    if (typeof job.detail === 'string' && j.state === 'Downloading') j.detail = clip(job.detail, 60);
     if (Number.isFinite(job.progress)) j.progress = Math.max(0, Math.min(100, Math.round(job.progress)));
     if (job.requester) j.requester = clip(job.requester, 60);
     j.updatedAt = new Date(this.now()).toISOString();
@@ -195,7 +196,7 @@ class Cockerel {
   }
 }
 
-const STATES = ['Requested', 'Finding', 'Downloading', 'Added', 'Failed'];
+const STATES = ['Requested', 'Finding', 'Downloading', 'Adding', 'Added', 'Failed'];
 
 class CockerelError extends Error {
   constructor(message, status = 400) {
