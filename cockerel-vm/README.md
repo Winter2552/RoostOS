@@ -50,7 +50,14 @@ He shares your Claude allowance. The service wakes Claude only for a chat messag
 
 ## 5. Share the media folders
 
-He needs read-write access to three folders on the data drive, and nothing else: `incoming`, `Movies` and `Series` inside the Roostflix folder (`/media/roosthdd/media/roostflix`).
+He needs read-write access to three folders on the data drive, and nothing else: `incoming`, `Movies` and `Series` inside the Roostflix folder (`/media/roosthdd/media/roostflix`). Folders created by Jellyfin or Docker are owned by root, so give his share user write access once, on the Optiplex:
+
+```
+sudo mkdir -p /media/roosthdd/media/roostflix/{incoming,Movies,Series}
+sudo chmod -R a+rwX /media/roosthdd/media/roostflix
+```
+
+Before every download he checks he can write to those folders, and says which one fails if not. While it runs, the percent, speed and time left show on the VM screen and on his job card in Roost, and he never seeds (aria2 stops the moment the download is done).
 
 1. In ZimaOS **Files**, share the folder as an SMB share (a user just for him, with a password).
 2. In the VM: put `username=…` and `password=…` in `/etc/cockerel/smb` (`chmod 600`), then add to `/etc/fstab`:

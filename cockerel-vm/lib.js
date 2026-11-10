@@ -108,4 +108,35 @@ function pageText(html, max = 15000) {
     .replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim().slice(0, max);
 }
 
-module.exports = { browseUrl, pageText, sign, headers, verify, OPEN_HOSTS, hostOpen, sourceKind, VIDEO, cleanName, moviePath, episodePath, jobIdOk, human };
+// Can this machine create folders and files here? Returns '' when yes, else a
+// plain-English reason (the usual cause is the media share being read-only
+// for his SMB user on ZimaOS).
+function writableProblem(dir) {
+  const fs = require('fs');
+  const probe = path.join(dir, `.write-test-${process.pid}`);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(probe, 'x');
+    fs.unlinkSync(probe);
+    return '';
+  } catch (err) {
+    return `${err.code || 'error'} on ${dir}`;
+  }
+}
+
+// "3.1 MB/s · 12 min left" for the job card and the VM screen.
+function progressText(speed, bytesLeft) {
+  const bits = [];
+  if (speed > 0) bits.push(`${human(speed)}/s`);
+  if (speed > 0 && bytesLeft > 0) {
+    const s = bytesLeft / speed;
+    bits.push(s < 90 ? 'under a minute left' : s < 5400 ? `${Math.round(s / 60)} min left` : `${(s / 3600).toFixed(1)} h left`);
+  }
+  return bits.join(' · ');
+}
+
+// The aria2 flags that keep him from ever seeding: stop at once when done
+// (time and ratio), and upload only a trickle while downloading.
+const NO_SEED = ['--seed-time=0', '--seed-ratio=0.0', '--max-overall-upload-limit=1K'];
+
+module.exports = { writableProblem, progressText, NO_SEED, browseUrl, pageText, sign, headers, verify, OPEN_HOSTS, hostOpen, sourceKind, VIDEO, cleanName, moviePath, episodePath, jobIdOk, human };

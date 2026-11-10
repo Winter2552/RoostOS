@@ -154,7 +154,8 @@ test('the tool files a finished download, and asks before an unusual source or a
     assert.equal(r.code, 0, r.out);
     assert.ok(fs.existsSync(path.join(env.MEDIA_ROOT, 'Movies', 'Sintel (2010)', 'Sintel (2010).mkv')));
     assert.ok(!fs.existsSync(path.join(env.INCOMING_DIR, 'j3')), 'leftovers removed');
-    assert.deepEqual(seen.map((m) => m.type), ['refresh', 'job', 'log', 'ready']);
+    assert.deepEqual(seen.map((m) => m.type), ['job', 'refresh', 'job', 'log', 'ready']);
+    assert.equal(seen[0].state, 'Adding');
     assert.equal(seen.find((m) => m.type === 'ready').requester, 'sam');
     seen.length = 0;
     await tool('done', 'j3');
@@ -194,4 +195,31 @@ test('turning web off also turns the browser off, and nothing but film jobs can 
   for (const mode of ['assistant', 'scheduled']) assert.ok(!allowedFor(mode).some((t) => /cockerel-tool (fetch|find|library):/.test(t)), `${mode} cannot download`);
   const sched = allowedFor('scheduled');
   for (const t of ['remember', 'schedule', 'task', 'remind', 'email']) assert.ok(!sched.includes(`Bash(cockerel-tool ${t}:*)`), `a job cannot ${t}`);
+});
+
+test('he checks the Roostflix folders first, and never seeds', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cockerel-w-'));
+  try {
+    assert.equal(lib.writableProblem(path.join(root, 'incoming')), '', 'creates and writes');
+    fs.writeFileSync(path.join(root, 'blocker'), 'x');
+    assert.match(lib.writableProblem(path.join(root, 'blocker', 'incoming')), /on .*incoming/, 'names the folder that failed');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  for (const flag of ['--seed-time=0', '--seed-ratio=0.0', '--max-overall-upload-limit=1K']) assert.ok(lib.NO_SEED.includes(flag), flag);
+  const src = require('fs').readFileSync(path.join(__dirname, '..', 'cockerel-vm', 'tool.js'), 'utf8');
+  assert.ok(src.includes('...lib.NO_SEED'), 'the download uses the no-seeding flags');
+  assert.equal(lib.progressText(3.1 * 1048576, 3.1 * 1048576 * 720), '3.1 MB/s · 12 min left');
+  assert.equal(lib.progressText(0, 100), '');
+});
+
+test('Roost shows the download detail only while downloading', () => {
+  const { Cockerel } = require('../src/cockerel');
+  const c = new Cockerel({ store: { db: { settings: {} }, save() {} }, newId: () => '1' });
+  c.setJob({ id: 'j', title: 'Film', state: 'Downloading', progress: 42, detail: '3.1 MB/s · 12 min left' });
+  assert.equal(c.data().jobs[0].detail, '3.1 MB/s · 12 min left');
+  c.setJob({ id: 'j', state: 'Adding', progress: 99 });
+  assert.equal(c.data().jobs[0].state, 'Adding');
+  assert.equal(c.data().jobs[0].detail, '');
 });
