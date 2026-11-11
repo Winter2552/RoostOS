@@ -14,6 +14,7 @@
 //   action              where in Roost to do it: { label, view, focus, field }
 //                       (focus is the id of the form to jump to, field the input)
 //   optional            true for nice-to-haves (not counted in progress)
+//   ownerOnly           true for a step only the owner account sees (the Device finder)
 //   covers              the environment variables and saved settings this step
 //                       is about; test/setup.test.js fails if one in src/ has no step
 //   check(ctx)          true when done; ctx is built by the server
@@ -32,7 +33,7 @@ function driveSize(dir) {
 }
 
 // The Admin sections, in nav order. Admin's tabs (public/app.js ADMIN_SECTIONS) match.
-const SECTIONS = ['overview', 'setup', 'people', 'apps', 'storage', 'network', 'security', 'server'];
+const SECTIONS = ['overview', 'setup', 'people', 'apps', 'storage', 'network', 'security', 'devices', 'server'];
 
 const STEPS = [
   // ---------- the server ----------
@@ -783,6 +784,23 @@ const STEPS = [
     check: (ctx) => ((ctx.db.push || {}).devices || []).some((d) => ctx.db.users.some((u) => u.id === d.userId && u.role === 'admin')),
   },
   {
+    id: 'device-finder',
+    section: 'security',
+    group: 'Server',
+    title: 'Find the devices on your home network',
+    covers: ['LAN_DIR', 'LAN_INTERVAL_MIN', 'LAN_CIDR'],
+    ownerOnly: true,
+    why: 'See every phone, TV and gadget on the home network, name them, and hear when a new one joins. Only the owner account sees this, only from home.',
+    how: [
+      'Keep the roost-lan service, the lan volume and the LAN_DIR line under roost (all in the compose file in the README), then redeploy Roost. The helper sits on the home network and sweeps it every 30 minutes; it has no port and only reports back to Roost.',
+      'Open Admin → Devices after a minute. It lists what the first sweep found; press Mark all as known to start from a clean slate.',
+      'Roost sits behind the second router, so it sees that side only. If it shows the wrong network, set LAN_CIDR on roost-lan (for example 192.168.4.0/24).',
+    ],
+    action: { label: 'Open Devices', view: 'admin', focus: 'finder-panel' },
+    optional: true,
+    check: (ctx) => Boolean(ctx.devices && ctx.devices.state === 'ok'),
+  },
+  {
     id: 'guest-pass',
     section: 'people',
     group: 'People',
@@ -855,7 +873,8 @@ function cardsDone(steps, keepOpen = []) {
 }
 
 async function checklist(ctx) {
-  const steps = STEPS.map(({ check, ...step }) => {
+  // Steps for one account (the Device finder) are left out for everyone else.
+  const steps = STEPS.filter((step) => !step.ownerOnly || ctx.owner).map(({ check, ...step }) => {
     let done = false;
     try {
       done = Boolean(check(ctx));

@@ -322,6 +322,18 @@ class Sentinel {
     return inc;
   }
 
+  // A Device finder finding (a spoofed router address, a risky open port). It is
+  // listed here for Raven's account only, never announced to other admins, and
+  // Sentinel never acts on it: Roost does not control the router.
+  noteDevice(detail) {
+    if (!this.on()) return null;
+    const inc = { id: this.newId(), at: new Date(this.now()).toISOString(), kind: 'device', ip: null, detail, serious: true, handled: null, evidence: [], target: null };
+    this.incidents.push(inc);
+    if (this.incidents.length > KEEP_INCIDENTS) this.incidents.shift();
+    this.saveSoon();
+    return inc;
+  }
+
   // Mild probing is only listed. Several different addresses within ten
   // minutes is an attack: one alert, and in auto mode, lockdown.
   noteProbe(ip, kind) {
@@ -359,12 +371,13 @@ class Sentinel {
     if (map.size > MAX_TRACKED) map.delete(map.keys().next().value);
   }
 
-  view() {
+  // owner: true for the one account that may see Device finder incidents.
+  view(owner = false) {
     const t = this.now();
     return {
       mode: this.mode,
       bans: this.bans.filter((b) => b.until > t).map((b) => ({ ip: b.ip, reason: b.reason, auto: b.auto, at: b.at, until: new Date(b.until).toISOString() })),
-      incidents: [...this.incidents].reverse().map(({ evidence, target, ...rest }) => ({ ...rest, report: Boolean(evidence), canTrust: rest.kind === 'container' && !rest.handled, canEnd: rest.kind === 'session' && !rest.handled?.includes('signed out') })),
+      incidents: [...this.incidents].filter((i) => owner || i.kind !== 'device').reverse().map(({ evidence, target, ...rest }) => ({ ...rest, report: Boolean(evidence), canTrust: rest.kind === 'container' && !rest.handled, canEnd: rest.kind === 'session' && !rest.handled?.includes('signed out') })),
     };
   }
 

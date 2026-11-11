@@ -268,6 +268,7 @@ let setupMode = false;
 function showWelcome(setup) {
   setupMode = setup;
   state.user = null;
+  state.deviceFinder = undefined;
   state.arranging = null;
   $('#shell').classList.add('hidden');
   $('#secure').classList.add('hidden');
@@ -2378,8 +2379,14 @@ function renderStorageRequests(requests) {
 // Admin is split into sections; only the open one is shown and loaded.
 const ADMIN_SECTIONS = [
   ['overview', 'Overview'], ['setup', 'Setup'], ['people', 'People'], ['apps', 'Apps'],
-  ['storage', 'Storage & backups'], ['network', 'Network'], ['security', 'Alerts & security'], ['server', 'Server'],
+  ['storage', 'Storage & backups'], ['network', 'Network'], ['security', 'Alerts & security'], ['devices', 'Devices'], ['server', 'Server'],
 ];
+// Devices is Raven's alone: the server only says yes to that account, at home.
+const adminSections = () => ADMIN_SECTIONS.filter((s) => s[0] !== 'devices' || state.deviceFinder);
+async function checkDeviceFinder() {
+  if (state.deviceFinder !== undefined) return;
+  state.deviceFinder = await api('GET', '/api/admin/devices/available').then(() => true, () => false);
+}
 const adminName = (id) => (ADMIN_SECTIONS.find((s) => s[0] === id) || [])[1] || id;
 const adminState = { sec: null };
 const setupState = { steps: [], current: undefined };
@@ -2567,7 +2574,7 @@ function navDot(n) {
 function renderAdminNav() {
   const todo = new Map();
   for (const s of setupState.steps) if (!s.done && !s.optional) todo.set(s.section, (todo.get(s.section) || 0) + 1);
-  $('#admin-nav').replaceChildren(...ADMIN_SECTIONS.map(([id, name]) => el('a', {
+  $('#admin-nav').replaceChildren(...adminSections().map(([id, name]) => el('a', {
     href: `#/admin/${id}`, class: id === adminState.sec ? 'on' : '', 'aria-current': id === adminState.sec ? 'page' : false,
   }, name, !['overview', 'setup'].includes(id) && todo.has(id) ? navDot(todo.get(id)) : null)));
   const on = $('#admin-nav a.on');
@@ -2599,6 +2606,7 @@ const adminLoaders = {
     if (state.notice && !$('#notice-form').text.value) { $('#notice-form').text.value = state.notice.text; previewNotice(); }
   },
   async setup() {},
+  async devices() { await window.devicesLoad(); },
   async people() {
     const [{ users }, { apps }, { settings }, { invites, publicUrl }, { family }] = await Promise.all([
       api('GET', '/api/admin/users'), api('GET', '/api/apps'), api('GET', '/api/admin/settings'), api('GET', '/api/admin/invites'), api('GET', '/api/admin/family')]);
@@ -2659,7 +2667,8 @@ const adminLoaders = {
 const loadAdmin = () => adminLoaders[adminState.sec || 'overview']();
 
 async function showAdmin(sec) {
-  if (!ADMIN_SECTIONS.some((s) => s[0] === sec)) sec = 'overview';
+  await checkDeviceFinder();
+  if (!adminSections().some((s) => s[0] === sec)) sec = 'overview';
   const changed = adminState.sec !== sec;
   adminState.sec = sec;
   $('#admin-crumb').textContent = adminName(sec);
@@ -3161,7 +3170,7 @@ const SENTINEL_TEXT = {
   manual: 'Lists mild probing quietly. Alerts you when something serious happens or many addresses attack at once, then waits for you.',
   auto: 'Watches and acts on its own: bans offenders for 24 hours, signs out a stolen sign-in, and locks Roost down if the admin accounts are changed behind its back or five or more addresses attack within ten minutes. Mild probing is only listed. Home access is never banned. It only tells you about new containers.',
 };
-const SENTINEL_WHAT = { wave: 'Many addresses attacking', scanner: 'Scanner probing', spray: 'Guessing usernames', tamper: 'Admin accounts changed', session: 'Sign-in looks stolen', container: 'Unexpected container' };
+const SENTINEL_WHAT = { wave: 'Many addresses attacking', scanner: 'Scanner probing', spray: 'Guessing usernames', tamper: 'Admin accounts changed', session: 'Sign-in looks stolen', container: 'Unexpected container', device: 'Device on the network' };
 
 function sentinelRow(inc) {
   const button = (text, action) => el('button', { class: 'btn ghost small', type: 'button', text, onclick: () => sentinelPost(action, { incident: inc.id }) });

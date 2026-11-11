@@ -65,6 +65,7 @@ const { UptimeLog, watchDockerEvents } = require('./uptime');
 const { Watcher, alertSettings, alertsOf } = require('./alerts');
 const { AccountGuard, SecurityWatch, securityChecks, isPrivateIp } = require('./security');
 const { Sentinel, MODES: SENTINEL_MODES, buildReport } = require('./sentinel');
+const { Devices } = require('./devices');
 const { checkPorts } = require('./portcheck');
 const codeCheck = require('./code-check');
 const { Push } = require('./push');
@@ -282,7 +283,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, coffeeOptions = {}, awayOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, registryFetch, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000, alertIntervalMs = 60 * 1000, readContainers, push: pushOptions = {}, portOptions = {}, aiBase } = {}) {
+function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', lanDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, coffeeOptions = {}, awayOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, registryFetch, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000, alertIntervalMs = 60 * 1000, readContainers, push: pushOptions = {}, portOptions = {}, aiBase } = {}) {
   const store = new Store(dataDir);
   const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
   // The few outside services Roost leans on, for the admin's status page.
@@ -568,6 +569,32 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     // Never ban the home network, or Cloudflare's own addresses.
     skip: (ip) => isPrivateIp(ip) || remoteAccess.isCloudflare(ip),
   });
+  // Device finder: Raven's account only (the first admin), from the home network only.
+  // Its alerts are private to that account: they never reach other admins' bell or phones.
+  const ownerId = () => (db().users.find((u) => u.role === 'admin') || {}).id || null;
+  const deviceAlert = (key, title, detail) => {
+    const owner = ownerId();
+    if (!owner) return;
+    const alerts = alertsOf(db());
+    const open = alerts.find((a) => a.key === key && !a.resolvedAt);
+    if (open) return;
+    const alert = { id: store.newId(), key, title, detail, private: owner, url: '/#/admin/devices', startedAt: new Date().toISOString(), resolvedAt: null };
+    alerts.push(alert);
+    store.save();
+    push.notify({ title, body: detail, tag: key, url: alert.url }, owner, { ttl: 3600, urgency: 'high' });
+  };
+  const deviceAlertClear = (key) => {
+    const open = alertsOf(db()).find((a) => a.key === key && !a.resolvedAt);
+    if (!open) return;
+    open.resolvedAt = new Date().toISOString();
+    store.save();
+  };
+  const devices = new Devices({ dataDir, lanDir, raise: deviceAlert, clear: deviceAlertClear, finding: (detail) => sentinel.noteDevice(detail) });
+  const sentinelView = (req) => {
+    const user = currentUser(req);
+    return sentinel.view(Boolean(user && user.id === ownerId() && !fromOutside(req)));
+  };
+
   // Power and heat history for the charts, fed by the watcher's minute check.
   const healthHistory = new HealthHistory(dataDir);
   const watcher = new Watcher({
@@ -778,6 +805,38 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     const user = currentUser(req);
     if (!user) throw new HttpError(401, 'Sign in first');
     return user;
+  }
+
+  // Raven's account and nobody else's, and only from the home network, so a
+  // stolen sign-in from outside can't map the house. Everyone else gets a plain
+  // "not found", as if the page did not exist.
+  function requireOwner(req) {
+    const user = currentUser(req);
+    if (!user || user.role !== 'admin' || user.id !== ownerId() || fromOutside(req) || twoStepNeeded(db(), user)) throw new HttpError(404, 'Not found');
+    return user;
+  }
+
+  // What each device is doing, as far as Roost itself can tell: a Roostflix
+  // session (Jellyfin knows who is watching what) or a recent sign-in to Roost.
+  async function deviceDoing() {
+    const doing = new Map();
+    const t = Date.now();
+    for (const e of activity.entries.slice(-300)) {
+      if (e.type === 'sign-in' && e.ip && t - Date.parse(e.at) < 2 * 60 * 60 * 1000) doing.set(e.ip, `Signed in to Roost${e.actor ? ` as ${e.actor}` : ''}`);
+    }
+    if (jellyfin.enabled()) {
+      try {
+        const sessions = await jellyfin.send('GET', '/Sessions?activeWithinSeconds=300');
+        for (const s of sessions || []) {
+          const ip = String(s.RemoteEndPoint || '').replace(/^::ffff:/, '');
+          if (!ip) continue;
+          const item = s.NowPlayingItem;
+          const what = item ? [item.SeriesName, item.ParentIndexNumber != null && item.IndexNumber != null ? `S${item.ParentIndexNumber} E${item.IndexNumber}` : '', item.Name].filter(Boolean).join(' · ') : '';
+          doing.set(ip, item ? `Watching on Roostflix: ${what}` : `Open in Roostflix${s.DeviceName ? ` (${s.DeviceName})` : ''}`);
+        }
+      } catch { /* Jellyfin did not answer; the list simply has less to say */ }
+    }
+    return doing;
   }
 
   function requireAdmin(req) {
@@ -1124,8 +1183,9 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
 
   const pushDeviceView = (d) => ({ id: d.id, label: d.label, createdAt: d.createdAt });
 
-  function alertView() {
-    const alerts = alertsOf(db());
+  function alertView(user) {
+    // Device finder alerts belong to one account; everyone else sees none of them.
+    const alerts = alertsOf(db()).filter((a) => !a.private || (user && a.private === user.id));
     return {
       active: alerts.filter((a) => !a.resolvedAt).reverse(),
       recent: alerts.filter((a) => a.resolvedAt).reverse().slice(0, 20),
@@ -2472,6 +2532,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         backup: backup.readStatus(dataDir),
         backupDisabled: !backup.config(db().settings.backup).enabled,
         update: selfUpdate.summarize(selfUpdate.readStatus(dataDir)),
+        owner: admin.id === ownerId() && !fromOutside(req),
+        devices: devices.helper(),
       }));
     },
 
@@ -2750,8 +2812,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     },
 
     'GET /api/alerts': (req, res) => {
-      requireAdmin(req);
-      send(res, 200, alertView());
+      send(res, 200, alertView(requireAdmin(req)));
     },
 
     // "Ignore until fixed": the alert stays listed but stops counting on the bell.
@@ -2805,11 +2866,68 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 200, { codeCheck: db().settings.codeCheck });
     },
 
+    // ---------- Device finder (one account, home network only) ----------
+
+    'GET /api/admin/devices/available': (req, res) => {
+      requireOwner(req);
+      send(res, 200, { available: true });
+    },
+
+    'GET /api/admin/devices': async (req, res) => {
+      requireOwner(req);
+      devices.refresh();
+      devices.autoScan();
+      send(res, 200, devices.view(await deviceDoing()));
+    },
+
+    'POST /api/admin/devices/scan': (req, res) => {
+      requireOwner(req);
+      if (!devices.configured) throw new HttpError(409, 'The device helper is not set up yet. See Admin → Setup.');
+      send(res, 200, { requested: devices.requestScan() });
+    },
+
+    'POST /api/admin/devices/known-all': (req, res) => {
+      const owner = requireOwner(req);
+      devices.markAllKnown();
+      record(req, 'settings-changed', { actor: owner.username, detail: 'marked every device on the network as known' });
+      send(res, 200, devices.view());
+    },
+
+    'PUT /api/admin/devices/rules': async (req, res) => {
+      const owner = requireOwner(req);
+      devices.setRules(await readJson(req));
+      record(req, 'settings-changed', { actor: owner.username, detail: 'changed device alert rules' });
+      send(res, 200, devices.view());
+    },
+
+    'PATCH /api/admin/devices/:id': async (req, res, mac) => {
+      const owner = requireOwner(req);
+      const body = await readJson(req);
+      try {
+        devices.update(mac, { ...('label' in body ? { label: str(body.label, 40) } : {}), ...('type' in body ? { type: str(body.type, 20) } : {}), ...('tag' in body ? { tag: str(body.tag, 20) } : {}), ...('known' in body ? { known: body.known === true } : {}) });
+      } catch (err) {
+        throw new HttpError(err.status || 400, err.message);
+      }
+      record(req, 'settings-changed', { actor: owner.username, detail: 'edited a device in the device list' });
+      send(res, 200, devices.view(await deviceDoing()));
+    },
+
+    'DELETE /api/admin/devices/:id': async (req, res, mac) => {
+      const owner = requireOwner(req);
+      try {
+        devices.forget(mac);
+      } catch (err) {
+        throw new HttpError(err.status || 400, err.message);
+      }
+      record(req, 'settings-changed', { actor: owner.username, detail: 'removed a device from the device list' });
+      send(res, 200, devices.view(await deviceDoing()));
+    },
+
     // ---------- Sentinel ----------
 
     'GET /api/admin/sentinel': (req, res) => {
       requireAdmin(req);
-      send(res, 200, sentinel.view());
+      send(res, 200, sentinelView(req));
     },
 
     'PUT /api/admin/sentinel': async (req, res) => {
@@ -2821,7 +2939,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         record(req, 'settings-changed', { actor: admin.username, detail: `Sentinel ${body.mode}` });
         if (body.mode !== 'off') sentinel.checkSeal();
       }
-      send(res, 200, sentinel.view());
+      send(res, 200, sentinelView(req));
     },
 
     // A text file to hand to Claude: how the incident looked, with no secrets.
@@ -2843,7 +2961,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (!ip || net.isIP(ip) === 0) throw new HttpError(400, 'That is not an address');
       if (!sentinel.ban(ip, incident ? incident.kind : 'by hand')) throw new HttpError(400, 'That address is on your home network or Cloudflare, so it can’t be banned');
       record(req, 'settings-changed', { actor: admin.username, detail: `Sentinel banned ${ip}` });
-      send(res, 200, sentinel.view());
+      send(res, 200, sentinelView(req));
     },
 
     // "That's mine": accepts a new container, or its new image, as normal.
@@ -2853,7 +2971,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const incident = sentinel.incidents.find((i) => i.id === body.incident);
       if (!sentinel.trust(incident)) throw new HttpError(404, 'That is not a container incident');
       record(req, 'settings-changed', { actor: admin.username, detail: `Sentinel trusts container ${incident.target.name}` });
-      send(res, 200, sentinel.view());
+      send(res, 200, sentinelView(req));
     },
 
     // Signs out a sign-in Sentinel thinks was stolen.
@@ -2866,14 +2984,14 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       incident.handled = 'signed out';
       sentinel.saveSoon();
       record(req, 'settings-changed', { actor: admin.username, detail: 'Sentinel: signed out a sign-in that looked stolen' });
-      send(res, 200, sentinel.view());
+      send(res, 200, sentinelView(req));
     },
 
     'POST /api/admin/sentinel/unban': async (req, res) => {
       const admin = requireAdmin(req);
       const body = await readJson(req);
       if (sentinel.unban(str(body.ip, 45))) record(req, 'settings-changed', { actor: admin.username, detail: `Sentinel unbanned ${str(body.ip, 45)}` });
-      send(res, 200, sentinel.view());
+      send(res, 200, sentinelView(req));
     },
 
     // One tap to shut the door: outside access pauses, every sign-in ends (except
@@ -2892,12 +3010,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     },
 
     'POST /api/alerts/:id/dismiss': (req, res, id) => {
-      requireAdmin(req);
-      const alert = alertsOf(db()).find((a) => a.id === id && !a.resolvedAt);
+      const admin = requireAdmin(req);
+      const alert = alertsOf(db()).find((a) => a.id === id && !a.resolvedAt && (!a.private || a.private === admin.id));
       if (!alert) throw new HttpError(404, 'That alert has already cleared');
       alert.dismissedAt = new Date().toISOString();
       store.save();
-      send(res, 200, alertView());
+      send(res, 200, alertView(admin));
     },
 
     'PUT /api/admin/notice': async (req, res) => {
@@ -3870,7 +3988,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/movie-requests|admin\/setup|admin\/galaxies|admin\/away\/devices|storage\/users|links|me\/devices|birdhouse\/plans|alerts|push\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart|\/secret|\/compose|\/check|\/dismiss)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/devices|admin\/apps|admin\/invites|admin\/storage-requests|admin\/movie-requests|admin\/setup|admin\/galaxies|admin\/away\/devices|storage\/users|links|me\/devices|birdhouse\/plans|alerts|push\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart|\/secret|\/compose|\/check|\/dismiss)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }
@@ -4259,9 +4377,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   };
   watcher.start(alertIntervalMs);
   sentinel.start();
+  devices.start();
   server.on('close', () => {
     watcher.stop();
     sentinel.stop();
+    devices.stop();
     certs.stop();
     outside.stop();
     remote.stop();
@@ -4311,9 +4431,10 @@ if (require.main === module) {
   const nestDir = process.env.NEST_DIR || path.join(dataDir, 'nest');
   const trustProxy = process.env.BEHIND_PROXY === 'true';
   const smartDir = process.env.SMART_DIR || '';
+  const lanDir = process.env.LAN_DIR || '';
   const httpsPort = Number(process.env.HTTPS_PORT) || 8443;
   const staging = process.env.ROOST_ACME_STAGING === 'true';
-  const server = createServer({ dataDir, nestDir, backupDir: process.env.BACKUP_DIR || '', secureCookies, disks, dockerHost, roostContainer, smartDir, appToken, trustProxy, tls: { staging } });
+  const server = createServer({ dataDir, nestDir, backupDir: process.env.BACKUP_DIR || '', secureCookies, disks, dockerHost, roostContainer, smartDir, lanDir, appToken, trustProxy, tls: { staging } });
   server.listen(port, () => {
     console.log(`Roost is running on http://localhost:${port} (data in ${dataDir})`);
   });

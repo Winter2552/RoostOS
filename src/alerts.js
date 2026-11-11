@@ -141,7 +141,7 @@ class Watcher {
     }
     const iso = new Date(t).toISOString();
     // Sign-in alerts (src/security.js) are not this watcher's to open or clear.
-    const openList = alerts.filter((a) => !a.resolvedAt && !a.security);
+    const openList = alerts.filter((a) => !a.resolvedAt && !a.security && !a.private);
     const open = new Map(openList.map((a) => [a.key, a]));
     const keys = new Set(open.keys());
     const trends = settings.alertDriveTrend && this.readTrends ? this.readTrends(keys, t) : null;

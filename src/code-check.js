@@ -93,7 +93,8 @@ function mustHold(files) {
       const cap = /^\s*-\s*([A-Z_]+)\s*$/.exec(t);
       const above = compose.split('\n').slice(Math.max(0, i - 3), i).join('\n');
       if (cap && /cap_add:/.test(above) && !CAPS.has(cap[1])) out.push({ rule: 'capability', level: 'review', file: 'docker-compose.yml', line: i + 1, text: cap[1], message: `A container gets the extra power ${cap[1]}.` });
-      if (/privileged:\s*true|network_mode:\s*host/.test(t)) out.push({ rule: 'capability', level: 'bad', file: 'docker-compose.yml', line: i + 1, text: t.trim(), message: 'A container is privileged or on the host network.' });
+      // A container that must see the home network (roost-lan) says why on its own line.
+      if (/privileged:\s*true/.test(t) || (/network_mode:\s*host/.test(t) && !/code-check: ok/.test(t))) out.push({ rule: 'capability', level: 'bad', file: 'docker-compose.yml', line: i + 1, text: t.trim(), message: 'A container is privileged or on the host network.' });
     });
   }
   return out;

@@ -2136,3 +2136,14 @@ a.bh-btn { text-decoration: none; display: inline-block; }
 @keyframes cx-chirp { to { transform: rotate(16deg); } }
 @keyframes cx-bob { 50% { transform: translateY(-1.6px) rotate(-2deg); } }
 @media (prefers-reduced-motion: reduce) { .cx-eye, .cx-avatar.speaking .cx-beak-low, .cx-logo.speaking .cx-beak-low, .cx-avatar.speaking .cx-bird, .cx-logo.speaking .cx-bird { animation: none; } }
+
+/* Admin → Devices */
+.devices-banner { display: flex; gap: 12px; justify-content: space-between; align-items: center; flex-wrap: wrap; border: 1px solid var(--ink); border-radius: 14px; padding: 12px 14px; margin: 12px 0; }
+.devices-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 12px 0; }
+.devices-tile { border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; display: flex; flex-direction: column; }
+.devices-tile b { font-size: 26px; line-height: 1.2; }
+.devices-bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; }
+.devices-row .security-what { overflow-wrap: anywhere; }
+.devices-edit { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.devices-edit-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.devices-edit-row > select { flex: 1; min-width: 120px; }
