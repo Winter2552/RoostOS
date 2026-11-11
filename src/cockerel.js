@@ -146,6 +146,17 @@ class Cockerel {
     return item;
   }
 
+  // Takes finished or stuck job cards off the panel (never one that is downloading
+  // or being filed). With an id, just that card; without, all of them.
+  clearJobs(id) {
+    const c = this.data();
+    const busy = (j) => j.state === 'Downloading' || j.state === 'Adding';
+    const before = c.jobs.length;
+    c.jobs = c.jobs.filter((j) => busy(j) || (id && j.id !== id));
+    if (c.jobs.length !== before) this.store.save();
+    return before - c.jobs.length;
+  }
+
   setJob(job) {
     const c = this.data();
     const id = clip(job.id, 60);
