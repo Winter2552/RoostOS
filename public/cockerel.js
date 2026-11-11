@@ -40,13 +40,20 @@
     return { dot: s.busy ? 'busy' : 'ok', text: s.busy ? 'Working…' : 'Online', more: bits.join(' · ') };
   }
 
+  async function clearJobs(id) {
+    try { await api('POST', '/api/cockerel/jobs/clear', id ? { id } : {}); } catch { /* the next refresh shows the truth */ }
+    load({ force: true });
+  }
+
   function job(j) {
     const at = STAGES.indexOf(j.state);
     const failed = j.state === 'Failed';
     // While downloading the bar is the real percentage; before and after it is a stage.
     const pct = failed ? 100 : j.state === 'Downloading' ? Math.max(3, j.progress || 0) : j.state === 'Adding' ? 99 : Math.round(((at + 0.5) / STAGES.length) * 100);
+    const running = j.state === 'Downloading' || j.state === 'Adding';
     return el('div', { class: `cx-job${failed ? ' failed' : ''}${j.state === 'Added' ? ' done' : ''}` },
       el('span', { class: 'cx-job-name', text: j.title || 'Job' }),
+      running ? '' : el('button', { type: 'button', class: 'cx-x', 'aria-label': 'Clear this one', text: '×', onclick: () => clearJobs(j.id) }),
       el('span', { class: 'cx-job-state', text: failed ? 'Failed' : j.state === 'Downloading' && j.detail ? `${j.progress || 0}% · ${j.detail}` : j.state === 'Adding' ? 'Adding to Roostflix' : j.state }),
       el('span', { class: 'cx-track' }, el('i', { style: `width:${j.state === 'Added' ? 100 : pct}%` })));
   }
@@ -169,7 +176,8 @@
     S.last = key;
     const jobs = $('#cx-jobs');
     const live = d.jobs.filter((j) => j.state !== 'Added' || Date.now() - Date.parse(j.updatedAt || j.at) < 3600e3).slice(0, 4);
-    jobs.replaceChildren(...live.map(job));
+    const finished = live.filter((j) => j.state !== 'Downloading' && j.state !== 'Adding').length;
+    jobs.replaceChildren(...live.map(job), ...(finished > 1 ? [el('button', { type: 'button', class: 'cx-clear', text: 'Clear finished', onclick: () => clearJobs('') })] : []));
     jobs.hidden = !live.length;
     const feed = $('#cx-feed');
     const stick = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;

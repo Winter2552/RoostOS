@@ -285,3 +285,12 @@ test('"Update all" asks his VM to update itself, for admins only', async () => {
   assert.equal(v.body.enabled, true);
   assert.equal(v.body.reachable, true);
 });
+
+test('finished and stuck job cards can be cleared, but never a running download', () => {
+  const c = new Cockerel({ store: { db: { settings: {} }, save() {} }, newId: () => '1' });
+  for (const [id, state] of [['a', 'Failed'], ['b', 'Failed'], ['c', 'Finding'], ['d', 'Downloading'], ['e', 'Adding'], ['f', 'Added']]) c.setJob({ id, title: id, state });
+  assert.equal(c.clearJobs('a'), 1, 'one card');
+  assert.equal(c.clearJobs('d'), 0, 'a download in progress stays');
+  assert.equal(c.clearJobs(''), 3, 'b, c and f go');
+  assert.deepEqual(c.data().jobs.map((j) => j.id), ['d', 'e']);
+});

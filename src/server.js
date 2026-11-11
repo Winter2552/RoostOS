@@ -3315,6 +3315,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       });
     },
 
+    'POST /api/cockerel/jobs/clear': async (req, res) => {
+      requireAdmin(req);
+      const body = await readJson(req);
+      send(res, 200, { cleared: cockerel.clearJobs(body.id ? str(body.id, 60) : '') });
+    },
+
     'POST /api/cockerel/chat': async (req, res) => {
       const admin = requireAdmin(req);
       if (cockerel.config().paused) throw new HttpError(409, 'Cockerel is paused. Press Resume first');
