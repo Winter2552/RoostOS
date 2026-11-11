@@ -19,6 +19,12 @@
       "admin": true
     },
     {
+      "title": "Service history and receipts for each car",
+      "text": "Log services, repairs and MOTs with the garage, mileage and what was done, and keep the receipt: it is saved into your Nest under Cars. Print or export the history when you sell. Documents like the V5C live under Papers.",
+      "image": "cars-history.png",
+      "admin": true
+    },
+    {
       "title": "Cockerel picks his own brain",
       "text": "For each message he chooses Haiku, Sonnet or Opus, whichever is cheapest and still good enough, and says which in a small tag. Tap Think harder to use the strongest model for one message, or pin one in Admin.",
       "image": "cockerel-smarter.png",

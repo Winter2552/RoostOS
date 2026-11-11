@@ -558,6 +558,21 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     hasApp: (u) => visibleApps(store.db, u).some((a) => a.id === 'cars'),
     userExists: (id) => store.db.users.some((u) => u.id === id),
     today: () => new Intl.DateTimeFormat('en-CA', { timeZone: assistant.tz() }).format(Date.now()),
+    // Receipts and papers are ordinary files in the owner's Nest (Cars/<car>/...),
+    // so backups, trash and the drive-move tool already cover them.
+    files: {
+      async save(owner, folder, name, buf, type) {
+        const start = nest.startUpload(owner, { parent: 'root', path: folder, name, size: buf.length, type });
+        let saved = start.item;
+        for (let offset = 0; !saved && offset < buf.length; offset += NEST_CHUNK) {
+          const out = await nest.putChunk(owner, start.id, offset, Readable.from(buf.subarray(offset, offset + NEST_CHUNK)));
+          if (out.done) saved = out.item;
+        }
+        if (!saved) throw new HttpError(500, 'The file did not finish saving');
+        return { node: saved.id, name: saved.name };
+      },
+      trash(owner, node) { try { nest.trash(owner, [node]); } catch { /* already gone */ } },
+    },
   });
   const calendars = new Calendars({ assistant, seal: (t) => secrets.seal(dataDir, t), open: (b) => secrets.open(dataDir, b), fetchImpl: coffeeOptions.calendarFetch || fetch });
   // Cockerel hears what the admin's phone hears: movie requests and Sentinel alerts.
@@ -794,6 +809,17 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     const user = requireUser(req);
     if (user.role === 'guest') throw new HttpError(403, 'Not available on a guest pass');
     return user;
+  }
+
+  async function readBinary(req, max) {
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size > max) throw new HttpError(413, 'Files up to 12 MB');
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
   }
 
   // Who a car can be shared with: other people who have the Cars app, never
@@ -1638,6 +1664,20 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     'DELETE /api/cars/:id/entries/:d': (req, res, id, e) => {
       const user = requireUser(req);
       send(res, 200, cars.removeEntry(user, id, e));
+    },
+    'POST /api/cars/:id/files': async (req, res, id) => {
+      const user = requireUser(req);
+      const q = new URL(req.url, 'http://roost').searchParams;
+      send(res, 201, await cars.addFile(user, id, { kind: str(q.get('kind'), 10), entryId: str(q.get('entry'), 40), name: str(q.get('name'), 80), buf: await readBinary(req, 12 * 1024 * 1024 + 1) }));
+    },
+    'GET /api/cars/:id/files/:d': async (req, res, id, fid) => {
+      const user = requireUser(req);
+      const { f, owner } = cars.fileOf(user, id, fid);
+      await nest.download(owner, f.node, req, res, { inline: f.mime, csp: f.mime === 'application/pdf' ? "default-src 'none'; frame-ancestors 'self'" : '' });
+    },
+    'DELETE /api/cars/:id/files/:d': (req, res, id, fid) => {
+      const user = requireUser(req);
+      send(res, 200, cars.removeFile(user, id, fid));
     },
     'GET /api/cars/:id/photo': (req, res, id) => {
       const user = requireUser(req);
@@ -4006,7 +4046,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     if (handler) return [handler, m[2]];
     // A car's dates and entries: /api/cars/<car>/dates|entries[/<id>[/done|/snooze]]
-    const c = pathname.match(/^\/api\/cars\/([A-Za-z0-9]+)\/(dates|entries)(?:\/([A-Za-z0-9]+)(\/done|\/snooze)?)?$/);
+    const c = pathname.match(/^\/api\/cars\/([A-Za-z0-9]+)\/(dates|entries|files)(?:\/([A-Za-z0-9]+)(\/done|\/snooze)?)?$/);
     const dated = c && routes[`${method} /api/cars/:id/${c[2]}${c[3] ? '/:d' : ''}${c[4] || ''}`];
     return dated ? [dated, c[1], c[3]] : null;
   }
