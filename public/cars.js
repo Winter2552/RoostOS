@@ -279,43 +279,89 @@
   }
   window.addEventListener('online', () => { flushQueue().then((n) => { if (n && S.current) carPage(S.current); }); });
 
+  const HISTORY = new Set(['service', 'repair', 'mot', 'parts', 'tyres']);
+  const GARAGE = new Set(['service', 'repair', 'mot', 'parts', 'tyres']);
+
+  // A receipt photo is shrunk to a 2000px JPEG (a phone photo of a till roll
+  // can be 8 MB); PDFs go as they are.
+  async function toReceipt(file) {
+    if (file.type === 'application/pdf') return file;
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise((resolve, reject) => { const i = new Image(); i.onload = () => resolve(i); i.onerror = () => reject(new Error('Couldn’t read that picture')); i.src = url; });
+      const scale = Math.min(1, 2000 / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * scale);
+      c.height = Math.round(img.naturalHeight * scale);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      return await new Promise((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error('Couldn’t read that picture'))), 'image/jpeg', 0.85));
+    } finally { URL.revokeObjectURL(url); }
+  }
+
+  async function uploadFile(car, kind, entryId, file) {
+    const blob = await toReceipt(file);
+    const q = new URLSearchParams({ kind, name: file.name || '' });
+    if (entryId) q.set('entry', entryId);
+    const res = await fetch(`/api/cars/${car.id}/files?${q}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': blob.type || 'application/octet-stream' }, body: blob });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error((data && data.error) || 'The file didn’t upload');
+    return data;
+  }
+
   function entryForm(car, existing, done) {
     const units = car.units === 'km' ? 'km' : 'mi';
     const f = h('form', { class: 'car-form car-entryform', autocomplete: 'off' });
     let type = existing ? existing.type : 'fuel';
+    let result = existing ? existing.result : '';
     const chips = h('div', { class: 'car-chips', role: 'group', 'aria-label': 'What for' });
     const fuelBits = h('div', { class: 'car-fuelbits' });
+    const jobBits = h('div', { class: 'car-fuelbits' });
+    const motBits = h('div', { class: 'car-fuelbits' });
+    const resultChips = h('div', { class: 'car-chips', role: 'group', 'aria-label': 'MOT result' });
     const paint = () => {
       fill(chips, TYPES.map(([v, t]) => h('button', { type: 'button', class: `car-chip${v === type ? ' on' : ''}`, 'aria-pressed': String(v === type), text: t, onclick: () => { type = v; paint(); } })));
+      fill(resultChips, [['pass', 'Pass'], ['fail', 'Fail']].map(([v, t]) => h('button', { type: 'button', class: `car-chip${v === result ? ' on' : ''}`, 'aria-pressed': String(v === result), text: t, onclick: () => { result = result === v ? '' : v; paint(); } })));
       fuelBits.classList.toggle('hidden', type !== 'fuel');
+      jobBits.classList.toggle('hidden', !GARAGE.has(type));
+      motBits.classList.toggle('hidden', type !== 'mot');
     };
     const inp = (label, name, attrs = {}) => h('label', {}, h('span', { class: 'mono', text: label }), h('input', { name, autocomplete: 'off', ...attrs }));
     const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
     fuelBits.append(
       inp('Litres', 'litres', { inputmode: 'decimal', value: existing && existing.litres ? existing.litres : '', placeholder: '38.4' }),
       h('label', { class: 'check-line' }, h('input', { type: 'checkbox', name: 'full', checked: existing ? existing.full : true }), ' Filled the tank'));
+    jobBits.append(inp('Garage', 'garage', { maxlength: 60, value: existing ? existing.garage : '', placeholder: 'Who did it' }));
+    motBits.append(h('div', {}, h('span', { class: 'mono muted', text: 'Result' }), resultChips),
+      h('label', {}, h('span', { class: 'mono', text: 'Advisories' }), h('textarea', { name: 'advisories', maxlength: 500, rows: 2, text: existing ? existing.advisories : '', placeholder: 'What the tester noted' })));
     paint();
+    const receipt = existing ? null : h('input', { type: 'file', name: 'receipt', accept: 'image/*,application/pdf' });
     const status = h('p', { class: 'car-warn', 'aria-live': 'polite' });
-    f.append(chips, inp('Total (£)', 'amount', { inputmode: 'decimal', required: true, value: existing ? (existing.amount / 100).toFixed(2) : '', placeholder: '54.20' }), fuelBits,
+    f.append(chips, inp('Total (£)', 'amount', { inputmode: 'decimal', required: true, value: existing ? (existing.amount / 100).toFixed(2) : '', placeholder: '54.20' }), fuelBits, jobBits, motBits,
       inp(`Odometer (${units})`, 'odometer', { inputmode: 'numeric', value: existing && existing.odometer != null ? existing.odometer : '', placeholder: car.odometer ? `Last: ${km(car.odometer)}` : '41320' }),
-      h('div', { class: 'car-two' }, inp('Date', 'date', { type: 'date', value: existing ? existing.date : today }), inp('Note', 'note', { maxlength: 200, value: existing ? existing.note : '', placeholder: 'Optional' })),
+      h('div', { class: 'car-two' }, inp('Date', 'date', { type: 'date', value: existing ? existing.date : today }), inp('Note', 'note', { maxlength: 500, value: existing ? existing.note : '', placeholder: 'What was done (optional)' })),
+      receipt ? h('label', {}, h('span', { class: 'mono', text: 'Receipt (photo or PDF, optional)' }), receipt) : null,
       status,
       h('div', { class: 'car-actions' }, h('button', { class: 'btn', type: 'submit', text: existing ? 'Save' : 'Save entry' }), h('button', { class: 'btn ghost', type: 'button', text: 'Cancel', onclick: () => done(false) })));
     let force = false;
     f.addEventListener('submit', async (e) => {
       e.preventDefault();
       const d = Object.fromEntries(new FormData(f));
-      const body = { type, date: d.date, amount: d.amount, odometer: d.odometer, note: d.note, litres: type === 'fuel' ? d.litres : '', full: type === 'fuel' ? f.elements.full.checked : false, force };
+      const body = { type, date: d.date, amount: d.amount, odometer: d.odometer, note: d.note, litres: type === 'fuel' ? d.litres : '', full: type === 'fuel' ? f.elements.full.checked : false, garage: GARAGE.has(type) ? d.garage : '', result: type === 'mot' ? result : '', advisories: type === 'mot' ? d.advisories : '', force };
       if (!existing) body.cid = f.dataset.cid || (f.dataset.cid = newCid());
       try {
+        let saved = null;
         if (existing) await api('PATCH', `/api/cars/${car.id}/entries/${existing.id}`, body);
-        else await api('POST', `/api/cars/${car.id}/entries`, body);
+        else saved = await api('POST', `/api/cars/${car.id}/entries`, body);
+        const file = receipt && receipt.files[0];
+        if (saved && file) {
+          try { await uploadFile(car, 'receipt', saved.entry.id, file); } catch (err) { return done(true, `Saved, but the receipt didn’t upload: ${err.message}`); }
+        }
         done(true);
       } catch (err) {
         if (err.code === 'check-odometer') {
           force = true;
           fill(status, `${err.message} Check it, or press Save again to keep it.`);
-        } else if (!err.status && !existing) {
+        } else if (!err.status && !existing && !(receipt && receipt.files[0])) {
           const queue = store.get(QUEUE, []);
           queue.push({ carId: car.id, body: { ...body, force: true } });
           store.set(QUEUE, queue);
@@ -337,32 +383,118 @@
       tile(money(stats.thisMonth), 'this month'));
   }
 
+  // ---------- history: export and print ----------
+
+  const csvCell = (v) => { const t = String(v ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+  function exportCsv(car, entries) {
+    const head = ['Date', 'Type', 'Garage', 'Odometer', 'Litres', 'Amount (GBP)', 'MOT result', 'Advisories', 'Note'];
+    const rows = [...entries].reverse().map((e) => [e.date, e.label, e.garage, e.odometer ?? '', e.litres ?? '', (e.amount / 100).toFixed(2), e.result, e.advisories, e.note]);
+    const blob = new Blob([[head, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n')], { type: 'text/csv' });
+    const a = h('a', { href: URL.createObjectURL(blob), download: `${car.name} history.csv` });
+    document.body.append(a);
+    a.click();
+    a.remove();
+  }
+
+  // A tidy page for selling the car: the jobs in date order, printed or saved as PDF.
+  function printHistory(car, entries) {
+    const frame = h('iframe', { class: 'hidden', title: 'Service history' });
+    document.body.append(frame);
+    const doc = frame.contentDocument;
+    const el = (tag, text, attrs = {}) => { const n = doc.createElement(tag); if (text != null) n.textContent = text; for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v); return n; };
+    const style = el('style', 'body{font:13px/1.45 Helvetica,Arial,sans-serif;color:#000;margin:24px}h1{font-size:22px;margin:0}p{margin:2px 0 14px;color:#444}table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid #bbb;padding:6px 8px;text-align:left;vertical-align:top}th{font-size:11px;text-transform:uppercase;color:#555}');
+    doc.head.append(style);
+    doc.title = `${car.name} service history`;
+    doc.body.append(el('h1', `${car.name}${car.plate ? ` · ${car.plate}` : ''}`), el('p', [car.make, car.model, car.year].filter(Boolean).join(' ') + ` · service history printed ${niceDay(new Date().toISOString().slice(0, 10))}`));
+    const table = el('table');
+    const hr = el('tr');
+    for (const t of ['Date', 'What', 'Mileage', 'Garage', 'Details', 'Cost']) hr.append(el('th', t));
+    table.append(hr);
+    for (const e of [...entries].reverse()) {
+      const tr = el('tr');
+      tr.append(el('td', niceDay(e.date)), el('td', e.label + (e.result ? ` (${e.result})` : '')), el('td', e.odometer != null ? `${km(e.odometer)} ${car.units}` : ''), el('td', e.garage), el('td', [e.note, e.advisories && `Advisories: ${e.advisories}`].filter(Boolean).join(' · ')), el('td', money(e.amount)));
+      table.append(tr);
+    }
+    doc.body.append(table);
+    frame.contentWindow.focus();
+    frame.contentWindow.print();
+    setTimeout(() => frame.remove(), 60000);
+  }
+
+  // ---------- the ledger: costs, history and papers ----------
+
   async function costsBlock(car) {
     const box = h('section', { class: 'car-costs' });
     const can = car.role === 'owner' || car.role === 'editor';
-    const open = (form) => { fill(box, h('div', { class: 'car-bar' }, h('h3', { text: form.existing ? 'Edit entry' : 'Add an entry' })), form.el); };
-    const finish = async (saved, msg) => { if (saved) { await load().catch(() => {}); carPage(car.id, msg || ''); } else paintList(); };
+    const mine = car.role === 'owner';
     let data = null;
-    const addButton = () => (can ? h('button', { class: 'btn car-add', type: 'button', text: 'Add fill-up or cost', onclick: () => open({ el: entryForm(car, null, finish) }) }) : null);
-    function paintList() {
-      if (!data) return;
+    const open = (title, el) => fill(box, h('div', { class: 'car-bar' }, h('h3', { text: title })), el);
+    const finish = async (saved, msg) => { if (saved) { await load().catch(() => {}); carPage(car.id, msg || ''); } else paint(); };
+    const reload = async () => { await load().catch(() => {}); carPage(car.id); };
+    const add = () => open('Add an entry', entryForm(car, null, finish));
+    const receiptsOf = (e) => (data.files || []).filter((x) => x.entryId === e.id);
+
+    function entryRow(e, detailed) {
+      const receipts = receiptsOf(e);
+      const more = h('div', { class: `car-more${detailed ? '' : ' hidden'}` });
+      if (e.type === 'mot' && (e.result || e.advisories)) more.append(h('p', { class: 'car-detail' }, e.result ? h('span', { class: `car-pill ${e.result === 'pass' ? '' : 'late'}`, text: e.result === 'pass' ? 'Pass' : 'Fail' }) : null, e.advisories ? ` Advisories: ${e.advisories}` : ''));
+      if (detailed && e.note) more.append(h('p', { class: 'car-detail', text: e.note }));
+      if (receipts.length) more.append(h('p', { class: 'car-detail' }, 'Receipts: ', receipts.map((x) => h('a', { class: 'car-link', href: `/api/cars/${car.id}/files/${x.id}`, target: '_blank', rel: 'noopener', text: x.name }))));
+      if (e.canEdit) {
+        const pick = h('input', { type: 'file', accept: 'image/*,application/pdf', class: 'hidden', onchange: async (ev) => { const file = ev.target.files[0]; if (!file) return; say('Uploading…'); try { await uploadFile(car, 'receipt', e.id, file); say(''); await reload(); } catch (err) { say(err.message); } } });
+        more.append(h('div', { class: 'car-actions' }, pick,
+          h('button', { class: 'btn small ghost', type: 'button', text: 'Add receipt', onclick: () => pick.click() }),
+          h('button', { class: 'btn small ghost', type: 'button', text: 'Edit', onclick: () => open('Edit entry', entryForm(car, e, finish)) }),
+          h('button', { class: 'btn small danger', type: 'button', text: 'Delete', onclick: async () => { try { await api('DELETE', `/api/cars/${car.id}/entries/${e.id}`); await reload(); } catch (err) { say(err.message); } } })));
+      }
+      const title = e.label + (e.litres ? ` · ${e.litres} L` : '') + (e.garage ? ` · ${e.garage}` : '');
+      const sub = [niceDay(e.date), e.odometer != null ? `${km(e.odometer)} ${car.units}` : '', e.by !== car.owner ? e.by : '', !detailed ? e.note : '', e.receipts ? `${e.receipts} receipt${e.receipts === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+      const row = h('button', { class: 'car-date', type: 'button', 'aria-expanded': String(detailed), onclick: () => { const o = more.classList.toggle('hidden') === false; row.setAttribute('aria-expanded', String(o)); } },
+        h('span', { class: 'car-dlabel' }, h('b', { text: title }), h('span', { class: 'muted', text: sub })), h('b', { text: money(e.amount) }));
+      return h('div', { class: 'car-daterow' }, row, more);
+    }
+
+    function costsTab() {
       const shown = box.dataset.all ? data.entries : data.entries.slice(0, 8);
-      fill(box,
-        statTiles(car, data.stats),
-        h('div', { class: 'car-bar' }, h('h3', { text: 'Fuel and costs' }), addButton()),
-        shown.length ? shown.map((e) => {
-          const more = h('div', { class: 'car-actions hidden' }, e.canEdit ? [
-            h('button', { class: 'btn small ghost', type: 'button', text: 'Edit', onclick: () => open({ existing: true, el: entryForm(car, e, finish) }) }),
-            h('button', { class: 'btn small danger', type: 'button', text: 'Delete', onclick: async () => { try { await api('DELETE', `/api/cars/${car.id}/entries/${e.id}`); await load(); carPage(car.id); } catch (err) { say(err.message); } } })] : null);
-          const row = h('button', { class: 'car-date', type: 'button', 'aria-expanded': 'false', onclick: () => { const o = more.classList.toggle('hidden') === false; row.setAttribute('aria-expanded', String(o)); } },
-            h('span', { class: 'car-dlabel' }, h('b', { text: e.label + (e.litres ? ` · ${e.litres} L` : '') }), h('span', { class: 'muted', text: [niceDay(e.date), e.odometer != null ? `${km(e.odometer)} ${car.units}` : '', e.by !== car.owner ? e.by : '', e.note].filter(Boolean).join(' · ') })),
-            h('b', { text: money(e.amount) }));
-          return h('div', { class: 'car-daterow' }, row, e.canEdit ? more : null);
-        }) : h('p', { class: 'muted', text: can ? 'Nothing logged yet. Add your first fill-up and Roost works out mpg and cost per mile.' : 'Nothing logged yet.' }),
-        data.entries.length > 8 && !box.dataset.all ? h('button', { class: 'btn small ghost', type: 'button', text: `Show all ${data.count}`, onclick: () => { box.dataset.all = '1'; paintList(); } }) : null);
+      return [
+        shown.length ? shown.map((e) => entryRow(e, false)) : h('p', { class: 'muted', text: can ? 'Nothing logged yet. Add your first fill-up and Roost works out mpg and cost per mile.' : 'Nothing logged yet.' }),
+        data.entries.length > 8 && !box.dataset.all ? h('button', { class: 'btn small ghost', type: 'button', text: `Show all ${data.count}`, onclick: () => { box.dataset.all = '1'; paint(); } }) : null,
+      ];
+    }
+
+    function historyTab() {
+      const jobs = data.entries.filter((e) => HISTORY.has(e.type));
+      return [
+        jobs.length ? h('div', { class: 'car-actions' },
+          h('button', { class: 'btn small ghost', type: 'button', text: 'Export CSV', onclick: () => exportCsv(car, jobs) }),
+          h('button', { class: 'btn small ghost', type: 'button', text: 'Print history', onclick: () => printHistory(car, jobs) })) : null,
+        jobs.length ? h('div', { class: 'car-timeline' }, jobs.map((e) => entryRow(e, true))) : h('p', { class: 'muted', text: 'Services, repairs, MOTs, parts and tyres show up here. Add one under Costs and pick its type.' }),
+      ];
+    }
+
+    function papersTab() {
+      const papers = (data.files || []).filter((x) => x.kind === 'paper');
+      const pick = h('input', { type: 'file', accept: 'image/*,application/pdf', class: 'hidden', onchange: async (ev) => { const file = ev.target.files[0]; if (!file) return; say('Uploading…'); try { await uploadFile(car, 'paper', '', file); say(''); await reload(); } catch (err) { say(err.message); } } });
+      return [
+        h('p', { class: 'muted car-soon', text: 'The V5C, insurance schedule, MOT certificate. Kept in the owner’s Nest under Cars. Everyone this car is shared with can open them.' }),
+        mine ? h('div', { class: 'car-actions' }, pick, h('button', { class: 'btn small', type: 'button', text: 'Add a document', onclick: () => pick.click() })) : null,
+        papers.length ? papers.map((x) => h('div', { class: 'car-daterow' }, h('div', { class: 'car-date' },
+          h('a', { class: 'car-link car-dlabel', href: `/api/cars/${car.id}/files/${x.id}`, target: '_blank', rel: 'noopener' }, h('b', { text: x.name }), h('span', { class: 'muted', text: `${niceDay(new Date(x.created).toISOString().slice(0, 10))} · ${Math.max(1, Math.round(x.size / 1024))} KB` })),
+          mine ? h('button', { class: 'btn small danger', type: 'button', text: 'Remove', onclick: async () => { try { await api('DELETE', `/api/cars/${car.id}/files/${x.id}`); await reload(); } catch (err) { say(err.message); } } }) : null))) : h('p', { class: 'muted', text: 'No documents yet.' }),
+      ];
+    }
+
+    function paint() {
+      if (!data) return;
+      const tab = S.tab || 'costs';
+      const tabs = h('div', { class: 'car-chips', role: 'tablist', 'aria-label': 'Fuel, history and papers' }, [['costs', 'Costs'], ['history', 'History'], ['papers', 'Papers']].map(([v, t]) =>
+        h('button', { type: 'button', role: 'tab', 'aria-selected': String(v === tab), class: `car-chip${v === tab ? ' on' : ''}`, text: t, onclick: () => { S.tab = v; paint(); } })));
+      fill(box, statTiles(car, data.stats),
+        h('div', { class: 'car-bar' }, h('h3', { text: 'Fuel and costs' }), can ? h('button', { class: 'btn car-add', type: 'button', text: 'Add fill-up or cost', onclick: add }) : null),
+        tabs, tab === 'costs' ? costsTab() : tab === 'history' ? historyTab() : papersTab());
     }
     fill(box, h('p', { class: 'muted mono', text: 'Loading…' }));
-    try { data = await api('GET', `/api/cars/${car.id}/entries`); paintList(); } catch (err) { fill(box, h('p', { class: 'muted', text: err.message })); }
+    try { data = await api('GET', `/api/cars/${car.id}/entries`); paint(); } catch (err) { fill(box, h('p', { class: 'muted', text: err.message })); }
     return box;
   }
 

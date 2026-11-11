@@ -13,6 +13,19 @@ const path = require('path');
 const { HttpError, str } = require('./http');
 const entriesLib = require('./car-entries');
 
+const MAX_FILE = 12 * 1024 * 1024;
+const MAX_FILES = 500;
+// What a receipt or paper may be, checked by its first bytes, not its name.
+function sniff(buf) {
+  if (buf.length < 12) return null;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return { mime: 'image/jpeg', ext: 'jpg' };
+  if (buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return { mime: 'image/png', ext: 'png' };
+  if (buf.subarray(0, 4).toString('latin1') === '%PDF') return { mime: 'application/pdf', ext: 'pdf' };
+  if (buf.subarray(0, 4).toString('latin1') === 'RIFF' && buf.subarray(8, 12).toString('latin1') === 'WEBP') return { mime: 'image/webp', ext: 'webp' };
+  return null;
+}
+const safeName = (raw) => str(raw, 80).replace(/[\u0000-\u001f\\/:*?"<>|]/g, '-').replace(/^\.+/, '').trim();
+
 const MAX_PHOTO = 600 * 1024;
 const FUELS = ['petrol', 'diesel', 'hybrid', 'electric', 'other'];
 const UNITS = ['mi', 'km'];
@@ -65,8 +78,9 @@ function cleanPlate(raw) {
 class Cars {
   // hasApp(user) says whether a person has the Cars app switched on; it is how
   // Household and every request are kept to people who are allowed in.
-  constructor({ store, dir, hasApp, userExists, today = () => new Date().toISOString().slice(0, 10) }) {
+  constructor({ store, dir, hasApp, userExists, files = null, today = () => new Date().toISOString().slice(0, 10) }) {
     this.today = today;
+    this.files = files; // where receipts and papers are kept (Nest); see server.js
     this.store = store;
     this.dir = dir;
     this.hasApp = hasApp;
@@ -213,6 +227,7 @@ class Cars {
   }
 
   drop(car) {
+    this.dropFiles(car, () => true);
     this.store.db.cars = this.all().filter((c) => c.id !== car.id);
     fs.rmSync(this.photoFile(car.id), { force: true });
   }
@@ -332,7 +347,7 @@ class Cars {
     const role = this.roleOf(user, car);
     return {
       id: e.id, type: e.type, label: entriesLib.TYPES[e.type], date: e.date, odometer: e.odometer, amount: e.amount, litres: e.litres,
-      full: e.full, note: e.note, by: this.nameOf(e.by), canEdit: role === 'owner' || (role === 'editor' && e.by === user.id),
+      full: e.full, note: e.note, garage: e.garage || '', result: e.result || '', advisories: e.advisories || '', receipts: (car.files || []).filter((f) => f.entryId === e.id).length, by: this.nameOf(e.by), canEdit: role === 'owner' || (role === 'editor' && e.by === user.id),
     };
   }
 
@@ -342,6 +357,7 @@ class Cars {
     return {
       entries: [...list].sort((a, b) => -entriesLib.order(a, b)).slice(0, 500).map((e) => this.entryView(user, car, e)),
       count: list.length,
+      files: (car.files || []).map((f) => ({ id: f.id, name: f.name, mime: f.mime, size: f.size, kind: f.kind, entryId: f.entryId || null, by: this.nameOf(f.by), created: f.created })),
       stats: entriesLib.sums(list, this.today(), car.units),
     };
   }
@@ -387,9 +403,77 @@ class Cars {
   removeEntry(user, id, eid) {
     const car = this.get(user, id, 'editor');
     this.findEntry(user, car, eid);
+    this.dropFiles(car, (f) => f.entryId === eid);
     car.entries = car.entries.filter((x) => x.id !== eid);
     this.store.save();
     return this.entriesOf(user, id);
+  }
+
+
+  // ---------- receipts and papers (kept in the owner's Nest) ----------
+
+  owner(car) {
+    return this.store.db.users.find((u) => u.id === car.ownerId);
+  }
+
+  // Cars/<name>, unique among this owner's cars so two Golfs don't share a folder.
+  folderOf(car) {
+    if (!car.folder) {
+      const base = `Cars/${safeName(car.name) || 'Car'}`;
+      const clash = this.all().some((c) => c.id !== car.id && c.ownerId === car.ownerId && c.folder === base);
+      car.folder = clash ? `${base} (${car.id.slice(0, 4)})` : base;
+    }
+    return car.folder;
+  }
+
+  // Receipts for an entry (anyone who can change that entry) and papers like
+  // the V5C or an insurance schedule (the owner only). Everyone the car is
+  // shared with can open them through the car, never through Nest.
+  async addFile(user, id, { kind, entryId, name, buf }) {
+    if (!this.files) throw new HttpError(503, 'Files aren’t available');
+    const car = this.get(user, id, kind === 'paper' ? 'owner' : 'editor');
+    if (kind !== 'paper' && kind !== 'receipt') throw new HttpError(400, 'Receipt or paper?');
+    if (kind === 'receipt') this.findEntry(user, car, entryId);
+    if (!Buffer.isBuffer(buf) || !buf.length) throw new HttpError(400, 'Send a photo or PDF');
+    if (buf.length > MAX_FILE) throw new HttpError(413, 'Files up to 12 MB');
+    const type = sniff(buf);
+    if (!type) throw new HttpError(415, 'Photos (JPEG, PNG, WebP) and PDFs only');
+    if (!Array.isArray(car.files)) car.files = [];
+    if (car.files.length >= MAX_FILES) throw new HttpError(400, 'That’s a lot of files for one car');
+    const owner = this.owner(car);
+    if (!owner) throw new HttpError(404, 'That car isn’t there');
+    const stem = (safeName(name).replace(/\.[A-Za-z0-9]{1,5}$/, '') || (kind === 'paper' ? 'Document' : 'Receipt'));
+    const when = this.today();
+    const filename = `${kind === 'receipt' ? `${when} ` : ''}${stem}.${type.ext}`;
+    const saved = await this.files.save(owner, `${this.folderOf(car)}/${kind === 'paper' ? 'Papers' : 'Receipts'}`, filename, buf, type.mime);
+    const f = { id: this.store.newId(), node: saved.node, name: saved.name, mime: type.mime, size: buf.length, kind, entryId: kind === 'receipt' ? entryId : null, by: user.id, created: Date.now() };
+    car.files.push(f);
+    this.store.save();
+    return this.entriesOf(user, id);
+  }
+
+  fileOf(user, id, fid) {
+    const car = this.get(user, id);
+    const f = (car.files || []).find((x) => x.id === fid);
+    if (!f) throw new HttpError(404, 'That file isn’t there');
+    return { car, f, owner: this.owner(car) };
+  }
+
+  removeFile(user, id, fid) {
+    const { car, f } = this.fileOf(user, id, fid);
+    const role = this.roleOf(user, car);
+    if (!(role === 'owner' || (role === 'editor' && f.kind === 'receipt' && f.by === user.id))) throw new HttpError(403, 'You can only remove your own receipts');
+    this.dropFiles(car, (x) => x.id === fid);
+    this.store.save();
+    return this.entriesOf(user, id);
+  }
+
+  // Files go to the Nest trash (30 days), not straight off the disk.
+  dropFiles(car, test) {
+    if (!Array.isArray(car.files)) return;
+    const owner = this.owner(car);
+    for (const f of car.files.filter(test)) if (owner && this.files) this.files.trash(owner, f.node);
+    car.files = car.files.filter((f) => !test(f));
   }
 
   // Everyone who should hear about a car's dates: the owner, the people it is
@@ -457,4 +541,4 @@ class Cars {
   }
 }
 
-module.exports = { Cars, cleanPlate, FUELS, KINDS, daysBetween, addMonths, addDays, validDay, dayText };
+module.exports = { sniff, Cars, cleanPlate, FUELS, KINDS, daysBetween, addMonths, addDays, validDay, dayText };

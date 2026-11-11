@@ -7,6 +7,8 @@
 
 const { HttpError, str } = require('./http');
 
+// What the service history lists: the jobs on the car, not fuel or parking.
+const HISTORY = new Set(['service', 'repair', 'mot', 'parts', 'tyres']);
 const TYPES = {
   fuel: 'Fuel', service: 'Service', repair: 'Repair', mot: 'MOT', parts: 'Parts', tyres: 'Tyres',
   insurance: 'Insurance', tax: 'Road tax', parking: 'Parking', wash: 'Wash', fine: 'Fine', other: 'Other',
@@ -53,7 +55,13 @@ function clean(body, today) {
     if (l !== null && !(Number.isFinite(l) && l > 0 && l <= 1000)) throw new HttpError(400, 'The litres don’t look right');
     litres = l === null ? null : Math.round(l * 100) / 100;
   }
-  return { type, date, odometer, amount, litres, full: type === 'fuel' && body.full !== false, note: str(body.note, 200) };
+  // A garage and what was done (or an MOT's result and advisories) make the service history.
+  const out = { type, date, odometer, amount, litres, full: type === 'fuel' && body.full !== false, note: str(body.note, 500), garage: str(body.garage, 60) };
+  if (type === 'mot') {
+    out.result = ['pass', 'fail'].includes(body.result) ? body.result : '';
+    out.advisories = str(body.advisories, 500);
+  }
+  return out;
 }
 
 const order = (a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (a.odometer ?? 0) - (b.odometer ?? 0) || a.created - b.created);
@@ -137,4 +145,4 @@ function latestOdometer(entries) {
   return withOdo.length ? withOdo[withOdo.length - 1].odometer : null;
 }
 
-module.exports = { TYPES, GROUP, MAX_ENTRIES, clean, order, odometerWarning, consumption, sums, latestOdometer, pence, day };
+module.exports = { HISTORY, TYPES, GROUP, MAX_ENTRIES, clean, order, odometerWarning, consumption, sums, latestOdometer, pence, day };
