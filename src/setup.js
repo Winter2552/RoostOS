@@ -406,6 +406,43 @@ const STEPS = [
   },
 
   {
+    id: 'away-forward',
+    section: 'network',
+    group: 'Reach it from anywhere',
+    title: 'Open UDP port 51821 on your router for Away from home',
+    why: 'Lets your phone and PC reach the whole home network (SSH to the server, Roost\'s Admin, the router) from outside, with no outside service.',
+    how: [
+      'Do this at home, in each router\'s settings (Port forwarding). If you have two routers, forward on both, one after the other.',
+      'First router (the one from your internet provider): forward external UDP port 51821 to the second router\'s address on its own network (its WAN address).',
+      'Second router: forward UDP port 51821 to this server\'s address (for example 192.168.4.35), port 51821.',
+      'UDP is not TCP: pick UDP (or "both") in the forwarding screen. The 443 forward does not cover it.',
+      'Then turn Away from home on in Admin → Network and add a device. To test it, switch the phone\'s Wi-Fi off, connect in the WireGuard app and open an SSH session.',
+    ],
+    action: { label: 'Open Away from home', view: 'admin', focus: 'away-form' },
+    optional: true,
+    // Lives in the routers; a UDP port can't be tested from inside, so tick it off yourself once a device has connected.
+    manual: true,
+    check: (ctx) => ctx.ticked.includes('away-forward'),
+  },
+  {
+    id: 'away-device',
+    section: 'network',
+    group: 'Reach it from anywhere',
+    title: 'Add your phone or PC to Away from home',
+    why: 'Each device gets its own key, shown once in a QR code (phone) or a file (Windows), and you can remove it any time.',
+    how: [
+      'Install the free WireGuard app: from the App Store on iPhone, Google Play on Android, wireguard.com/install for Windows.',
+      'Under Admin → Network → Away from home, turn it on and press Add device. On a phone, scan the QR code in the WireGuard app; on Windows, download the file and import it.',
+      'On the iPhone, in the tunnel\'s settings, turn on On-demand and exclude your home Wi-Fi, so it connects itself only when you are out.',
+      'Then SSH as usual (in Terminus use the server\'s home address, e.g. 192.168.4.35).',
+    ],
+    action: { label: 'Open Away from home', view: 'admin', focus: 'away-form' },
+    optional: true,
+    covers: ['away'],
+    check: (ctx) => Boolean(ctx.away && ctx.away.enabled && ctx.away.devices.length),
+  },
+
+  {
     id: 'coffee-link',
     section: 'apps',
     group: 'Coffee Galaxy',
@@ -559,7 +596,7 @@ const STEPS = [
     title: 'Check the routers',
     why: 'The fewer doors open to the internet, the less there is to attack.',
     how: [
-      'On both routers, forward only port 443 (to this server) and nothing else.',
+      'On both routers, forward only port 443 (to this server) and nothing else. The one exception is UDP 51821 if you use Away from home; WireGuard doesn\'t answer unknown senders, so that port can\'t be probed.',
       'Turn UPnP off on both, so no app can open a door by itself.',
       'Change the routers\' admin passwords from the defaults.',
       'Then press Check open ports on Admin → Security to see what answers from outside.',
@@ -784,6 +821,7 @@ const CARDS = [
   { id: 'tls-form', section: 'network', steps: ['https'] },
   { id: 'remote-form', section: 'network', steps: ['remote-dns', 'remote-forward', 'remote-cloudflare-only'] },
   { id: 'tunnel-form', section: 'network', steps: ['tunnel-permission', 'tunnel-start', 'tunnel-switch'] },
+  { id: 'away-form', section: 'network', steps: ['away-forward', 'away-device'] },
   { id: 'coffee-form', section: 'apps', steps: ['coffee-link', 'coffee-gateway'] },
   { id: 'mail-form', section: 'server', steps: ['email'] },
   { id: 'backup-form', section: 'storage', steps: ['backup-drive', 'first-backup'] },

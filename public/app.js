@@ -2629,6 +2629,7 @@ const adminLoaders = {
   async network() {
     loadTls();
     loadRemote();
+    loadAway();
   },
   async security() {
     loadPush();
@@ -3518,6 +3519,74 @@ $('#tunnel-route').addEventListener('change', async (e) => {
     flash(f, err.message, false);
   }
   box.disabled = false;
+});
+
+// ---------- Away from home ----------
+
+function renderAway(v) {
+  const f = $('#away-form');
+  const [kind, headline] = !v.enabled ? ['', 'Off']
+    : v.applied && !v.applied.ok ? ['offline', 'Saved, but it isn’t running']
+    : ['online', v.devices.length ? `On · ${v.devices.length} device${v.devices.length === 1 ? '' : 's'}` : 'On · no devices yet'];
+  $('#away-state').replaceChildren(el('span', { class: `dot ${kind}` }), el('span', { text: headline }));
+  $('#away-detail').textContent = v.applied && !v.applied.ok ? v.applied.note : '';
+  f.enabled.checked = v.enabled;
+  if (document.activeElement !== f.host || !f.host.value) f.host.value = v.host || '';
+  f.host.placeholder = v.defaultHost || 'away.example.com';
+  if (document.activeElement !== f.lan || !f.lan.value) f.lan.value = v.lan;
+  $('#away-add').hidden = $('#away-add-btn').parentElement.hidden = !v.enabled;
+  $('#away-devices').replaceChildren(...v.devices.map((d) => el('div', { class: 'request-row' },
+    el('div', {},
+      el('div', { text: d.name }),
+      el('div', { class: 'mono muted', text: `${d.address} · ${d.lastSeen ? `connected ${agoMs(d.lastSeen)}` : 'never connected'}` })),
+    el('div', { class: 'row' }, el('button', { class: 'btn danger small', type: 'button', text: 'Remove', onclick: async (e) => {
+      if (!confirm(`Remove ${d.name}? It will stop working straight away.`)) return;
+      e.target.disabled = true;
+      try { renderAway(await api('DELETE', `/api/admin/away/devices/${d.id}`)); $('#away-new').hidden = true; flash(f, 'Removed'); } catch (err) { flash(f, err.message, false); e.target.disabled = false; }
+    } })))));
+}
+
+async function loadAway() {
+  if ($('#view-admin').classList.contains('hidden')) return;
+  try { renderAway(await api('GET', '/api/admin/away')); } catch { /* the rest of Admin still works */ }
+}
+
+$('#away-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    const v = await api('PUT', '/api/admin/away', { enabled: f.enabled.checked, host: f.host.value, lan: f.lan.value });
+    renderAway(v);
+    flash(f, v.note || 'Saved', !v.note);
+  } catch (err) { flash(f, err.message, false); }
+});
+
+$('#away-add-btn').addEventListener('click', async (e) => {
+  const f = $('#away-form');
+  e.target.disabled = true;
+  try {
+    const v = await api('POST', '/api/admin/away/devices', { name: f.deviceName.value });
+    f.deviceName.value = '';
+    renderAway(v);
+    const box = $('#away-new');
+    const { name, config, qr } = v.added;
+    const qrBox = el('div', { class: 'qr-box' });
+    if (qr) qrBox.innerHTML = qr; // code-check: ok (drawn by Roost's own QR maker, no user text in it)
+    box.replaceChildren(
+      el('p', { class: 'mono muted tls-help', text: `${name} is added. This is the only time its key is shown: scan the code in the WireGuard app (iPhone, Android), or download the file and import it (Windows).` }),
+      qr ? qrBox : null,
+      el('div', { class: 'row' }, el('button', { class: 'btn ghost small', type: 'button', text: 'Download file', onclick: () => {
+        const url = URL.createObjectURL(new Blob([config], { type: 'text/plain' }));
+        const a = el('a', { href: url, download: `${name.replace(/[^\w.-]+/g, '-').toLowerCase() || 'roost'}-roost.conf` });
+        document.body.append(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } }), el('button', { class: 'btn ghost small', type: 'button', text: 'Done', onclick: () => { box.hidden = true; box.replaceChildren(); } })));
+    box.hidden = false;
+    flash(f, 'Added');
+  } catch (err) { flash(f, err.message, false); }
+  e.target.disabled = false;
 });
 
 // ---------- Coffee Galaxy ----------

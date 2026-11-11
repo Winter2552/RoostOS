@@ -60,11 +60,12 @@ const STREAM_LABEL = 'stream';
 const sameNames = (a = [], b = []) => a.length === b.length && a.every((n, i) => n === b[i]);
 
 class RemoteAccess {
-  constructor({ getSettings, patch, getTls, extraNames = () => [], origin = 'http://roost:8081', fetchImpl = fetch, cloudflareApi, traceUrl = 'https://1.1.1.1/cdn-cgi/trace', now = Date.now, intervalMs = 5 * 60 * 1000, firstMs = 20 * 1000, timeoutMs = 8000 }) {
+  constructor({ getSettings, patch, getTls, extraNames = () => [], greyNames = () => [], origin = 'http://roost:8081', fetchImpl = fetch, cloudflareApi, traceUrl = 'https://1.1.1.1/cdn-cgi/trace', now = Date.now, intervalMs = 5 * 60 * 1000, firstMs = 20 * 1000, timeoutMs = 8000 }) {
     this.getSettings = getSettings;
     this.patch = patch;
     this.getTls = getTls;
     this.extraNames = extraNames;
+    this.greyNames = greyNames;
     this.origin = origin;
     this.fetch = fetchImpl;
     this.cloudflareApi = cloudflareApi;
@@ -144,8 +145,10 @@ class RemoteAccess {
       // The domain itself, plus any other names Roost answers (Coffee Galaxy's).
       const tunnel = this.tunnelOn();
       const names = tunnel ? [this.streamHost(), ...this.extraNames()] : [domain, ...this.extraNames()];
-      // Roostflix's name stays grey: video must not pass through Cloudflare.
-      const proxiedOf = (name) => name !== this.streamHost();
+      // Roostflix's name stays grey: video must not pass through Cloudflare. So do names
+      // that carry something other than web traffic (the Away from home tunnel is UDP).
+      const grey = this.greyNames();
+      const proxiedOf = (name) => name !== this.streamHost() && !grey.includes(name);
       // Nothing to do while the address hasn't moved, apart from a daily look.
       if (!force && last.ok && last.ip === ip && last.domain === domain && Boolean(last.tunnel) === tunnel && sameNames(last.names, names) && this.now() - last.at < 24 * HOUR) {
         result = { ...last };
@@ -159,6 +162,13 @@ class RemoteAccess {
     }
     this.patch({ dns: result });
     return result;
+  }
+
+  // Makes (or fixes) one grey A record for a name under the domain, pointing at the home address.
+  async pointGrey(name) {
+    const ip = await this.homeIp();
+    await this.needDns().upsert({ type: 'A', name, content: ip, proxied: false });
+    return ip;
   }
 
   // ---------- Cloudflare Tunnel ----------
