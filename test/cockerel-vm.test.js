@@ -229,3 +229,54 @@ test('he notices when the media share is not connected', () => {
   assert.equal(lib.shareMissing('/tmp', { MEDIA_MOUNT: '/' }), '', '/ is always a mount point');
   assert.equal(lib.shareMissing('/tmp', { MEDIA_MOUNT: '/definitely/not/mounted' }), '/definitely/not/mounted', 'a folder that is not a mount is reported');
 });
+
+test('a magnet download keeps its .torrent file until aria2 has started', async () => {
+  const fs = require('fs');
+  const http = require('http');
+  const os = require('os');
+  const path = require('path');
+  const { spawn } = require('child_process');
+  const secret = 'torrent-test-secret-0123456789a';
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cockerel-t-'));
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin);
+  const record = path.join(root, 'record.txt');
+  // A pretend aria2: saves a .torrent for the metadata step, reports a size, and for the real
+  // download records whether the file it was given still exists.
+  fs.writeFileSync(path.join(bin, 'aria2c'), `#!/bin/sh
+case "$*" in
+  *--bt-metadata-only*) for a in "$@"; do case "$a" in -d*) d="\${a#-d}";; esac; done; echo meta > "$d/x.torrent";;
+  -S*) echo "Total Length: 2.6GiB (2,791,728,742)";;
+  *) for a; do last="$a"; done; if [ -f "$last" ]; then echo present > "${record}"; else echo "missing $last" > "${record}"; fi;;
+esac
+`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'ip'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const roost = http.createServer(async (req, res) => {
+    let body = '';
+    for await (const c of req) body += c;
+    const msg = JSON.parse(body);
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify(msg.type === 'check' ? { decision: 'auto' } : { ok: true }));
+  });
+  await new Promise((r) => roost.listen(0, '127.0.0.1', r));
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, COCKEREL_HOME: path.join(root, 'home'), MEDIA_ROOT: path.join(root, 'media'), INCOMING_DIR: path.join(root, 'media', 'incoming'), ROOST_URL: `http://127.0.0.1:${roost.address().port}`, COCKEREL_SECRET: secret };
+  fs.mkdirSync(path.join(env.COCKEREL_HOME, 'state'), { recursive: true });
+  fs.writeFileSync(path.join(env.COCKEREL_HOME, 'state', 'approvals.json'), JSON.stringify({ 'entitled-m1': true }));
+  try {
+    const out = await new Promise((resolve) => {
+      const child = spawn('node', [path.join(__dirname, '..', 'cockerel-vm', 'tool.js'), 'fetch', 'magnet:?xt=urn:btih:abc', '--job', 'm1', '--name', 'Test Film'], { env });
+      let o = '';
+      child.stdout.on('data', (d) => { o += d; });
+      child.stderr.on('data', (d) => { o += d; });
+      child.on('close', () => resolve(o));
+    });
+    assert.match(out, /Download started/, out);
+    for (let i = 0; i < 40 && !fs.existsSync(record); i++) await new Promise((r) => setTimeout(r, 100));
+    assert.equal(fs.readFileSync(record, 'utf8').trim(), 'present', 'aria2 is given a .torrent file that exists');
+  } finally {
+    roost.close();
+    fs.rmSync(path.join(root, 'home', 'state', 'jobs'), { recursive: true, force: true }); // lets the watcher stop
+    await new Promise((r) => setTimeout(r, 300));
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

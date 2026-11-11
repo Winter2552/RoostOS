@@ -78,7 +78,9 @@ async function find(title) {
   }
 }
 
-function sizeOf(link) {
+const torrentFile = (id) => path.join(STATE, 'torrents', `${id}.torrent`);
+
+function sizeOf(link, id) {
   if (/^magnet:|\.torrent(\?|$)/i.test(link)) {
     const tmp = path.join(HOME, 'tmp', String(process.pid));
     fs.mkdirSync(tmp, { recursive: true });
@@ -97,8 +99,15 @@ function sizeOf(link) {
       const m = /Total Length:[^(]*\(([\d,]+)\)/.exec(out);
       if (m) total = Number(m[1].replace(/,/g, ''));
     }
+    // Keep the .torrent for the real download: it lived in tmp, which is removed below.
+    let kept = '';
+    if (file && fs.existsSync(file)) {
+      kept = torrentFile(id);
+      fs.mkdirSync(path.dirname(kept), { recursive: true });
+      fs.copyFileSync(file, kept);
+    }
     fs.rmSync(tmp, { recursive: true, force: true });
-    return { size: total, torrent: file };
+    return { size: total, torrent: kept };
   }
   const out = spawnSync('curl', ['-sIL', '--max-time', '30', '--proto', '=https', '--proto-redir', '=https', '--max-redirs', '5', link], { encoding: 'utf8' }).stdout || '';
   const lens = [...out.matchAll(/^content-length:\s*(\d+)/gim)].map((m) => Number(m[1]));
@@ -144,7 +153,7 @@ async function fetchJob(link, opt) {
     await hook({ type: 'log', text: `Did not start ${name}: the VPN is down.` });
     fail('The VPN is down, so downloads are stopped. Tell Raven.');
   }
-  const { size, torrent } = sizeOf(link);
+  const { size, torrent } = sizeOf(link, id);
   const verdict = await hook({ type: 'check', bytes: size });
   if (verdict.decision === 'ask' && !approved(`size-${id}`)) {
     const how = size ? lib.human(size) : 'an unknown size';
@@ -274,6 +283,7 @@ async function done(id) {
     fs.rmSync(dir, { recursive: true, force: true });
     writeJson(jobFile(id), { ...meta, status: 'added' });
     stopAria(meta.pid);
+    fs.rmSync(torrentFile(id), { force: true });
     await hook({ type: 'refresh' });
     await hook({ type: 'job', id, state: 'Added', progress: 100 });
     await hook({ type: 'log', text: `${meta.name} is on Roostflix.` });
@@ -295,6 +305,7 @@ async function failed(id, why = 'the download failed') {
   if (!meta || meta.status === 'added' || meta.status === 'failed') return;
   writeJson(jobFile(id), { ...meta, status: 'failed' });
   stopAria(meta.pid);
+  fs.rmSync(torrentFile(id), { force: true });
   await hook({ type: 'job', id, state: 'Failed' });
   await hook({ type: 'log', text: `${meta.name}: ${why}. The files stay in incoming/${id} for a look.` });
 }
