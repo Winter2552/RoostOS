@@ -563,6 +563,22 @@ const STEPS = [
     check: (ctx) => Boolean(((((ctx.db.cockerel || {}).assistant) || {}).settings || {})['tz']),
   },
   {
+    id: 'cockerel-model',
+    section: 'server',
+    group: 'Cockerel',
+    title: 'Choose how Cockerel picks his Claude model',
+    why: 'Optional. By default he picks the cheapest model that fits each job (Haiku for quick ones, Opus for deep research) so your Claude allowance lasts. You can pin one, cap the most he may use, and set quiet hours so small phone notes wait for the morning brief.',
+    how: [
+      'Under Admin → Server → Cockerel, leave "Which Claude model" on Auto, or pin Haiku, Sonnet or Opus.',
+      'Set "Never use more than" if you want to keep Opus for when you tap Think harder only.',
+      'Tick quiet hours and pick the times if you want small notes held until morning.',
+    ],
+    action: { label: 'Open Cockerel settings', view: 'admin', focus: 'cockerel-admin' },
+    optional: true,
+    covers: [],
+    check: (ctx) => Boolean(((((ctx.db.cockerel || {}).assistant) || {}).settings || {})['model']),
+  },
+  {
     id: 'admin-email',
     section: 'server',
     group: 'Email',

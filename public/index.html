@@ -269,6 +269,7 @@
         <form class="cx-form" id="cx-form" autocomplete="off" hidden>
           <label class="sr" for="cx-text">Message Cockerel</label>
           <input type="text" id="cx-text" maxlength="2000" placeholder="Ask me anything" enterkeyhint="send">
+          <button class="cx-think" type="button" id="cx-think" aria-pressed="false" title="Think harder: uses the strongest model for the next message">Think harder</button>
           <button class="cx-mic" type="button" id="cx-mic" aria-label="Speak your message" aria-pressed="false" title="Speak (uses your browser's speech service)" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
           <button class="cx-send" type="submit" id="cx-send" aria-label="Send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
         </form>
@@ -783,6 +784,14 @@
           <label class="field"><span>Morning brief at</span><input type="time" name="briefTime"></label>
           <label class="check"><input type="checkbox" name="briefOn"> <span>Send me a morning brief each day</span></label>
         </div>
+        <div class="form-grid" style="margin-top:14px">
+          <label class="field"><span>Which Claude model</span><select name="model"><option value="auto">Auto: he picks the cheapest that fits</option><option value="haiku">Always Haiku (quickest)</option><option value="sonnet">Always Sonnet (balanced)</option><option value="opus">Always Opus (strongest)</option></select></label>
+          <label class="field"><span>Never use more than</span><select name="maxTier"><option value="opus">Opus</option><option value="sonnet">Sonnet</option><option value="haiku">Haiku</option></select></label>
+          <label class="check"><input type="checkbox" name="quietOn"> <span>Quiet hours: hold small phone notes for the morning brief</span></label>
+          <label class="field"><span>Quiet from</span><input type="time" name="quietFrom"></label>
+          <label class="field"><span>Quiet until</span><input type="time" name="quietTo"></label>
+        </div>
+        <p class="muted" id="cx-usage"></p>
         <fieldset class="cx-switches"><legend class="muted">What he may use (untick to switch one off)</legend>
           <label class="check"><input type="checkbox" name="tool-web"> <span>Web search and reading</span></label>
           <label class="check"><input type="checkbox" name="tool-files"> <span>Send me files (saved in Nest)</span></label>
@@ -794,8 +803,11 @@
           <label class="check"><input type="checkbox" name="tool-calendar"> <span>Read my calendar</span></label>
           <label class="check"><input type="checkbox" name="tool-email"> <span>Read my unread email, and write emails (you approve each one)</span></label>
           <label class="check"><input type="checkbox" name="tool-birdhouse"> <span>Read my Birdhouse plans</span></label>
+          <label class="check"><input type="checkbox" name="tool-nest"> <span>Read text files in my Nest Cockerel folder</span></label>
+          <label class="check"><input type="checkbox" name="tool-watching"> <span>See what I'm watching on Roostflix</span></label>
           <label class="check"><input type="checkbox" name="tool-roost"> <span>Check on Roost and propose a restart, backup or update (you approve each one)</span></label>
         </fieldset>
+        <div id="cx-flags" class="muted" hidden></div>
         <p class="muted">Under these limits he acts alone. Over them, or if he is unsure, he asks you in his chat first. The secret is kept encrypted. Pause him any time from his chat page.</p>
         <div class="row"><button class="btn" type="submit">Save</button></div>
         <div class="msg" role="status"></div>
