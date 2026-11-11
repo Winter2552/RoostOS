@@ -496,6 +496,21 @@ const STEPS = [
     check: (ctx) => ctx.galaxies.galaxies.some((g) => g.enabled && g.check && g.check.ok),
   },
 
+  {
+    id: 'car-reminders',
+    section: 'apps',
+    group: 'Cars',
+    title: 'Get car reminders on your phone',
+    why: 'Optional. Roost tells you 30 days and 7 days before an MOT, tax, insurance or service date, and on the day, once a day at 8 am. It needs phone alerts turned on.',
+    how: [
+      'Turn on alerts on your phone first (the "Get alerts on your phone" step).',
+      'Open Cars, pick a car and add its dates. Reminders reach the owner, anyone the car is shared with, and everyone if it is Household.',
+    ],
+    action: { label: 'Open Cars', view: 'cars' },
+    optional: true,
+    check: (ctx) => (ctx.db.cars || []).some((c) => (c.dates || []).some((d) => !d.doneAt) && ((ctx.db.push || {}).devices || []).some((dev) => dev.userId === c.ownerId)),
+  },
+
   // ---------- email ----------
   {
     id: 'email',

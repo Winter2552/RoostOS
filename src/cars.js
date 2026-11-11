@@ -17,6 +17,39 @@ const FUELS = ['petrol', 'diesel', 'hybrid', 'electric', 'other'];
 const UNITS = ['mi', 'km'];
 const ROLES = ['viewer', 'editor'];
 const MAX_CARS = 40;
+const MAX_DATES = 30;
+const KINDS = { mot: 'MOT', tax: 'Road tax', insurance: 'Insurance', service: 'Service', cover: 'Breakdown cover', custom: 'Other' };
+const DEFAULT_LEADS = [30, 7, 0];
+const SNOOZE_DAYS = 7;
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Days are plain "YYYY-MM-DD" strings in Roost's time zone; no clock times.
+const dayMs = (d) => Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10));
+const daysBetween = (from, to) => Math.round((dayMs(to) - dayMs(from)) / 86400000);
+const addDays = (d, n) => new Date(dayMs(d) + n * 86400000).toISOString().slice(0, 10);
+
+function validDay(v) {
+  if (typeof v !== 'string' || !DAY_RE.test(v)) return null;
+  const t = new Date(dayMs(v));
+  return Number.isNaN(t.getTime()) || t.toISOString().slice(0, 10) !== v || +v.slice(0, 4) < 2000 || +v.slice(0, 4) > 2100 ? null : v;
+}
+
+// 31 Jan + 1 month is 28 Feb, not 3 Mar.
+function addMonths(d, n) {
+  const y = +d.slice(0, 4);
+  const m = +d.slice(5, 7) - 1 + n;
+  const last = new Date(Date.UTC(y + Math.floor(m / 12), ((m % 12) + 12) % 12 + 1, 0)).getUTCDate();
+  const t = new Date(Date.UTC(y + Math.floor(m / 12), ((m % 12) + 12) % 12, Math.min(+d.slice(8, 10), last)));
+  return t.toISOString().slice(0, 10);
+}
+
+function cleanLeads(v) {
+  if (!Array.isArray(v)) return DEFAULT_LEADS;
+  const out = [...new Set(v.map((n) => num(n, 0, 365)).filter((n) => n !== null))].sort((a, b) => b - a).slice(0, 4);
+  return out.length ? out : DEFAULT_LEADS;
+}
+
+const dayText = (days) => (days < 0 ? `overdue by ${-days} day${days === -1 ? '' : 's'}` : days === 0 ? 'due today' : days === 1 ? 'due tomorrow' : `due in ${days} days`);
 
 const num = (v, lo, hi) => {
   const n = typeof v === 'number' ? v : Number(String(v ?? '').trim());
@@ -31,7 +64,8 @@ function cleanPlate(raw) {
 class Cars {
   // hasApp(user) says whether a person has the Cars app switched on; it is how
   // Household and every request are kept to people who are allowed in.
-  constructor({ store, dir, hasApp, userExists }) {
+  constructor({ store, dir, hasApp, userExists, today = () => new Date().toISOString().slice(0, 10) }) {
+    this.today = today;
     this.store = store;
     this.dir = dir;
     this.hasApp = hasApp;
@@ -74,7 +108,9 @@ class Cars {
       fuel: car.fuel, units: car.units, household: car.household === true, archived: Boolean(car.archivedAt),
       photo: fs.existsSync(this.photoFile(car.id)) ? `/api/cars/${car.id}/photo?v=${car.photoAt || 0}` : '',
       role, owner: this.nameOf(car.ownerId),
+      dates: this.datesView(car),
     };
+    out.next = out.dates[0] ? { label: out.dates[0].label, daysLeft: out.dates[0].daysLeft } : null;
     if (role === 'owner') {
       out.shares = (car.shares || []).filter((s) => this.userExists(s.userId)).map((s) => ({ userId: s.userId, name: this.nameOf(s.userId), role: s.role }));
     }
@@ -185,6 +221,143 @@ class Cars {
     for (const car of this.all()) car.shares = (car.shares || []).filter((s) => s.userId !== userId);
   }
 
+
+  // ---------- dates (MOT, tax, insurance, service, ...) ----------
+
+  live(car) {
+    return (car.dates || []).filter((d) => !d.doneAt);
+  }
+
+  datesView(car) {
+    const today = this.today();
+    return this.live(car)
+      .map((d) => ({ id: d.id, kind: d.kind, label: d.label, due: d.due, daysLeft: daysBetween(today, d.due), leads: d.leads, repeatMonths: d.repeatMonths, snoozedUntil: d.snoozedUntil && d.snoozedUntil > today ? d.snoozedUntil : '', lastDone: d.lastDone || '' }))
+      .sort((a, b) => a.daysLeft - b.daysLeft);
+  }
+
+  dateFields(body, base = {}) {
+    const out = { ...base };
+    if ('kind' in body) {
+      if (!(body.kind in KINDS)) throw new HttpError(400, 'Pick what kind of date it is');
+      out.kind = body.kind;
+    }
+    if ('label' in body || !out.label) out.label = str(body.label, 40) || KINDS[out.kind || 'custom'];
+    if ('due' in body) {
+      out.due = validDay(body.due);
+      if (!out.due) throw new HttpError(400, 'That date doesn’t look right');
+    }
+    if (!out.due) throw new HttpError(400, 'Pick the date it is due');
+    if ('leads' in body) out.leads = cleanLeads(body.leads);
+    else if (!out.leads) out.leads = DEFAULT_LEADS;
+    if ('repeatMonths' in body) {
+      const n = body.repeatMonths === '' || body.repeatMonths == null ? 0 : num(body.repeatMonths, 0, 120);
+      if (n === null) throw new HttpError(400, 'Repeat every how many months?');
+      out.repeatMonths = n;
+    } else if (out.repeatMonths == null) out.repeatMonths = out.kind === 'custom' || out.kind === 'service' ? 0 : 12;
+    if ('due' in body) { out.notified = []; delete out.snoozedUntil; }
+    if ('leads' in body) out.notified = [];
+    return out;
+  }
+
+  addDate(user, id, body) {
+    const car = this.get(user, id, 'owner');
+    if (!Array.isArray(car.dates)) car.dates = [];
+    if (this.live(car).length >= MAX_DATES) throw new HttpError(400, 'That’s plenty of dates; remove one first');
+    car.dates.push(this.dateFields({ kind: 'custom', ...body }, { id: this.store.newId(), notified: [] }));
+    this.store.save();
+    return this.view(user, car);
+  }
+
+  findDate(car, did) {
+    const d = this.live(car).find((x) => x.id === did);
+    if (!d) throw new HttpError(404, 'That date isn’t there');
+    return d;
+  }
+
+  updateDate(user, id, did, body) {
+    const car = this.get(user, id, 'owner');
+    const d = this.findDate(car, did);
+    Object.assign(d, this.dateFields(body, d));
+    this.store.save();
+    return this.view(user, car);
+  }
+
+  removeDate(user, id, did) {
+    const car = this.get(user, id, 'owner');
+    this.findDate(car, did);
+    car.dates = car.dates.filter((x) => x.id !== did);
+    this.store.save();
+    return this.view(user, car);
+  }
+
+  // "Done, renewed": a repeating date moves on (a new date can be typed in);
+  // a one-off is finished and drops off the list.
+  doneDate(user, id, did, body = {}) {
+    const car = this.get(user, id, 'editor');
+    const d = this.findDate(car, did);
+    const today = this.today();
+    let next = null;
+    if (body.due) {
+      next = validDay(body.due);
+      if (!next) throw new HttpError(400, 'That date doesn’t look right');
+    } else if (d.repeatMonths) {
+      // Renewing early keeps the anniversary; renewing late counts from today.
+      next = addMonths(d.due >= today ? d.due : today, d.repeatMonths);
+    }
+    if (next) {
+      d.due = next;
+      d.notified = [];
+      d.lastDone = today;
+      delete d.snoozedUntil;
+    } else {
+      d.doneAt = today;
+    }
+    this.store.save();
+    return this.view(user, car);
+  }
+
+  snoozeDate(user, id, did) {
+    const car = this.get(user, id, 'editor');
+    this.findDate(car, did).snoozedUntil = addDays(this.today(), SNOOZE_DAYS);
+    this.store.save();
+    return this.view(user, car);
+  }
+
+  // Everyone who should hear about a car's dates: the owner, the people it is
+  // shared with, and (with Household) everyone who has the app.
+  audience(car) {
+    const ids = new Set([car.ownerId, ...(car.shares || []).map((s) => s.userId)]);
+    if (car.household) for (const u of this.store.db.users) ids.add(u.id);
+    return [...ids].filter((uid) => {
+      const u = this.store.db.users.find((x) => x.id === uid);
+      return u && u.role !== 'guest' && this.hasApp(u);
+    });
+  }
+
+  // Run once a day. Works out which dates have reached a lead time they
+  // haven't been told about, marks them told, and returns the messages to
+  // send. A date that is 5 days away when first added is told once, not twice.
+  // Overdue dates are not repeated; they stay red in the app.
+  remind(today = this.today()) {
+    const out = [];
+    for (const car of this.all()) {
+      if (car.archivedAt) continue;
+      const to = this.audience(car);
+      for (const d of this.live(car)) {
+        if (d.snoozedUntil && d.snoozedUntil > today) continue;
+        const left = daysBetween(today, d.due);
+        const told = new Set(d.notified || []);
+        const reached = d.leads.filter((n) => left <= n && !told.has(n));
+        if (!reached.length) continue;
+        d.notified = [...told, ...reached];
+        if (left < -1) continue; // missed by days (the server was off): the app shows it, no stale push
+        out.push({ carId: car.id, dateId: d.id, userIds: to, title: `${car.name}: ${d.label}`, body: `${d.label} is ${dayText(left)} (${d.due.split('-').reverse().join('/')})`, tag: `car-${d.id}-${d.due}`, url: `/#/cars/${car.id}` });
+      }
+    }
+    if (out.length) this.store.save();
+    return out;
+  }
+
   // The app was switched off for someone (or removed): shares to them stay
   // stored but roleOf already hides the cars until it is back on.
 
@@ -215,4 +388,4 @@ class Cars {
   }
 }
 
-module.exports = { Cars, cleanPlate, FUELS };
+module.exports = { Cars, cleanPlate, FUELS, KINDS, daysBetween, addMonths, addDays, validDay, dayText };
