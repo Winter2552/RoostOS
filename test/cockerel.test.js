@@ -118,7 +118,7 @@ test('admin links him, and the secret never comes back', async () => {
   assert.equal(bad.status, 400, 'only home-network addresses');
   const ok = await call('PUT', '/api/admin/cockerel', { url: 'http://192.168.4.40:7070', secret: SECRET, sizeGb: 4, dayGb: 12 }, cookie);
   assert.equal(ok.status, 200);
-  assert.deepEqual(ok.body, { url: 'http://192.168.4.40:7070', hasSecret: true, paused: false, sizeGb: 4, dayGb: 12, tz: 'Europe/London', briefOn: false, briefTime: '07:30', toolsOff: [], model: 'auto', maxTier: 'opus', quiet: { on: false, from: '22:00', to: '07:00' } });
+  assert.deepEqual(ok.body, { url: 'http://192.168.4.40:7070', hasSecret: true, paused: false, sizeGb: 4, dayGb: 12, tz: 'Europe/London', briefOn: false, briefTime: '07:30', toolsOff: [], entitled: { on: false, at: '' }, model: 'auto', maxTier: 'opus', quiet: { on: false, from: '22:00', to: '07:00' } });
   const settings = await call('GET', '/api/admin/settings', null, cookie);
   assert.ok(!JSON.stringify(settings.body).includes(SECRET));
   assert.ok(!fs.readFileSync(path.join(dataDir, 'roost.json'), 'utf8').includes(SECRET), 'kept encrypted');
@@ -346,4 +346,19 @@ test('a reply carries the model that answered, and "Not right" is kept', async (
   assert.equal(feed.body.flags[0].asked, 'Compare two kettles');
   assert.equal((await call('POST', '/api/cockerel/wrong', { id: r.body.reply.id }, cookie)).body.ok, false, 'only once');
   assert.equal((await call('POST', '/api/cockerel/wrong', { id: 'x' })).status, 401);
+});
+
+test('the standing "I am entitled" switch is off by default, logged when turned on, and answerable from the VM', async () => {
+  assert.deepEqual((await hook({ type: 'entitled' })).body, { on: false, at: '' });
+  const on = await call('PUT', '/api/admin/cockerel', { entitled: true }, cookie);
+  assert.equal(on.body.entitled.on, true);
+  const at = on.body.entitled.at;
+  assert.ok(Date.parse(at));
+  assert.deepEqual((await hook({ type: 'entitled' })).body, { on: true, at });
+  assert.equal((await call('PUT', '/api/admin/cockerel', { entitled: true }, cookie)).body.entitled.at, at, 'saving again keeps the first date');
+  const feed = await call('GET', '/api/cockerel', null, cookie);
+  assert.equal(feed.body.log.filter((e) => /standing|entitled to anything/.test(e.text)).length, 1, 'logged once');
+  await call('PUT', '/api/admin/cockerel', { entitled: false }, cookie);
+  assert.deepEqual((await hook({ type: 'entitled' })).body, { on: false, at: '' });
+  assert.equal((await call('POST', '/api/cockerel/hook', { type: 'entitled' })).status, 401, 'only the signed VM may ask');
 });

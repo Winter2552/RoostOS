@@ -3443,6 +3443,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         changes[k] = Math.round(n * 10) / 10;
       }
       if (body.paused !== undefined) changes.paused = body.paused === true;
+      if (body.entitled !== undefined) changes.entitled = body.entitled === true;
+      const wasEntitled = cockerel.config().entitled.on;
       const mine = {};
       for (const k of ['tz', 'briefOn', 'briefTime', 'toolsOff', 'model', 'maxTier', 'quiet']) if (body[k] !== undefined) mine[k] = ['tz', 'briefTime', 'model', 'maxTier'].includes(k) ? str(body[k], 40) : body[k];
       try { if (Object.keys(mine).length) assistant.saveSettings(mine); } catch (err) {
@@ -3451,6 +3453,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       }
       cockerel.save(changes);
       if ('paused' in changes) cockerel.add({ kind: 'note', text: changes.paused ? 'Paused by Raven' : 'Resumed' });
+      if ('entitled' in changes && changes.entitled !== wasEntitled) cockerel.add({ kind: 'note', text: changes.entitled ? 'Raven confirmed he is entitled to anything he pastes into the chat; those links now download without asking' : 'Raven turned off his standing confirmation; links ask again' });
       send(res, 200, { ...cockerel.view(), ...assistant.settings() });
     },
 
@@ -3536,6 +3539,9 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
           return send(res, 200, { ok: true });
         case 'job':
           return send(res, 200, { job: cockerel.setJob(body) });
+        case 'entitled':
+          // Asked fresh each time, so turning the switch off in Admin takes effect at once.
+          return send(res, 200, { on: cockerel.config().entitled.on, at: cockerel.config().entitled.at });
         case 'check':
           return send(res, 200, cockerel.check(Number(body.bytes)));
         case 'spend':

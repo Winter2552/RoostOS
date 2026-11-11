@@ -49,6 +49,21 @@ function sourceKind(link) {
   return hostOpen(u.hostname) ? 'open' : 'other';
 }
 
+// ---------- links Raven typed himself ----------
+// A magnet is the same download whatever trackers it lists, so it is known by its
+// info hash; a web link by its exact text.
+function linkKey(link) {
+  const text = String(link || '').trim();
+  const m = /^magnet:\?.*?\bxt=urn:btih:([A-Za-z0-9]{32,40})/i.exec(text);
+  return m ? `btih:${m[1].toLowerCase()}` : text.replace(/[.,;)\]]+$/, '');
+}
+
+// Every magnet and https link in something Raven typed.
+function linksIn(text) {
+  const found = String(text || '').match(/magnet:\?[^\s"'<>]+|https:\/\/[^\s"'<>]+/gi) || [];
+  return [...new Set(found.map(linkKey))].slice(0, 10);
+}
+
 // ---------- Jellyfin naming ----------
 const VIDEO = /\.(mkv|mp4|m4v|avi|mov|webm|ts)$/i;
 const BAD_CHARS = /[\\/:*?"<>|\u0000-\u001f]/g;
@@ -165,4 +180,4 @@ function progressText(speed, bytesLeft) {
 // (time and ratio), and upload only a trickle while downloading.
 const NO_SEED = ['--seed-time=0', '--seed-ratio=0.0', '--max-overall-upload-limit=1K'];
 
-module.exports = { genreFolders, genreFolder, shareMissing, writableProblem, progressText, NO_SEED, browseUrl, pageText, sign, headers, verify, OPEN_HOSTS, hostOpen, sourceKind, VIDEO, cleanName, moviePath, episodePath, jobIdOk, human };
+module.exports = { linkKey, linksIn, genreFolders, genreFolder, shareMissing, writableProblem, progressText, NO_SEED, browseUrl, pageText, sign, headers, verify, OPEN_HOSTS, hostOpen, sourceKind, VIDEO, cleanName, moviePath, episodePath, jobIdOk, human };

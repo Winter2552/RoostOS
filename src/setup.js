@@ -579,6 +579,21 @@ const STEPS = [
     check: (ctx) => Boolean(((((ctx.db.cockerel || {}).assistant) || {}).settings || {})['model']),
   },
   {
+    id: 'cockerel-entitled',
+    section: 'server',
+    group: 'Cockerel',
+    title: 'Stop Cockerel asking whether you are entitled to a link',
+    why: 'Optional. By default he asks every time you paste a link or magnet from a source he does not normally use. One switch confirms, once, that you are entitled to anything you paste into his chat yourself; it is logged with the date and you can turn it off any time. Links that came from an email, a web page or a file still ask.',
+    how: [
+      'Under Admin → Server → Cockerel, tick "I confirm I\'m entitled to anything I paste into his chat".',
+      'Save. Untick it later to make him ask again.',
+    ],
+    action: { label: 'Open Cockerel settings', view: 'admin', focus: 'cockerel-admin' },
+    optional: true,
+    covers: [],
+    check: (ctx) => Boolean(ctx.db.settings.cockerel && ctx.db.settings.cockerel.entitled),
+  },
+  {
     id: 'admin-email',
     section: 'server',
     group: 'Email',
