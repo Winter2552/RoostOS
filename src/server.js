@@ -13,6 +13,7 @@ const { Calendars } = require('./calendar');
 const mailbox = require('./mailbox');
 const { Cockerel, CockerelError, GB: COCKEREL_GB, FILE_MAX: COCKEREL_FILE_MAX } = require('./cockerel');
 const birdhouse = require('./birdhouse');
+const { Cars } = require('./cars');
 const birdhouseAi = require('./birdhouse-ai');
 const secrets = require('./secrets');
 const birdhouseModel = require('../public/birdhouse-model');
@@ -343,6 +344,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     if (!store.db.apps.some((a) => a.id === 'birdhouse')) store.db.apps.push({ ...DEFAULT_APPS.find((a) => a.id === 'birdhouse') });
     linked = true;
   }
+  // Cars too: a built-in app, admins only until Raven widens it.
+  if (!store.db.settings.carsAdded) {
+    store.db.settings.carsAdded = true;
+    if (!store.db.apps.some((a) => a.id === 'cars')) store.db.apps.push({ ...DEFAULT_APPS.find((a) => a.id === 'cars') });
+    linked = true;
+  }
   // Cockerel too (admins only, and only Raven can ever be an admin of him).
   if (!store.db.settings.cockerelAdded) {
     store.db.settings.cockerelAdded = true;
@@ -545,6 +552,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   });
   const cockerel = new Cockerel({ store, newId: () => store.newId(), fetchImpl: coffeeOptions.fetchImpl || fetch, seal: (t) => secrets.seal(dataDir, t), open: (b) => secrets.open(dataDir, b) });
   const assistant = new Assistant({ store, newId: () => store.newId() });
+  const cars = new Cars({
+    store,
+    dir: path.join(dataDir, 'cars'),
+    hasApp: (u) => visibleApps(store.db, u).some((a) => a.id === 'cars'),
+    userExists: (id) => store.db.users.some((u) => u.id === id),
+  });
   const calendars = new Calendars({ assistant, seal: (t) => secrets.seal(dataDir, t), open: (b) => secrets.open(dataDir, b), fetchImpl: coffeeOptions.calendarFetch || fetch });
   // Cockerel hears what the admin's phone hears: movie requests and Sentinel alerts.
   const pushNotify = push.notify.bind(push);
@@ -765,6 +778,13 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     const user = requireUser(req);
     if (user.role === 'guest') throw new HttpError(403, 'Not available on a guest pass');
     return user;
+  }
+
+  // Who a car can be shared with: other people who have the Cars app, never
+  // guests. Only the names, only to someone who has the app themselves.
+  function carsPeople(user) {
+    if (!cars.hasApp(user)) return [];
+    return db().users.filter((u) => u.id !== user.id && u.role !== 'guest' && cars.hasApp(u)).map((u) => ({ id: u.id, name: u.displayName || u.username }));
   }
 
   // Signed in, and Birdhouse is one of their apps.
@@ -1532,6 +1552,65 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 200, { apps, searchable: search.apps(user) });
     },
 
+    // Car log: cars are private to the owner and the people they share with
+    // (see cars.js). Every route goes through cars.get, so a car you can't
+    // see answers "not there".
+    'GET /api/cars': (req, res) => {
+      const user = requireUser(req);
+      send(res, 200, { cars: cars.list(user), people: carsPeople(user) });
+    },
+    'POST /api/cars': async (req, res) => {
+      const user = requireUser(req);
+      send(res, 201, cars.create(user, await readJson(req, 4000)));
+    },
+    'GET /api/cars/:id': (req, res, id) => {
+      const user = requireUser(req);
+      send(res, 200, cars.view(user, cars.get(user, id)));
+    },
+    'PATCH /api/cars/:id': async (req, res, id) => {
+      const user = requireUser(req);
+      send(res, 200, cars.update(user, id, await readJson(req, 4000)));
+    },
+    'DELETE /api/cars/:id': async (req, res, id) => {
+      const user = requireUser(req);
+      cars.remove(user, id, str((await readJson(req, 1000)).name, 40));
+      send(res, 200, { ok: true });
+    },
+    'PUT /api/cars/:id/share': async (req, res, id) => {
+      const user = requireUser(req);
+      const body = await readJson(req, 4000);
+      let out = cars.setShares(user, id, body.shares);
+      if ('household' in body) out = cars.update(user, id, { household: body.household === true });
+      send(res, 200, out);
+    },
+    'POST /api/cars/:id/archive': async (req, res, id) => {
+      const user = requireUser(req);
+      send(res, 200, cars.archive(user, id, (await readJson(req, 200)).on !== false));
+    },
+    'GET /api/cars/:id/photo': (req, res, id) => {
+      const user = requireUser(req);
+      const jpg = cars.photo(user, id);
+      if (!jpg) throw new HttpError(404, 'No photo');
+      res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
+      res.end(jpg);
+    },
+    'PUT /api/cars/:id/photo': async (req, res, id) => {
+      const user = requireUser(req);
+      if (!String(req.headers['content-type'] || '').startsWith('image/jpeg')) throw new HttpError(415, 'Send a JPEG photo');
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of req) {
+        size += chunk.length;
+        if (size > 700 * 1024) throw new HttpError(413, 'Photo too large');
+        chunks.push(chunk);
+      }
+      send(res, 200, cars.setPhoto(user, id, Buffer.concat(chunks)));
+    },
+    'DELETE /api/cars/:id/photo': (req, res, id) => {
+      const user = requireUser(req);
+      send(res, 200, cars.removePhoto(user, id));
+    },
+
     // Birdhouse: whether Fetch price is switched on, and the fetch itself. It
     // reads one shop page, only when asked, and only for people with the app.
     'GET /api/birdhouse': (req, res) => {
@@ -2016,6 +2095,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const gone = db().users.find((u) => u.id === id);
       if (!gone) throw new HttpError(404, 'No such user');
       db().users = db().users.filter((u) => u.id !== id);
+      cars.forgetUser(id);
       sessions.destroyUser(id);
       if (jellyfin.enabled()) jellyfin.disable(gone.username).catch(jellyfinFailed);
       db().links = (db().links || []).filter((l) => l.userId !== id);
@@ -3870,7 +3950,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/movie-requests|admin\/setup|admin\/galaxies|admin\/away\/devices|storage\/users|links|me\/devices|birdhouse\/plans|alerts|push\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart|\/secret|\/compose|\/check|\/dismiss)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/movie-requests|admin\/setup|admin\/galaxies|admin\/away\/devices|storage\/users|links|me\/devices|birdhouse\/plans|cars|alerts|push\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart|\/secret|\/compose|\/check|\/dismiss|\/share|\/archive|\/photo)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }

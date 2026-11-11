@@ -53,6 +53,16 @@ const DEFAULT_APPS = [
     adminOnly: true, // admins only while it is being tried out
   },
   {
+    id: 'cars',
+    name: 'Cars',
+    tagline: 'Car log',
+    description: 'Your cars: dates, fuel, costs and history.',
+    // Built into Roost: the link opens the Cars page.
+    url: '#/cars',
+    icon: 'car',
+    adminOnly: true, // admins only while it is being tried out
+  },
+  {
     id: 'cockerel',
     name: 'Cockerel',
     tagline: 'Agent',

@@ -163,7 +163,7 @@ test('too many wrong codes ends the sign-in', async () => {
 
 test('admin sees the default apps', async () => {
   const { body } = await call('GET', '/api/apps', null, adminCookie);
-  assert.deepEqual(body.apps.map((a) => a.name), ['Jellyfin', 'Nova', 'Nest', 'Glint', 'Birdhouse', 'Cockerel']);
+  assert.deepEqual(body.apps.map((a) => a.name), ['Jellyfin', 'Nova', 'Nest', 'Glint', 'Birdhouse', 'Cars', 'Cockerel']);
 });
 
 test('admin can add a user limited to some apps', async () => {

@@ -1,6 +1,12 @@
 {
   "items": [
     {
+      "title": "Cars: a garage for every car",
+      "text": "Add your cars with a photo (from Glint or your camera) and decide who else can see each one. Dates, fuel and service history are coming next.",
+      "image": "cars-garage.png",
+      "admin": true
+    },
+    {
       "title": "Cockerel picks his own brain",
       "text": "For each message he chooses Haiku, Sonnet or Opus, whichever is cheapest and still good enough, and says which in a small tag. Tap Think harder to use the strongest model for one message, or pin one in Admin.",
       "image": "cockerel-smarter.png",

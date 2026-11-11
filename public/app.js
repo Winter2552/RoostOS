@@ -12,6 +12,7 @@ const ICONS = {
   cloud: '<path d="M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 9.5 4.3 4.3 0 0 0 7 18z"/>',
   music: '<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>',
   home: '<path d="M3 11l9-7 9 7v9h-6v-6H9v6H3z"/>',
+  car: '<path d="M3 16l1.5-5a2 2 0 0 1 1.9-1.4h11.2a2 2 0 0 1 1.9 1.4L21 16v3h-3v-2H6v2H3z"/><circle cx="7.5" cy="14" r="1"/><circle cx="16.5" cy="14" r="1"/>',
   house: '<path d="M4 20V10.5L12 4l8 6.5V20z"/><circle cx="12" cy="12" r="2.4"/><path d="M12 14.4V17"/>',
 };
 
@@ -732,12 +733,13 @@ function renderUser() {
   $('#profile-form').email.value = u.email || '';
 }
 
-const VIEWS = ['apps', 'galaxies', 'nest', 'glint', 'birdhouse', 'cockerel', 'status', 'whatsnew', 'profile', 'admin'];
+const VIEWS = ['apps', 'galaxies', 'nest', 'glint', 'birdhouse', 'cars', 'cockerel', 'status', 'whatsnew', 'profile', 'admin'];
 
 const hasNest = () => state.apps.some((a) => a.id === 'nest' && a.url === '#/nest');
 const hasGalaxies = () => state.apps.some((a) => a.id === 'nova' && a.url === '#/galaxies');
 const hasGlint = () => state.apps.some((a) => a.id === 'glint' && a.url === '#/glint');
 const hasCockerel = () => state.apps.some((a) => a.id === 'cockerel' && a.url === '#/cockerel') && state.user.role === 'admin';
+const hasCars = () => state.apps.some((a) => a.id === 'cars' && a.url === '#/cars');
 const hasBirdhouse = () => state.apps.some((a) => a.id === 'birdhouse' && a.url === '#/birdhouse');
 
 function route() {
@@ -745,7 +747,7 @@ function route() {
   if (!state.user || needsSecureStep(state.user)) return;
   const [first, ...rest] = location.hash.replace(/^#\/?/, '').split('/');
   let view = first || 'apps';
-  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'status' && isGuest(state.user)) || (view === 'whatsnew' && isGuest(state.user)) || (view === 'galaxies' && !hasGalaxies()) || (view === 'nest' && !hasNest()) || (view === 'glint' && !hasGlint()) || (view === 'birdhouse' && !hasBirdhouse()) || (view === 'cockerel' && !hasCockerel())) view = 'apps';
+  if (!VIEWS.includes(view) || (view === 'admin' && state.user.role !== 'admin') || (view === 'status' && isGuest(state.user)) || (view === 'whatsnew' && isGuest(state.user)) || (view === 'galaxies' && !hasGalaxies()) || (view === 'nest' && !hasNest()) || (view === 'glint' && !hasGlint()) || (view === 'birdhouse' && !hasBirdhouse()) || (view === 'cars' && !hasCars()) || (view === 'cockerel' && !hasCockerel())) view = 'apps';
   for (const v of VIEWS) $(`#view-${v}`).classList.toggle('hidden', v !== view);
   document.querySelectorAll('#account-menu a').forEach((a) => {
     if (a.dataset.view === view) a.setAttribute('aria-current', 'page');
@@ -761,6 +763,7 @@ function route() {
   if (view === 'galaxies') renderGalaxyPage();
   if (view === 'nest') window.nestOpen(rest);
   if (view === 'glint') window.glintOpen(rest);
+  if (view === 'cars') window.carsOpen(rest, { glint: hasGlint() });
   if (view === 'birdhouse') window.birdhouseOpen(rest);
   else if (view === 'cockerel') window.cockerelOpen();
   else if (view !== 'nest' && view !== 'glint') document.title = state.serverName;
