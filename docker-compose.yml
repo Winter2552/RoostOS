@@ -47,6 +47,8 @@ services:
       DOCKER_HOST: tcp://roost-docker:2375
       # Drive health readings from the roost-smart service below (the read-only mount).
       SMART_DIR: /smart
+      # Device finder: what the roost-lan service below leaves behind (the lan volume).
+      LAN_DIR: /lan
     # Lets Roost reach the other containers on this box (galaxies) by the ports they publish.
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -55,6 +57,8 @@ services:
     volumes:
       # On ZimaOS this keeps Roost's accounts and app list with the other app data.
       - /DATA/AppData/roost:/data
+      # What the Device finder helper leaves (and the sweep-now request Roost leaves it).
+      - lan:/lan
       # Nest's files, as normal folders: one per user. Point the left side at a
       # folder on the 3 TB data drive (ZimaOS shows its mount under Storage).
       - /DATA/roost-nest:/nest
@@ -168,6 +172,31 @@ services:
       # The host's sensors (CPU power and heat), read-only.
       - /sys:/hostsys:ro
 
+  # Device finder (Admin → Devices, for the owner account only): every 30 minutes
+  # it sweeps the home network (one empty packet per address, then a few common
+  # ports on whatever answers) and leaves the result in the lan volume for Roost.
+  # It has to sit on the host's network to see the real one, so it is kept as
+  # small as it can be: no extra privileges, a read-only filesystem, no Docker
+  # socket and no port of its own. Roost can only ask it to sweep now. Set
+  # LAN_CIDR (e.g. 192.168.4.0/24) if it picks the wrong network.
+  roost-lan:
+    build: .
+    container_name: roost-lan
+    restart: unless-stopped
+    command: ["node", "src/lan-helper.js"]
+    network_mode: host # code-check: ok (only way to see the home network; no privileges, no port, read-only)
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    environment:
+      LAN_DIR: /out
+      LAN_INTERVAL_MIN: "30"
+      # LAN_CIDR: "192.168.4.0/24"
+    volumes:
+      - lan:/out
+
   # Updating Roost from Admin → Updates. It looks at GitHub for new versions
   # and, when an admin presses Update, rebuilds and restarts Roost and its backup
   # service, putting the old version back if the new one doesn't start. It has
@@ -194,3 +223,4 @@ services:
 
 volumes:
   smart:
+  lan:

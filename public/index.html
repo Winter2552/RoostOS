@@ -708,6 +708,29 @@
         <div class="msg" role="status"></div>
       </div>
 
+      <div class="card panel" id="finder-panel" data-sec="devices">
+        <h3>Devices</h3><span class="mono muted" id="finder-lead">Only you can see this · home network only</span>
+        <div class="hidden" id="finder-banner"></div>
+        <div class="devices-tiles" id="finder-tiles"></div>
+        <div class="devices-bar">
+          <div class="chips" id="finder-filter" role="group" aria-label="Show">
+            <button type="button" class="chip" data-f="online" aria-pressed="false">Online</button>
+            <button type="button" class="chip" data-f="all" aria-pressed="false">All</button>
+            <button type="button" class="chip" data-f="new" aria-pressed="false">New</button>
+            <button type="button" class="chip" data-f="away" aria-pressed="false">Away</button>
+          </div>
+          <button type="button" class="btn ghost small" id="finder-scan">Scan now</button>
+        </div>
+        <ul class="security-list" id="finder-list"></ul>
+        <p class="mono muted">“Doing” is only what Roost itself sees: Roostflix sessions, sign-ins and open ports. It can’t see what a device does on the internet.</p>
+        <div class="checks alert-checks" id="finder-rules">
+          <label><input type="checkbox" name="newDevice"> Alert me when a new device joins</label>
+          <label><input type="checkbox" name="clash"> Alert me if something pretends to be the router</label>
+          <label><input type="checkbox" name="riskyPorts"> Alert me when a device opens a risky port (Telnet, FTP, VNC, Remote Desktop)</label>
+        </div>
+        <div class="msg" role="status"></div>
+      </div>
+
       <div class="card panel" id="sentinel-panel" data-sec="security">
         <h3>Sentinel</h3><span class="mono muted" id="sentinel-lead">Watches for forced entry.</span>
         <div class="chips" id="sentinel-modes" role="group" aria-label="Sentinel mode">
@@ -1038,6 +1061,7 @@
   <script src="/cockerel.js"></script>
   <script src="/whatsnew.js"></script>
   <script src="/search.js"></script>
+  <script src="/devices.js"></script>
   <script src="/motion.js"></script>
 </body>
 </html>
