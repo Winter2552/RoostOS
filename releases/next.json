@@ -25,6 +25,12 @@
       "admin": true
     },
     {
+      "title": "Charts for your car",
+      "text": "See what each month cost split by fuel, service, insurance and the rest, how your miles per gallon move tank by tank, and where the last year went. Tap a bar for the numbers.",
+      "image": "cars-charts.png",
+      "admin": true
+    },
+    {
       "title": "Cockerel picks his own brain",
       "text": "For each message he chooses Haiku, Sonnet or Opus, whichever is cheapest and still good enough, and says which in a small tag. Tap Think harder to use the strongest model for one message, or pin one in Admin.",
       "image": "cockerel-smarter.png",

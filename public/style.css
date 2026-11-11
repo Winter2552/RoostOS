@@ -2217,3 +2217,24 @@ button.car-stat { cursor: pointer; }
 .car-form textarea { background: var(--panel); color: var(--ink); border: 1.5px solid var(--line); border-radius: 12px; padding: 11px 12px; font: inherit; font-size: 16px; resize: vertical; }
 .car-form input[type="file"] { color: var(--muted); font-size: 14px; }
 .car-costs .car-chips { margin: 6px 0 10px; }
+
+.car-chart { display: block; width: 100%; height: auto; margin: 6px 0; overflow: visible; }
+.car-grid-line { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.car-axis { fill: var(--muted); font-family: var(--mono); font-size: 10px; }
+.car-g0 { fill: var(--ink); background: var(--ink); }
+.car-g1 { fill: rgba(242, 239, 233, 0.62); background: rgba(242, 239, 233, 0.62); }
+.car-g2 { fill: rgba(242, 239, 233, 0.38); background: rgba(242, 239, 233, 0.38); }
+.car-g3 { fill: rgba(242, 239, 233, 0.18); background: rgba(242, 239, 233, 0.18); }
+.car-bar-g { cursor: pointer; outline: none; }
+.car-bar-g:focus-visible .car-g0, .car-bar-g:hover .car-g0 { stroke: var(--ink); stroke-width: 2; }
+.car-hit { fill: transparent; }
+.car-line-path { fill: none; stroke: var(--ink); stroke-width: 2; stroke-linejoin: round; }
+.car-dot { fill: var(--bg); stroke: var(--ink); stroke-width: 2; }
+.car-caption { margin: 2px 0 12px; min-height: 2.6em; font-size: 12px; color: var(--muted); }
+.car-ch { margin: 18px 0 2px; font-size: 13px; font-weight: 600; }
+.car-splitbar { display: flex; height: 14px; border: 1.5px solid var(--ink); border-radius: 999px; overflow: hidden; margin: 8px 0 12px; }
+.car-splitbar span { display: block; min-width: 2px; }
+.car-legend { display: flex; flex-direction: column; gap: 6px; }
+.car-legrow { display: grid; grid-template-columns: 14px 1fr auto 44px; gap: 8px; align-items: center; font-size: 14px; }
+.car-legrow .mono { text-align: right; }
+.car-swatch { width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--line); }
