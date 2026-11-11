@@ -57,7 +57,7 @@ const GROUPS = {
 };
 const TOOLS = {
   media: ['events', 'library', 'find', 'fetch', 'genres', 'shelve', 'ask', 'log', 'job', 'jobs', 'retry'],
-  assistant: ['events', 'genres', 'shelve', 'handoff', 'jobs', 'calc', 'nest', 'watching', 'routine', 'ask', 'log', 'send', 'remember', 'memories', 'forget', 'task', 'tasks', 'done', 'remind', 'reminders', 'cancel', 'schedule', 'schedules', 'unschedule', 'notify', 'calendar', 'inbox', 'roost', 'email', 'birdhouse', 'browse'],
+  assistant: ['events', 'library', 'genres', 'shelve', 'handoff', 'jobs', 'calc', 'nest', 'watching', 'routine', 'ask', 'log', 'send', 'remember', 'memories', 'forget', 'task', 'tasks', 'done', 'remind', 'reminders', 'cancel', 'schedule', 'schedules', 'unschedule', 'notify', 'calendar', 'inbox', 'roost', 'email', 'birdhouse', 'browse'],
   // A job that runs by itself reads and reports, but cannot start new jobs or change his notes.
   scheduled: ['events', 'jobs', 'calc', 'nest', 'watching', 'log', 'send', 'notify', 'memories', 'tasks', 'reminders', 'schedules', 'calendar', 'inbox', 'roost', 'birdhouse', 'browse'],
 };

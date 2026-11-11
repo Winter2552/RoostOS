@@ -195,7 +195,8 @@ test('turning web off also turns the browser off, and nothing but film jobs can 
   const off = allowedFor('assistant', ['web']);
   assert.ok(!off.includes('WebSearch') && !off.includes('Bash(cockerel-tool browse:*)'));
   assert.ok(!allowedFor('media').includes('Bash(cockerel-tool browse:*)'));
-  for (const mode of ['assistant', 'scheduled']) assert.ok(!allowedFor(mode).some((t) => /cockerel-tool (fetch|find|library):/.test(t)), `${mode} cannot download`);
+  for (const mode of ['assistant', 'scheduled']) assert.ok(!allowedFor(mode).some((t) => /cockerel-tool (fetch|find):/.test(t)), `${mode} cannot download`);
+  assert.ok(allowedFor('assistant').some((t) => /cockerel-tool library:/.test(t)), 'chat can check what is on Roostflix (read-only)');
   const sched = allowedFor('scheduled');
   for (const t of ['remember', 'schedule', 'task', 'remind', 'email']) assert.ok(!sched.includes(`Bash(cockerel-tool ${t}:*)`), `a job cannot ${t}`);
 });
