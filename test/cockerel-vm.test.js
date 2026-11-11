@@ -150,15 +150,19 @@ test('the tool files a finished download, and asks before an unusual source or a
     fs.mkdirSync(path.join(env.COCKEREL_HOME, 'state', 'jobs'), { recursive: true });
     fs.writeFileSync(path.join(env.COCKEREL_HOME, 'state', 'jobs', 'j3.json'), JSON.stringify({ id: 'j3', name: 'Sintel', year: '2010', kind: 'movie', requester: 'sam', status: 'downloading' }));
     seen.length = 0;
-    r = await tool('done', 'j3');
+    r = await tool('finished', 'j3');
     assert.equal(r.code, 0, r.out);
     assert.ok(fs.existsSync(path.join(env.MEDIA_ROOT, 'Movies', 'Sintel (2010)', 'Sintel (2010).mkv')));
     assert.ok(!fs.existsSync(path.join(env.INCOMING_DIR, 'j3')), 'leftovers removed');
-    assert.deepEqual(seen.map((m) => m.type), ['refresh', 'job', 'log', 'ready']);
+    assert.deepEqual(seen.map((m) => m.type), ['job', 'refresh', 'job', 'log', 'ready']);
+    assert.equal(seen[0].state, 'Adding');
     assert.equal(seen.find((m) => m.type === 'ready').requester, 'sam');
     seen.length = 0;
-    await tool('done', 'j3');
+    await tool('finished', 'j3');
     assert.equal(seen.length, 0, 'finishing twice does nothing');
+    // `done` is the task command; a job id that is not downloading ticks off a task.
+    await tool('done', 'task-9');
+    assert.deepEqual(seen.map((m) => m.type), ['taskdone'], 'done TASK_ID reaches the notebook');
   } finally {
     roost.close();
     fs.rmSync(root, { recursive: true, force: true });
@@ -191,7 +195,153 @@ test('turning web off also turns the browser off, and nothing but film jobs can 
   const off = allowedFor('assistant', ['web']);
   assert.ok(!off.includes('WebSearch') && !off.includes('Bash(cockerel-tool browse:*)'));
   assert.ok(!allowedFor('media').includes('Bash(cockerel-tool browse:*)'));
-  for (const mode of ['assistant', 'scheduled']) assert.ok(!allowedFor(mode).some((t) => /cockerel-tool (fetch|find|library):/.test(t)), `${mode} cannot download`);
+  for (const mode of ['assistant', 'scheduled']) assert.ok(!allowedFor(mode).some((t) => /cockerel-tool (fetch|find):/.test(t)), `${mode} cannot download`);
+  assert.ok(allowedFor('assistant').some((t) => /cockerel-tool library:/.test(t)), 'chat can check what is on Roostflix (read-only)');
   const sched = allowedFor('scheduled');
   for (const t of ['remember', 'schedule', 'task', 'remind', 'email']) assert.ok(!sched.includes(`Bash(cockerel-tool ${t}:*)`), `a job cannot ${t}`);
+});
+
+test('he checks the Roostflix folders first, and never seeds', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cockerel-w-'));
+  try {
+    assert.equal(lib.writableProblem(path.join(root, 'incoming')), '', 'creates and writes');
+    fs.writeFileSync(path.join(root, 'blocker'), 'x');
+    assert.match(lib.writableProblem(path.join(root, 'blocker', 'incoming')), /on .*incoming/, 'names the folder that failed');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  for (const flag of ['--seed-time=0', '--seed-ratio=0.0', '--max-overall-upload-limit=1K']) assert.ok(lib.NO_SEED.includes(flag), flag);
+  const src = require('fs').readFileSync(path.join(__dirname, '..', 'cockerel-vm', 'tool.js'), 'utf8');
+  assert.ok(src.includes('...lib.NO_SEED'), 'the download uses the no-seeding flags');
+  assert.equal(lib.progressText(3.1 * 1048576, 3.1 * 1048576 * 720), '3.1 MB/s · 12 min left');
+  assert.equal(lib.progressText(0, 100), '');
+});
+
+test('Roost shows the download detail only while downloading', () => {
+  const { Cockerel } = require('../src/cockerel');
+  const c = new Cockerel({ store: { db: { settings: {} }, save() {} }, newId: () => '1' });
+  c.setJob({ id: 'j', title: 'Film', state: 'Downloading', progress: 42, detail: '3.1 MB/s · 12 min left' });
+  assert.equal(c.data().jobs[0].detail, '3.1 MB/s · 12 min left');
+  c.setJob({ id: 'j', state: 'Adding', progress: 99 });
+  assert.equal(c.data().jobs[0].state, 'Adding');
+  assert.equal(c.data().jobs[0].detail, '');
+});
+
+test('he notices when the media share is not connected', () => {
+  assert.equal(lib.shareMissing('/tmp/some/other/place', {}), '', 'not checked outside the usual layout');
+  assert.equal(lib.shareMissing('/tmp', { MEDIA_MOUNT: '/' }), '', '/ is always a mount point');
+  assert.equal(lib.shareMissing('/tmp', { MEDIA_MOUNT: '/definitely/not/mounted' }), '/definitely/not/mounted', 'a folder that is not a mount is reported');
+});
+
+test('a magnet download keeps its .torrent file until aria2 has started', async () => {
+  const fs = require('fs');
+  const http = require('http');
+  const os = require('os');
+  const path = require('path');
+  const { spawn } = require('child_process');
+  const secret = 'torrent-test-secret-0123456789a';
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cockerel-t-'));
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin);
+  const record = path.join(root, 'record.txt');
+  // A pretend aria2: saves a .torrent for the metadata step, reports a size, and for the real
+  // download records whether the file it was given still exists.
+  fs.writeFileSync(path.join(bin, 'aria2c'), `#!/bin/sh
+case "$*" in
+  *--bt-metadata-only*) for a in "$@"; do case "$a" in -d*) d="\${a#-d}";; esac; done; echo meta > "$d/x.torrent";;
+  -S*) echo "Total Length: 2.6GiB (2,791,728,742)";;
+  *) for a; do last="$a"; done; if [ -f "$last" ]; then echo present > "${record}"; else echo "missing $last" > "${record}"; fi;;
+esac
+`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'ip'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const roost = http.createServer(async (req, res) => {
+    let body = '';
+    for await (const c of req) body += c;
+    const msg = JSON.parse(body);
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify(msg.type === 'check' ? { decision: 'auto' } : { ok: true }));
+  });
+  await new Promise((r) => roost.listen(0, '127.0.0.1', r));
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, COCKEREL_HOME: path.join(root, 'home'), MEDIA_ROOT: path.join(root, 'media'), INCOMING_DIR: path.join(root, 'media', 'incoming'), ROOST_URL: `http://127.0.0.1:${roost.address().port}`, COCKEREL_SECRET: secret };
+  fs.mkdirSync(path.join(env.COCKEREL_HOME, 'state'), { recursive: true });
+  fs.writeFileSync(path.join(env.COCKEREL_HOME, 'state', 'approvals.json'), JSON.stringify({ 'entitled-m1': true }));
+  try {
+    const out = await new Promise((resolve) => {
+      const child = spawn('node', [path.join(__dirname, '..', 'cockerel-vm', 'tool.js'), 'fetch', 'magnet:?xt=urn:btih:abc', '--job', 'm1', '--name', 'Test Film'], { env });
+      let o = '';
+      child.stdout.on('data', (d) => { o += d; });
+      child.stderr.on('data', (d) => { o += d; });
+      child.on('close', () => resolve(o));
+    });
+    assert.match(out, /Download started/, out);
+    for (let i = 0; i < 40 && !fs.existsSync(record); i++) await new Promise((r) => setTimeout(r, 100));
+    assert.equal(fs.readFileSync(record, 'utf8').trim(), 'present', 'aria2 is given a .torrent file that exists');
+  } finally {
+    roost.close();
+    fs.rmSync(path.join(root, 'home', 'state', 'jobs'), { recursive: true, force: true }); // lets the watcher stop
+    await new Promise((r) => setTimeout(r, 300));
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('films are filed into the genre folders Raven already has', async () => {
+  const fs = require('fs');
+  const http = require('http');
+  const os = require('os');
+  const path = require('path');
+  const { spawn } = require('child_process');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cockerel-g-'));
+  const media = path.join(root, 'media');
+  for (const d of ['Action', 'Documentaries', 'Sci-Fi', 'Animated', 'Old Film (1999)']) fs.mkdirSync(path.join(media, 'Movies', d), { recursive: true });
+  // The folders are the genres; a film folder is not.
+  assert.deepEqual(lib.genreFolders(media), ['Action', 'Animated', 'Documentaries', 'Sci-Fi']);
+  assert.equal(lib.genreFolder(media, 'action'), 'Action');
+  assert.equal(lib.genreFolder(media, 'Documentary'), 'Documentaries');
+  assert.equal(lib.genreFolder(media, 'Science Fiction'), 'Sci-Fi');
+  assert.equal(lib.genreFolder(media, 'Western'), '', 'no folder, no guess');
+  assert.equal(lib.moviePath(media, 'Heat', 2000, '.mkv', 'Crime'), path.join(media, 'Movies', 'Crime', 'Heat (2000)', 'Heat (2000).mkv'));
+  assert.equal(lib.moviePath(media, 'Heat', 2000, '.mkv'), path.join(media, 'Movies', 'Heat (2000)', 'Heat (2000).mkv'));
+  // shelve: moves a loose film into a genre folder, and refuses what it should.
+  fs.mkdirSync(path.join(media, 'Movies', 'Ant-Man (2015)'));
+  fs.writeFileSync(path.join(media, 'Movies', 'Ant-Man (2015)', 'Ant-Man (2015).mkv'), 'x');
+  const roost = http.createServer(async (req, res) => { for await (const c of req); res.setHeader('content-type', 'application/json'); res.end('{"ok":true}'); });
+  await new Promise((r) => roost.listen(0, '127.0.0.1', r));
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'ffprobe'), '#!/bin/sh\necho 5400\n', { mode: 0o755 });
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, INCOMING_DIR: path.join(media, 'incoming'), COCKEREL_HOME: path.join(root, 'home'), MEDIA_ROOT: media, ROOST_URL: `http://127.0.0.1:${roost.address().port}`, COCKEREL_SECRET: 'g'.repeat(30) };
+  const tool = (...args) => new Promise((resolve) => {
+    const child = spawn('node', [path.join(__dirname, '..', 'cockerel-vm', 'tool.js'), ...args], { env });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { out += d; });
+    child.on('close', (code) => resolve({ code, out }));
+  });
+  try {
+    let r = await tool('shelve', 'Ant-Man (2015)', '--genre', 'Western');
+    assert.notEqual(r.code, 0, 'no such genre folder');
+    r = await tool('shelve', 'Action', '--genre', 'Action');
+    assert.notEqual(r.code, 0, 'a genre folder is not a film');
+    r = await tool('shelve', 'Ant-Man (2015)', '--genre', 'action');
+    assert.equal(r.code, 0, r.out);
+    assert.ok(fs.existsSync(path.join(media, 'Movies', 'Action', 'Ant-Man (2015)', 'Ant-Man (2015).mkv')));
+    assert.ok(!fs.existsSync(path.join(media, 'Movies', 'Ant-Man (2015)')));
+    r = await tool('genres');
+    assert.match(r.out, /Action, Animated, Documentaries, Sci-Fi/);
+    // A finished download goes straight into the genre folder, or Movies when there is none.
+    for (const [job, genre, want] of [['g1', 'Sci-Fi', path.join('Sci-Fi', 'Dune (2021)')], ['g2', 'Western', 'Heat (1995)']]) {
+      fs.mkdirSync(path.join(media, 'incoming', job), { recursive: true });
+      fs.writeFileSync(path.join(media, 'incoming', job, 'film.mkv'), 'x'.repeat(2000));
+      fs.mkdirSync(path.join(env.COCKEREL_HOME, 'state', 'jobs'), { recursive: true });
+      const [name, year] = job === 'g1' ? ['Dune', '2021'] : ['Heat', '1995'];
+      fs.writeFileSync(path.join(env.COCKEREL_HOME, 'state', 'jobs', `${job}.json`), JSON.stringify({ id: job, name, year, genre, kind: 'movie', status: 'downloading' }));
+      r = await tool('finished', job);
+      assert.equal(r.code, 0, r.out);
+      assert.ok(fs.existsSync(path.join(media, 'Movies', want, `${path.basename(want)}.mkv`)), want);
+    }
+  } finally {
+    roost.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

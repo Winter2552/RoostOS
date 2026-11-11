@@ -57,12 +57,29 @@ function cleanName(name) {
   return String(name || '').replace(BAD_CHARS, ' ').replace(/\s+/g, ' ').replace(/^[. ]+|[. ]+$/g, '').slice(0, 120);
 }
 
-// Movies/Name (Year)/Name (Year).ext
-function moviePath(root, name, year, ext) {
+// Movies/[Genre/]Name (Year)/Name (Year).ext
+function moviePath(root, name, year, ext, genre = '') {
   const n = cleanName(name);
   if (!n) throw new Error('A film needs a name');
   const label = /^\d{4}$/.test(String(year)) ? `${n} (${year})` : n;
-  return path.join(root, 'Movies', label, `${label}${ext}`);
+  return path.join(root, 'Movies', genre, label, `${label}${ext}`);
+}
+
+// Raven's genre folders are whatever folders already sit in Movies that are not
+// a film ("Name (Year)"). A genre Claude names maps onto one of them, or to ''.
+const GENRE_ALIASES = { documentary: 'documentaries', animation: 'animated', cartoon: 'animated', 'science fiction': 'sci-fi', scifi: 'sci-fi', 'sci fi': 'sci-fi', thriller: 'crime' };
+function genreFolders(root) {
+  try {
+    return require('fs').readdirSync(path.join(root, 'Movies'), { withFileTypes: true })
+      .filter((e) => e.isDirectory() && !/\(\d{4}\)\s*$/.test(e.name) && !e.name.startsWith('.')).map((e) => e.name).sort();
+  } catch { return []; }
+}
+function genreFolder(root, genre) {
+  const want = String(genre || '').trim().toLowerCase();
+  if (!want) return '';
+  const folders = genreFolders(root);
+  const hit = (w) => folders.find((f) => f.toLowerCase() === w);
+  return hit(want) || (GENRE_ALIASES[want] && hit(GENRE_ALIASES[want])) || '';
 }
 
 // Series/Name/Season 01/Name - S01E02.ext, from a file called ...S01E02...
@@ -108,4 +125,44 @@ function pageText(html, max = 15000) {
     .replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim().slice(0, max);
 }
 
-module.exports = { browseUrl, pageText, sign, headers, verify, OPEN_HOSTS, hostOpen, sourceKind, VIDEO, cleanName, moviePath, episodePath, jobIdOk, human };
+// Can this machine create folders and files here? Returns '' when yes, else a
+// plain-English reason (the usual cause is the media share being read-only
+// for his SMB user on ZimaOS).
+function writableProblem(dir) {
+  const fs = require('fs');
+  const probe = path.join(dir, `.write-test-${process.pid}`);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(probe, 'x');
+    fs.unlinkSync(probe);
+    return '';
+  } catch (err) {
+    return `${err.code || 'error'} on ${dir}`;
+  }
+}
+
+// True when the media share should be mounted but isn't (then /srv/media is an
+// empty folder on his own disk, and every write fails with a permissions error).
+// Only checked for the usual /srv/media layout, or where MEDIA_MOUNT names it.
+function shareMissing(mediaRoot, env = process.env) {
+  const mount = String(mediaRoot).startsWith('/srv/media') ? '/srv/media' : (env.MEDIA_MOUNT || '');
+  if (!mount) return '';
+  return require('child_process').spawnSync('mountpoint', ['-q', mount]).status === 1 ? mount : '';
+}
+
+// "3.1 MB/s · 12 min left" for the job card and the VM screen.
+function progressText(speed, bytesLeft) {
+  const bits = [];
+  if (speed > 0) bits.push(`${human(speed)}/s`);
+  if (speed > 0 && bytesLeft > 0) {
+    const s = bytesLeft / speed;
+    bits.push(s < 90 ? 'under a minute left' : s < 5400 ? `${Math.round(s / 60)} min left` : `${(s / 3600).toFixed(1)} h left`);
+  }
+  return bits.join(' · ');
+}
+
+// The aria2 flags that keep him from ever seeding: stop at once when done
+// (time and ratio), and upload only a trickle while downloading.
+const NO_SEED = ['--seed-time=0', '--seed-ratio=0.0', '--max-overall-upload-limit=1K'];
+
+module.exports = { genreFolders, genreFolder, shareMissing, writableProblem, progressText, NO_SEED, browseUrl, pageText, sign, headers, verify, OPEN_HOSTS, hostOpen, sourceKind, VIDEO, cleanName, moviePath, episodePath, jobIdOk, human };

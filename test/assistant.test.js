@@ -73,3 +73,39 @@ test('what Claude is told includes the time, notes and open tasks', () => {
   assert.match(text, /Raven lives in Leeds/);
   assert.match(text, new RegExp(`Order oak \\(due 2026-12-01\\) \\[${t.id}\\]`));
 });
+
+test('model choice, the cap and quiet hours are checked and saved', () => {
+  const { a } = make();
+  assert.deepEqual([a.settings().model, a.settings().maxTier, a.settings().quiet.on], ['auto', 'opus', false]);
+  a.saveSettings({ model: 'sonnet', maxTier: 'sonnet' });
+  assert.deepEqual([a.settings().model, a.settings().maxTier], ['sonnet', 'sonnet']);
+  assert.throws(() => a.saveSettings({ model: 'gpt' }), /Auto, Haiku/);
+  assert.throws(() => a.saveSettings({ maxTier: 'huge' }), /most he may use/);
+  assert.throws(() => a.saveSettings({ quiet: { on: true, from: '25:00', to: '07:00' } }), /Quiet hours/);
+});
+
+test('quiet hours hold small notes until the brief, across midnight', () => {
+  const { a, clock } = make();
+  a.saveSettings({ tz: 'UTC', quiet: { on: true, from: '22:00', to: '07:00' } });
+  clock.t = Date.UTC(2026, 10, 11, 23, 30);
+  assert.equal(a.isQuiet(), true);
+  clock.t = Date.UTC(2026, 10, 12, 6, 59);
+  assert.equal(a.isQuiet(), true);
+  clock.t = Date.UTC(2026, 10, 12, 12, 0);
+  assert.equal(a.isQuiet(), false);
+  a.hold('disk is 80% full');
+  assert.deepEqual(a.takeHeld(), ['disk is 80% full']);
+  assert.deepEqual(a.takeHeld(), []);
+});
+
+test('routines are kept by name, replaced not duplicated, and limited', () => {
+  const { a } = make();
+  a.saveRoutine('Friday check', 'roost status then tasks');
+  a.saveRoutine('friday check', 'roost status only');
+  assert.equal(a.data().routines.length, 1);
+  assert.equal(a.routine('FRIDAY CHECK').text, 'roost status only');
+  assert.throws(() => a.saveRoutine('', 'x'), /name and steps/);
+  assert.ok(a.context().includes('Friday check'));
+  a.removeRoutine('friday check');
+  assert.equal(a.routine('Friday check'), null);
+});

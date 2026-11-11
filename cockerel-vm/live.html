@@ -15,6 +15,7 @@ main{display:grid;grid-template-columns:1fr 440px;height:100vh}
 h1{font-size:34px;font-weight:600;letter-spacing:-.5px}
 .orb{margin-bottom:14px}.task{max-width:520px;text-align:center;color:#bbb;min-height:44px}
 .timer{color:#777;font-size:14px}
+.dl{width:min(440px,90%);margin-top:6px}.dl b{font-weight:500}.dl small{display:block;color:#999;font-size:13px;margin:2px 0 6px}.dl .m{height:5px;border-radius:5px;background:#262626;overflow:hidden}.dl .m i{display:block;height:100%;background:#fff;transition:width .6s}
 .pills{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;position:absolute;bottom:28px;left:24px;right:24px}
 .pill{border:1px solid #2e2e2e;border-radius:99px;padding:7px 14px;font-size:13px;color:#aaa;display:flex;align-items:center;gap:9px;background:#101010}
 .pill b{color:#fff;font-weight:600}
@@ -44,6 +45,7 @@ aside h2{font-size:12px;letter-spacing:.14em;color:#777;font-weight:600;margin-b
     <h1 id="state">Waiting for Roost</h1>
     <div class="task" id="task"></div>
     <div class="timer mono" id="timer"></div>
+    <div id="dl"></div>
     <div class="pills">
       <span class="pill" id="vpn">VPN <b>…</b></span>
       <span class="pill" id="runs">Runs <b>…</b><span class="m"><i style="width:0"></i></span></span>
@@ -64,7 +66,19 @@ function spark(el, hist, lo, hi) {
   const pts = hist.map((v, i) => `${(i / 29) * 64},${19 - ((v - lo) / Math.max(1, hi - lo)) * 16 - 1}`).join(' ');
   el.querySelector('polyline').setAttribute('points', pts);
 }
+function setDownloads(list) {
+  const box = $('dl'); box.className = 'dl'; box.textContent = '';
+  for (const d of list || []) {
+    const row = document.createElement('div');
+    const b = document.createElement('b'); b.textContent = d.name;
+    const sm = document.createElement('small'); sm.textContent = d.detail;
+    const m = document.createElement('div'); m.className = 'm';
+    const i = document.createElement('i'); i.style.width = `${d.pct}%`; m.appendChild(i);
+    row.append(b, sm, m); box.appendChild(row);
+  }
+}
 function setStatus(s) {
+  setDownloads(s.downloads);
   const vpn = $('vpn'); vpn.classList.toggle('bad', s.vpn !== 'up'); vpn.querySelector('b').textContent = s.vpn === 'up' ? 'up' : 'DOWN';
   $('runs').querySelector('b').textContent = `${s.runsToday}/${s.maxRuns}`;
   $('runs').querySelector('.m i').style.width = `${Math.min(100, (s.runsToday / s.maxRuns) * 100)}%`;

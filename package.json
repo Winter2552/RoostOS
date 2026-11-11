@@ -1,12 +1,13 @@
 {
   "name": "roost",
-  "version": "0.1.32",
+  "version": "0.1.34",
   "description": "Roost OS homepage: dashboard and user accounts for the home server",
   "private": true,
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "cockerel-eval": "node cockerel-vm/eval.js"
   },
   "engines": {
     "node": ">=22.13"

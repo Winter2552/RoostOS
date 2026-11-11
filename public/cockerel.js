@@ -5,14 +5,15 @@
 
 (() => {
   const REFRESH_MS = 6000;
-  const S = { built: false, timer: null, busy: false, steps: false, last: '', open: false, d: null, seen: null, typing: false, again: false };
-  const STAGES = ['Requested', 'Finding', 'Downloading', 'Added'];
+  const TIER = { haiku: 'Haiku', sonnet: 'Sonnet', opus: 'Opus' };
+  const S = { think: false, built: false, timer: null, busy: false, steps: false, last: '', open: false, d: null, seen: null, typing: false, again: false };
+  const STAGES = ['Requested', 'Finding', 'Downloading', 'Adding', 'Added'];
   const IDEAS = ["What's new on Roostflix?", 'Research something for me', 'Find a film for me'];
 
   // His mark: the Roost bird with a comb, a two-part beak and a wattle. The
   // beak and a small bob are what animate when he speaks (see style.css).
   const MARK = '<svg class="cx-mark" viewBox="0 0 64 64" aria-hidden="true"><g transform="translate(-4 -3)"><g class="cx-bird"><path d="M14 54V26h16a18 18 0 0 1 18 18v10z" fill="currentColor"/><circle cx="19" cy="23" r="4.2" fill="currentColor"/><circle cx="26" cy="20.5" r="5" fill="currentColor"/><circle cx="33" cy="23" r="4.2" fill="currentColor"/><rect x="14" y="22" width="19" height="6"/><path class="cx-beak-up" d="M47 36l11 3.5-11 2.5z" fill="currentColor"/><path class="cx-beak-low" d="M47 43l9 3-9 2.5z" fill="currentColor"/><circle cx="50.5" cy="50.5" r="2.6" fill="currentColor"/><circle class="cx-eye" cx="37" cy="35" r="3" fill="var(--bg)"/></g></g></svg>';
-  const TOOL_GROUPS = ['web', 'files', 'memory', 'tasks', 'reminders', 'jobs', 'notify', 'calendar', 'email', 'roost', 'birdhouse'];
+  const TOOL_GROUPS = ['web', 'files', 'memory', 'tasks', 'reminders', 'jobs', 'notify', 'calendar', 'email', 'roost', 'birdhouse', 'nest', 'watching'];
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
   function avatar(cls = '') {
@@ -40,13 +41,21 @@
     return { dot: s.busy ? 'busy' : 'ok', text: s.busy ? 'Working…' : 'Online', more: bits.join(' · ') };
   }
 
+  async function clearJobs(id) {
+    try { await api('POST', '/api/cockerel/jobs/clear', id ? { id } : {}); } catch { /* the next refresh shows the truth */ }
+    load({ force: true });
+  }
+
   function job(j) {
     const at = STAGES.indexOf(j.state);
     const failed = j.state === 'Failed';
-    const pct = failed ? 100 : Math.round(((at + (j.state === 'Downloading' && j.progress ? j.progress / 100 : 0.5)) / STAGES.length) * 100);
+    // While downloading the bar is the real percentage; before and after it is a stage.
+    const pct = failed ? 100 : j.state === 'Downloading' ? Math.max(3, j.progress || 0) : j.state === 'Adding' ? 99 : Math.round(((at + 0.5) / STAGES.length) * 100);
+    const running = j.state === 'Downloading' || j.state === 'Adding';
     return el('div', { class: `cx-job${failed ? ' failed' : ''}${j.state === 'Added' ? ' done' : ''}` },
       el('span', { class: 'cx-job-name', text: j.title || 'Job' }),
-      el('span', { class: 'cx-job-state', text: failed ? 'Failed' : j.state }),
+      running ? '' : el('button', { type: 'button', class: 'cx-x', 'aria-label': 'Clear this one', text: '×', onclick: () => clearJobs(j.id) }),
+      el('span', { class: 'cx-job-state', text: failed ? 'Failed' : j.state === 'Downloading' && j.detail ? `${j.progress || 0}% · ${j.detail}` : j.state === 'Adding' ? 'Adding to Roostflix' : j.state }),
       el('span', { class: 'cx-track' }, el('i', { style: `width:${j.state === 'Added' ? 100 : pct}%` })));
   }
 
@@ -127,7 +136,9 @@
   function entry(e, answer, first, fresh) {
     if (e.kind === 'you') return el('div', { class: 'cx-msg you', title: when(e.at) }, el('p', { text: e.text }));
     if (e.kind === 'cockerel') {
-      const row = el('div', { class: 'cx-row', title: when(e.at) }, first ? avatar() : el('span', { class: 'cx-avatar gap' }), el('div', { class: 'cx-msg cockerel' }, el('p', { text: e.text })));
+      const tag = e.model && TIER[e.model] ? el('span', { class: 'cx-tag', text: `${TIER[e.model]}${e.why ? ` · ${e.why}` : ''}` }) : '';
+      const wrong = e.wrong ? el('span', { class: 'cx-tag', text: 'Marked not right' }) : el('button', { type: 'button', class: 'cx-wrong', text: 'Not right', title: 'Tell me he got this wrong', onclick: async (ev) => { ev.currentTarget.disabled = true; try { await api('POST', '/api/cockerel/wrong', { id: e.id }); ev.currentTarget.replaceWith(el('span', { class: 'cx-tag', text: 'Marked not right' })); } catch { ev.currentTarget.disabled = false; } } });
+      const row = el('div', { class: 'cx-row', title: when(e.at) }, first ? avatar() : el('span', { class: 'cx-avatar gap' }), el('div', { class: 'cx-msg cockerel' }, el('p', { text: e.text }), el('div', { class: 'cx-meta' }, tag, wrong)));
       if (fresh) { aloud(e.text); requestAnimationFrame(() => speak(row, e.text)); }
       return row;
     }
@@ -168,7 +179,8 @@
     S.last = key;
     const jobs = $('#cx-jobs');
     const live = d.jobs.filter((j) => j.state !== 'Added' || Date.now() - Date.parse(j.updatedAt || j.at) < 3600e3).slice(0, 4);
-    jobs.replaceChildren(...live.map(job));
+    const finished = live.filter((j) => j.state !== 'Downloading' && j.state !== 'Adding').length;
+    jobs.replaceChildren(...live.map(job), ...(finished > 1 ? [el('button', { type: 'button', class: 'cx-clear', text: 'Clear finished', onclick: () => clearJobs('') })] : []));
     jobs.hidden = !live.length;
     const feed = $('#cx-feed');
     const stick = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
@@ -225,7 +237,11 @@
     $('#cx-typing').hidden = false;
     $('#cx-logo').classList.add('speaking');
     // His reply arrives when he finishes; the message shows straight away.
-    const sent = api('POST', '/api/cockerel/chat', { text });
+    const think = S.think;
+    S.think = false;
+    $('#cx-think').classList.remove('on');
+    $('#cx-think').setAttribute('aria-pressed', 'false');
+    const sent = api('POST', '/api/cockerel/chat', { text, think });
     setTimeout(() => load({ force: true }), 250);
     try { await sent; } catch (err) { $('#cx-more').hidden = false; $('#cx-more').textContent = err.message; }
     S.busy = false;
@@ -253,6 +269,7 @@
       S.built = true;
       $('#cx-logo').append(avatar());
       setupVoice();
+      $('#cx-think').addEventListener('click', (ev) => { S.think = !S.think; ev.currentTarget.classList.toggle('on', S.think); ev.currentTarget.setAttribute('aria-pressed', String(S.think)); });
       $('#cx-form').addEventListener('submit', (e) => { e.preventDefault(); send($('#cx-text').value); });
       $('#cx-pause').addEventListener('click', async () => {
         const paused = $('#cx-pause').textContent === 'Pause';
@@ -284,6 +301,18 @@
 
   // Admin → Server → Cockerel
   const form = () => $('#cockerel-admin');
+  // Today's runs by model, and what he has been told was wrong.
+  async function paintUsage() {
+    try {
+      const d = await api('GET', '/api/cockerel');
+      const by = (d.status && d.status.byTier) || {};
+      const bits = Object.keys(TIER).filter((k) => by[k]).map((k) => `${TIER[k]} ${by[k]}`);
+      $('#cx-usage').textContent = bits.length ? `Today he used: ${bits.join(', ')}.` : 'He has not used Claude yet today.';
+      const box = $('#cx-flags');
+      box.hidden = !(d.flags && d.flags.length);
+      if (!box.hidden) box.replaceChildren(el('strong', { text: 'Marked not right' }), ...d.flags.map((x) => el('p', { text: `"${x.asked}" → ${x.answer.slice(0, 160)}${x.model ? ` (${TIER[x.model] || x.model})` : ''}` })));
+    } catch { /* optional */ }
+  }
   window.cockerelAdminLoad = async () => {
     window.cockerelConnectLoad();
     try {
@@ -298,6 +327,12 @@
       f.briefTime.value = c.briefTime;
       f.briefOn.checked = c.briefOn;
       for (const g of TOOL_GROUPS) f[`tool-${g}`].checked = !c.toolsOff.includes(g);
+      f.model.value = c.model;
+      f.maxTier.value = c.maxTier;
+      f.quietOn.checked = c.quiet.on;
+      f.quietFrom.value = c.quiet.from;
+      f.quietTo.value = c.quiet.to;
+      paintUsage();
     } catch { /* the Admin page shows its own errors */ }
   };
   // Calendar links and the read-only mailbox.
@@ -333,7 +368,7 @@
     if (e.target !== form()) return;
     e.preventDefault();
     const f = e.target;
-    const body = { url: f.url.value, sizeGb: f.sizeGb.value, dayGb: f.dayGb.value, tz: f.tz.value, briefTime: f.briefTime.value, briefOn: f.briefOn.checked, toolsOff: TOOL_GROUPS.filter((g) => !f[`tool-${g}`].checked) };
+    const body = { url: f.url.value, sizeGb: f.sizeGb.value, dayGb: f.dayGb.value, tz: f.tz.value, briefTime: f.briefTime.value, briefOn: f.briefOn.checked, model: f.model.value, maxTier: f.maxTier.value, quiet: { on: f.quietOn.checked, from: f.quietFrom.value, to: f.quietTo.value }, toolsOff: TOOL_GROUPS.filter((g) => !f[`tool-${g}`].checked) };
     if (f.secret.value) body.secret = f.secret.value;
     try { await api('PUT', '/api/admin/cockerel', body); flash(f, 'Saved'); window.cockerelAdminLoad(); } catch (err) { flash(f, err.message, false); }
   });

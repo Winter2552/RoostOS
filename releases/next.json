@@ -5,6 +5,18 @@
       "text": "Add your cars with a photo (from Glint or your camera) and decide who else can see each one. Dates, fuel and service history are coming next.",
       "image": "cars-garage.png",
       "admin": true
+    },
+    {
+      "title": "Cockerel picks his own brain",
+      "text": "For each message he chooses Haiku, Sonnet or Opus, whichever is cheapest and still good enough, and says which in a small tag. Tap Think harder to use the strongest model for one message, or pin one in Admin.",
+      "image": "cockerel-smarter.png",
+      "admin": true
+    },
+    {
+      "title": "A smarter, better-remembering Cockerel",
+      "text": "He keeps the thread of a long chat, reads text files you drop in his Nest folder, knows what you are watching, does sums properly, learns routines, holds small notes for the morning in quiet hours, and double-checks risky actions. Tap Not right when he gets one wrong.",
+      "image": "cockerel-smarter.png",
+      "admin": true
     }
   ]
 }

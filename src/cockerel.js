@@ -138,12 +138,41 @@ class Cockerel {
     const c = this.data();
     const item = { id: this.newId(), at: new Date(this.now()).toISOString(), kind: clip(entry.kind, 12) || 'note', text: clip(entry.text, 2000) };
     if (entry.options) item.options = entry.options.slice(0, 3).map((o) => clip(o, 40));
+    if (entry.model) item.model = clip(entry.model, 10);
+    if (entry.why) item.why = clip(entry.why, 60);
     if (entry.askId) item.askId = clip(entry.askId, 60);
     if (entry.file) item.file = { id: clip(entry.file.id, 60), name: clip(entry.file.name, 120), size: Math.max(0, Number(entry.file.size) || 0) };
     c.log.push(item);
     if (c.log.length > LOG_MAX) c.log.splice(0, c.log.length - LOG_MAX);
     this.store.save();
     return item;
+  }
+
+  // "That was wrong": keeps what Raven asked and what he answered, newest 50.
+  flagWrong(id, note = '') {
+    const c = this.data();
+    const i = c.log.findIndex((e) => e.id === id && e.kind === 'cockerel');
+    if (i < 0) return null;
+    const asked = [...c.log.slice(0, i)].reverse().find((e) => e.kind === 'you');
+    if (!Array.isArray(c.flags)) c.flags = [];
+    if (c.flags.some((f) => f.reply === id)) return null;
+    const flag = { id: this.newId(), reply: id, at: new Date(this.now()).toISOString(), asked: clip(asked && asked.text, 600), answer: clip(c.log[i].text, 1500), model: c.log[i].model || '', note: clip(note, 300) };
+    c.flags.push(flag);
+    if (c.flags.length > 50) c.flags.splice(0, c.flags.length - 50);
+    c.log[i].wrong = true;
+    this.store.save();
+    return flag;
+  }
+
+  // Takes finished or stuck job cards off the panel (never one that is downloading
+  // or being filed). With an id, just that card; without, all of them.
+  clearJobs(id) {
+    const c = this.data();
+    const busy = (j) => j.state === 'Downloading' || j.state === 'Adding';
+    const before = c.jobs.length;
+    c.jobs = c.jobs.filter((j) => busy(j) || (id && j.id !== id));
+    if (c.jobs.length !== before) this.store.save();
+    return before - c.jobs.length;
   }
 
   setJob(job) {
@@ -157,7 +186,8 @@ class Cockerel {
       if (c.jobs.length > JOB_MAX) c.jobs.splice(0, c.jobs.length - JOB_MAX);
     }
     if (job.title) j.title = clip(job.title, 120);
-    if (STATES.includes(job.state)) j.state = job.state;
+    if (STATES.includes(job.state)) { j.state = job.state; if (job.state !== 'Downloading') j.detail = ''; }
+    if (typeof job.detail === 'string' && j.state === 'Downloading') j.detail = clip(job.detail, 60);
     if (Number.isFinite(job.progress)) j.progress = Math.max(0, Math.min(100, Math.round(job.progress)));
     if (job.requester) j.requester = clip(job.requester, 60);
     j.updatedAt = new Date(this.now()).toISOString();
@@ -195,7 +225,7 @@ class Cockerel {
   }
 }
 
-const STATES = ['Requested', 'Finding', 'Downloading', 'Added', 'Failed'];
+const STATES = ['Requested', 'Finding', 'Downloading', 'Adding', 'Added', 'Failed'];
 
 class CockerelError extends Error {
   constructor(message, status = 400) {

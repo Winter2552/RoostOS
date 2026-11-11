@@ -50,7 +50,14 @@ He shares your Claude allowance. The service wakes Claude only for a chat messag
 
 ## 5. Share the media folders
 
-He needs read-write access to three folders on the data drive, and nothing else: `incoming`, `Movies` and `Series` inside the Roostflix folder (`/media/roosthdd/media/roostflix`).
+He needs read-write access to three folders on the data drive, and nothing else: `incoming`, `Movies` and `Series` inside the Roostflix folder (`/media/roosthdd/media/roostflix`). Folders created by Jellyfin or Docker are owned by root, so give his share user write access once, on the Optiplex:
+
+```
+sudo mkdir -p /media/roosthdd/media/roostflix/{incoming,Movies,Series}
+sudo chmod -R a+rwX /media/roosthdd/media/roostflix
+```
+
+Before every download he checks he can write to those folders, and says which one fails if not. While it runs, the percent, speed and time left show on the VM screen and on his job card in Roost, and he never seeds (aria2 stops the moment the download is done).
 
 1. In ZimaOS **Files**, share the folder as an SMB share (a user just for him, with a password).
 2. In the VM: put `username=…` and `password=…` in `/etc/cockerel/smb` (`chmod 600`), then add to `/etc/fstab`:
@@ -101,6 +108,12 @@ Snapshot the VM before big changes and weekly. Use the VM app's snapshot or back
 ## As a personal assistant
 
 Besides films, he can research the web, send you files (saved in Nest under Cockerel), keep notes, tasks and reminders, run repeating jobs you approve, send a morning brief, read your calendar and unread email (read-only), read your Birdhouse plans and propose emails or Roost actions. All of it is set up in Roost under Admin → Server → Cockerel (time zone, brief, a switch per tool, calendar link, email app password). Things that change anything outside his own notebook (an email, a restart, a backup, an update, a repeating job) wait for your tap in his chat. Research and general chat can use the web but cannot download; film jobs can download but cannot browse.
+
+## Which Claude model he uses (the router)
+
+For every chat message he picks the cheapest model that does the job well, using `router.js`. Plain rules decide the clear cases for free (a reminder or task goes to Haiku, research, comparing and planning go to Opus, an everyday question goes to Sonnet). Only a vague message costs one tiny Haiku call to decide. If a smaller model runs out of steps, he retries once one tier up, never above the cap. Film jobs never run on Haiku. In Admin you can pin a model, set the most he may use, and see today's runs per model. **Think harder** in the chat uses the strongest allowed model for the next message. Scheduled jobs and the brief use Sonnet unless you pin another. Models can be changed with `COCKEREL_MODEL_HAIKU`, `COCKEREL_MODEL_SONNET` and `COCKEREL_MODEL_OPUS` in the service environment.
+
+He also keeps the last 16 chat lines (with a one-line gist of older ones), can hand a film job to his download self when a request mixes research and a film (`handoff`), reads text files in Nest's Cockerel folder, sees what you are watching, does sums in a sandbox, keeps named routines, holds small phone notes in quiet hours for the morning brief, and has a cheap second look at any email, restart, backup or update before it reaches your tap. Replies have a **Not right** link; those are listed in Admin so his prompt can be improved. After changing his prompt or tools, run `COCKEREL_SECRET=... npm run cockerel-eval` on the VM (about 15 messages, by hand only).
 
 ## Updating
 

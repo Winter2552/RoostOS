@@ -38,6 +38,7 @@ const remoteAccess = require('./remote');
 const { Coffee, validSecret, newSecret } = require('./coffee');
 const galaxies = require('./galaxies');
 const wireguard = require('./wireguard');
+const awayVpn = require('./away');
 const templates = require('./templates');
 const { cleanSchedule, isDue } = require('./schedule');
 const { CertManager, validDomain } = require('./tls');
@@ -282,7 +283,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, coffeeOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, registryFetch, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000, alertIntervalMs = 60 * 1000, readContainers, push: pushOptions = {}, portOptions = {}, aiBase } = {}) {
+function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, coffeeOptions = {}, awayOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, registryFetch, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000, alertIntervalMs = 60 * 1000, readContainers, push: pushOptions = {}, portOptions = {}, aiBase } = {}) {
   const store = new Store(dataDir);
   const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
   // The few outside services Roost leans on, for the admin's status page.
@@ -297,10 +298,26 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     extraNames: () => {
       const { domain } = store.db.settings.tls || {};
       const on = (store.db.settings.coffee || {}).enabled || (store.db.settings.galaxies || []).some((g) => g.enabled);
-      return domain && on ? [`nova.${domain}`] : [];
+      return [...(domain && on ? [`nova.${domain}`] : []), ...awayNames()];
     },
+    // The Away from home name carries UDP, which Cloudflare's proxy can't, so its record is grey.
+    greyNames: () => awayNames(),
     ...remoteOptions,
   });
+  // Away from home: a WireGuard server for phones and PCs outside the house (src/away.js).
+  const away = new awayVpn.Away(path.join(dataDir, 'wireguard'), awayOptions);
+  function awayHost() {
+    const a = store.db.settings.away || {};
+    const { domain } = store.db.settings.tls || {};
+    return a.host || (domain ? `away.${domain}` : '');
+  }
+  // The name is kept pointed at home along with the others when it is under our domain.
+  function awayNames() {
+    const { domain } = store.db.settings.tls || {};
+    const a = store.db.settings.away || {};
+    const host = awayHost();
+    return a.enabled && domain && host && (host === domain || host.endsWith(`.${domain}`)) ? [host] : [];
+  }
   // Coffee Galaxy lives on another server, reached over a WireGuard link Roost makes.
   const link = new wireguard.WireGuard(path.join(dataDir, 'wireguard'), coffeeOptions.wireguard);
   const coffee = new Coffee({
@@ -651,7 +668,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // Cockerel's notebook: reminders fire here, and a repeating job or the
   // morning brief wakes him only when its minute comes.
   const runCockerelJob = (prompt, label, { always = false } = {}) => {
-    cockerel.call('POST', '/run', { prompt, mode: 'scheduled', context: assistant.context(), toolsOff: assistant.settings().toolsOff }, 5 * 60 * 1000).then((out) => {
+    cockerel.call('POST', '/run', { prompt, mode: 'scheduled', context: assistant.context(), toolsOff: assistant.settings().toolsOff, router: { model: assistant.settings().model, maxTier: assistant.settings().maxTier } }, 5 * 60 * 1000).then((out) => {
       const text = str(out.reply, 4000);
       if (!text || (!always && /^nothing\b/i.test(text))) return;
       cockerel.add({ kind: 'cockerel', text });
@@ -728,7 +745,13 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     if (!cockerel.enabled() || cockerel.config().paused) return;
     for (const j of assistant.dueJobs(now)) runCockerelJob(`Scheduled job. ${j.text}\n\nIf there is nothing worth telling Raven, reply with just the word NOTHING.`, 'Cockerel');
     if (assistant.briefDue(now)) {
-      briefFacts().then((facts) => runCockerelJob(`Write Raven's morning brief, in short spoken sentences, under 120 words, no markdown. Facts from Roost:\n${facts}\nAlso run cockerel-tool events 15 for overnight alerts and mention anything that needs him. If your notes name where he lives, search the web for today's weather there. Say if anything needs a decision from him.`, 'Morning brief', { always: true }));
+      briefFacts().then((facts) => {
+        const held = assistant.takeHeld();
+        const alerts = cockerel.data().log.filter((e) => e.kind === 'event' && Date.now() - Date.parse(e.at) < 24 * 3600e3).length;
+        // A quiet day costs nothing: no tasks, no reminders, nothing new, no alerts, nothing held.
+        if (facts.trim() === 'No open tasks.' && !held.length && !alerts) return;
+        runCockerelJob(`Write Raven's morning brief, in short spoken sentences, under 120 words, no markdown. Lead with what changed or needs a decision; leave out anything quiet. Facts from Roost:\n${facts}${held.length ? `\nHeld overnight while he was in quiet hours: ${held.join('; ')}` : ''}\nAlso run cockerel-tool events 15 for overnight alerts and mention anything that needs him. If your notes name where he lives, search the web for today's weather there.`, 'Morning brief', { always: true });
+      });
     }
   };
   const scheduleTimer = setInterval(() => { runSchedules(); assistantTick(); }, scheduleCheckMs);
@@ -1057,7 +1080,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // Settings for the admin page. The mail password never leaves the server.
   function settingsView() {
     // The Cloudflare token (in tls) stays on the server.
-    const { mail: _mail, jellyfin: _jellyfin, tls: _tls, coffee: _coffee, wireguard: _wireguard, galaxies: _galaxies, birdhouseAi: _birdhouseAi, cockerel: _cockerel, ...rest } = db().settings;
+    const { mail: _mail, jellyfin: _jellyfin, tls: _tls, coffee: _coffee, wireguard: _wireguard, away: _away, galaxies: _galaxies, birdhouseAi: _birdhouseAi, cockerel: _cockerel, ...rest } = db().settings;
     return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()), publicLinks: rest.publicLinks !== false, birdhouseFetch: rest.birdhouseFetch === true, birdhouseAi: aiView(), ...energyView() };
   }
 
@@ -2523,6 +2546,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         tls: certs.status(),
         remote: remote.view(),
         coffee: coffeeView(),
+        away: await awayView(),
         galaxies: galaxiesView(),
         ticked: db().settings.setupTicked || [],
         backup: backup.readStatus(dataDir),
@@ -3058,6 +3082,80 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       send(res, 200, remote.view());
     },
 
+    // ---------- Away from home (WireGuard for devices outside the house) ----------
+
+    'GET /api/admin/away': async (req, res) => {
+      requireAdmin(req);
+      send(res, 200, await awayView());
+    },
+
+    'PUT /api/admin/away': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const before = db().settings.away || {};
+      const enabled = body.enabled === true;
+      const host = body.host === undefined || body.host === '' ? '' : awayVpn.cleanHost(body.host);
+      const lan = body.lan === undefined || body.lan === '' ? (before.lan || awayVpn.DEFAULT_LAN) : awayVpn.cleanLan(body.lan);
+      if (host === null) throw new HttpError(400, 'The address should be a name like away.roostos.network or your home IP address');
+      if (lan === null) throw new HttpError(400, 'The home network should look like 192.168.4.0/24 (a private range)');
+      const next = { ...before, enabled, host, lan, devices: before.devices || [] };
+      if (enabled && !(host || awayHost())) throw new HttpError(400, 'Set the domain under Secure connection first, or type the address devices should connect to');
+      db().settings.away = next;
+      let note = '';
+      if (enabled) {
+        // A device that already has a config keeps the address it was given, so a changed name
+        // or home network only reaches devices added after this.
+        const name = awayNames()[0];
+        if (name) {
+          try { await remote.pointGrey(name); } catch (err) { note = `Saved, but Roost couldn't make the DNS record for ${name}: ${err.message}`; }
+        }
+      }
+      away.write(next);
+      next.applied = { ...(await away.apply()), at: Date.now() };
+      store.save();
+      const changes = [];
+      if (enabled !== Boolean(before.enabled)) changes.push(`Away from home ${enabled ? 'on' : 'off'}`);
+      if (changes.length) record(req, 'settings-changed', { actor: admin.username, detail: changes.join(', ') });
+      send(res, 200, { ...(await awayView()), note });
+    },
+
+    // Makes a device's keys and returns its config and QR code once; the private key is not kept.
+    'POST /api/admin/away/devices': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const a = db().settings.away || {};
+      const host = awayHost();
+      if (!a.enabled || !host) throw new HttpError(400, 'Turn on Away from home first');
+      const name = awayVpn.cleanName(body.name);
+      if (!name) throw new HttpError(400, 'Give the device a name, like "Raven iPhone"');
+      const devices = a.devices || [];
+      const made = away.newDevice(devices, { host, lan: a.lan || awayVpn.DEFAULT_LAN });
+      if (!made) throw new HttpError(400, `Roost keeps up to ${awayVpn.MAX_DEVICES} devices; remove one first`);
+      const device = { id: made.id, name, publicKey: made.publicKey, address: made.address, createdAt: Date.now() };
+      a.devices = [...devices, device];
+      db().settings.away = a;
+      away.write(a);
+      a.applied = { ...(await away.apply()), at: Date.now() };
+      store.save();
+      record(req, 'settings-changed', { actor: admin.username, detail: `Away from home: added device ${name}` });
+      let qr = '';
+      try { qr = qrSvg(made.config); } catch { /* too long for a code: the file download still works */ }
+      send(res, 200, { ...(await awayView()), added: { id: device.id, name, config: made.config, qr } });
+    },
+
+    'DELETE /api/admin/away/devices/:id': async (req, res, id) => {
+      const admin = requireAdmin(req);
+      const a = db().settings.away || {};
+      const device = (a.devices || []).find((d) => d.id === id);
+      if (!device) throw new HttpError(404, 'No such device');
+      a.devices = a.devices.filter((d) => d.id !== id);
+      away.write(a);
+      a.applied = { ...(await away.apply()), at: Date.now() };
+      store.save();
+      record(req, 'settings-changed', { actor: admin.username, detail: `Away from home: removed device ${device.name}` });
+      send(res, 200, await awayView());
+    },
+
     // ---------- Coffee Galaxy gateway ----------
 
     'GET /api/admin/coffee': (req, res) => {
@@ -3298,20 +3396,36 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         ...cockerel.view(),
         log: c.log.slice(-100),
         jobs: c.jobs.slice(-10).reverse(),
+        flags: (c.flags || []).slice(-5).reverse(),
         todayGb: Math.round((cockerel.dayBytes() / COCKEREL_GB) * 10) / 10,
         status: cockerel.enabled() ? await cockerel.status() : null,
       });
     },
 
+    // "Not right": keeps the question and his answer so Raven (and I) can see where he falls short.
+    'POST /api/cockerel/wrong': async (req, res) => {
+      requireAdmin(req);
+      const body = await readJson(req);
+      send(res, 200, { ok: Boolean(cockerel.flagWrong(str(body.id, 60), str(body.note, 300))) });
+    },
+
+    'POST /api/cockerel/jobs/clear': async (req, res) => {
+      requireAdmin(req);
+      const body = await readJson(req);
+      send(res, 200, { cleared: cockerel.clearJobs(body.id ? str(body.id, 60) : '') });
+    },
+
     'POST /api/cockerel/chat': async (req, res) => {
       const admin = requireAdmin(req);
       if (cockerel.config().paused) throw new HttpError(409, 'Cockerel is paused. Press Resume first');
-      const text = str((await readJson(req)).text, 2000);
+      const payload = await readJson(req);
+      const text = str(payload.text, 2000);
       if (!text) throw new HttpError(400, 'Type a message');
       cockerel.add({ kind: 'you', text });
       try {
-        const out = await cockerel.call('POST', '/chat', { text, from: admin.username, context: assistant.context(), toolsOff: assistant.settings().toolsOff }, 5 * 60 * 1000);
-        const reply = cockerel.add({ kind: 'cockerel', text: str(out.reply, 4000) || 'Done.' });
+        const set = assistant.settings();
+        const out = await cockerel.call('POST', '/chat', { text, from: admin.username, context: assistant.context(), toolsOff: set.toolsOff, router: { model: set.model, maxTier: set.maxTier }, think: payload.think === true }, 5 * 60 * 1000);
+        const reply = cockerel.add({ kind: 'cockerel', text: str(out.reply, 4000) || 'Done.', model: out.model, why: out.why });
         send(res, 200, { reply });
       } catch (err) {
         if (!(err instanceof CockerelError)) throw err;
@@ -3410,7 +3524,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       }
       if (body.paused !== undefined) changes.paused = body.paused === true;
       const mine = {};
-      for (const k of ['tz', 'briefOn', 'briefTime', 'toolsOff']) if (body[k] !== undefined) mine[k] = k === 'tz' || k === 'briefTime' ? str(body[k], 40) : body[k];
+      for (const k of ['tz', 'briefOn', 'briefTime', 'toolsOff', 'model', 'maxTier', 'quiet']) if (body[k] !== undefined) mine[k] = ['tz', 'briefTime', 'model', 'maxTier'].includes(k) ? str(body[k], 40) : body[k];
       try { if (Object.keys(mine).length) assistant.saveSettings(mine); } catch (err) {
         if (err instanceof AssistantError) throw new HttpError(err.status, err.message);
         throw err;
@@ -3574,6 +3688,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
           if (!c.notified || c.notified.day !== day) c.notified = { day, n: 0 };
           if (c.notified.n >= 10) throw new HttpError(429, 'That is enough phone notes for today');
           c.notified.n += 1;
+          if (assistant.isQuiet() && body.urgent !== true) {
+            // Quiet hours: it waits and goes into the morning brief instead.
+            assistant.hold(str(body.text, 200));
+            cockerel.add({ kind: 'note', text: `Held for the morning (quiet hours): ${str(body.text, 200)}` });
+            return send(res, 200, { ok: true, held: true });
+          }
           pushNotify({ title: 'Cockerel', body: str(body.text, 200), tag: `cockerel-n-${Date.now()}`, url: '/#/cockerel' });
           cockerel.add({ kind: 'note', text: `Phone note: ${str(body.text, 200)}` });
           return send(res, 200, { ok: true });
@@ -3653,6 +3773,50 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
           } catch (err) {
             throw new HttpError(502, err.message);
           }
+        }
+        case 'watching': {
+          // What Raven is part way through, and what was added lately, so he can suggest something to watch.
+          if (!jellyfin.enabled()) return send(res, 200, { lines: ['Roostflix is not linked'] });
+          const owner = db().users.find((u) => u.role === 'admin');
+          const lines = [];
+          const resume = owner ? await jellyfin.resume(owner.username).catch(() => []) : [];
+          if (resume.length) lines.push('Part way through:', ...resume.slice(0, 8).map((i) => `- ${i.name || i.title || 'Untitled'}`));
+          const added = await jellyfin.call('GET', '/Items?Recursive=true&IncludeItemTypes=Movie,Series&SortBy=DateCreated&SortOrder=Descending&Limit=10').catch(() => null);
+          const recent = ((added && added.Items) || []).map((i) => `- ${i.Name}${i.ProductionYear ? ` (${i.ProductionYear})` : ''}`);
+          if (recent.length) lines.push('Added lately:', ...recent);
+          return send(res, 200, { lines: lines.length ? lines : ['Nothing to report yet.'] });
+        }
+        case 'nest': {
+          // Read-only, and only inside Raven's Cockerel folder (his own files and a Drop folder).
+          const owner = db().users.find((u) => u.role === 'admin');
+          if (!owner) throw new HttpError(409, 'No admin');
+          const root = nest.q.findFolder.get(owner.id, '', 'Cockerel');
+          if (!root) return send(res, 200, { lines: ['The Cockerel folder in Nest is empty. Raven can drop files in Cockerel/Drop.'] });
+          let node = root;
+          const parts = String(body.path || '').split('/').map((x) => x.trim()).filter(Boolean).slice(0, 6);
+          for (const part of parts) {
+            const page = nest.list(owner, node.id);
+            const hit = page.items.find((i) => i.name.toLowerCase() === part.toLowerCase());
+            if (!hit) throw new HttpError(404, `No "${part}" in the Cockerel folder`);
+            node = hit;
+            if (node.kind !== 'folder' && part !== parts[parts.length - 1]) throw new HttpError(400, 'That is a file, not a folder');
+          }
+          if (node.kind === 'folder' || node.type === 'folder') {
+            const page = nest.list(owner, node.id);
+            return send(res, 200, { lines: page.items.length ? page.items.slice(0, 60).map((i) => `${i.kind === 'folder' || i.type === 'folder' ? '[folder] ' : ''}${i.name}${i.size ? ` (${Math.round(i.size / 1024) || 1} KB)` : ''}`) : ['(empty)'] });
+          }
+          if (!/\.(md|txt|csv|json|html|ics)$/i.test(node.name)) throw new HttpError(415, 'I can only read text files (md, txt, csv, json, html, ics) for now');
+          const file = nest.diskPath(owner, node.id);
+          const st = fs.statSync(file);
+          if (st.size > 200 * 1024) throw new HttpError(413, 'That file is over 200 KB; I read small files only');
+          return send(res, 200, { text: fs.readFileSync(file, 'utf8').slice(0, 60000) });
+        }
+        case 'routine': {
+          if (body.op === 'save') return send(res, 200, { item: assistant.saveRoutine(body.name, body.text) });
+          if (body.op === 'remove') { assistant.removeRoutine(str(body.name, 40)); return send(res, 200, { ok: true }); }
+          const r = body.name ? assistant.routine(str(body.name, 40)) : null;
+          if (body.name && !r) throw new HttpError(404, 'No routine with that name');
+          return send(res, 200, r ? { text: r.text } : { lines: assistant.data().routines.map((x) => `${x.name}: ${x.text}`) });
         }
         case 'refresh':
           // After he files a new download in the Roostflix folders.
@@ -3786,7 +3950,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/movie-requests|admin\/setup|admin\/galaxies|storage\/users|links|me\/devices|birdhouse\/plans|cars|alerts|push\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart|\/secret|\/compose|\/check|\/dismiss|\/share|\/archive|\/photo)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/movie-requests|admin\/setup|admin\/galaxies|admin\/away\/devices|storage\/users|links|me\/devices|birdhouse\/plans|cars|alerts|push\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart|\/secret|\/compose|\/check|\/dismiss|\/share|\/archive|\/photo)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }
@@ -3836,6 +4000,23 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       return res.end(OPENER_HTML);
     }
     jellyfin.proxy(req, res);
+  }
+
+  // ---------- Away from home ----------
+
+  async function awayView() {
+    const a = db().settings.away || {};
+    const shakes = a.enabled ? await away.handshakes() : {};
+    const { domain } = db().settings.tls || {};
+    return {
+      enabled: Boolean(a.enabled),
+      host: a.host || '',
+      defaultHost: domain ? `away.${domain}` : '',
+      lan: a.lan || awayVpn.DEFAULT_LAN,
+      port: awayVpn.PORT,
+      applied: a.applied || null,
+      devices: (a.devices || []).map((d) => ({ id: d.id, name: d.name, address: d.address, createdAt: d.createdAt, lastSeen: shakes[d.publicKey] ? shakes[d.publicKey] * 1000 : null })),
+    };
   }
 
   // ---------- Coffee Galaxy ----------
