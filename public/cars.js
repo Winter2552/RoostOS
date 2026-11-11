@@ -6,7 +6,7 @@
 
 (() => {
   const root = () => document.getElementById('cars-root');
-  const S = { cars: [], people: [], loaded: false, ask: 0, glint: false };
+  const S = { cars: [], people: [], loaded: false, ask: 0, glint: false, dvla: false };
 
   const h = (tag, props = {}, ...kids) => {
     const n = document.createElement(tag);
@@ -51,6 +51,7 @@
     const data = await api('GET', '/api/cars');
     S.cars = data.cars;
     S.people = data.people;
+    S.dvla = data.dvla === true;
     S.loaded = true;
   }
 
@@ -581,6 +582,31 @@
     return box;
   }
 
+  // ---------- the optional DVLA check ----------
+
+  // Asks the DVLA about the car's plate and offers what it says as buttons;
+  // nothing changes until a button is pressed.
+  async function checkDvla(car, box) {
+    fill(box, h('p', { class: 'muted mono', text: 'Asking the DVLA…' }));
+    let v;
+    try { v = await api('POST', `/api/cars/${car.id}/dvla`); } catch (err) { fill(box, h('p', { class: 'car-warn', text: err.message })); return; }
+    const apply = async (fn) => { try { await fn(); await load(); carPage(car.id, 'Updated from the DVLA.'); } catch (err) { say(err.message); } };
+    const upsert = (kind, due) => apply(async () => {
+      const have = (car.dates || []).find((d) => d.kind === kind);
+      if (have) await api('PATCH', `/api/cars/${car.id}/dates/${have.id}`, { due });
+      else await api('POST', `/api/cars/${car.id}/dates`, { kind, due });
+    });
+    const row = (label, value, action) => h('div', { class: 'car-dvlarow' }, h('span', { class: 'car-dlabel' }, h('b', { text: label }), h('span', { class: 'muted', text: value })), action);
+    const detail = [v.make, v.year, v.fuel, v.colour].filter(Boolean).join(' · ');
+    const differs = (v.make && v.make !== car.make) || (v.year && v.year !== car.year) || (v.fuel && v.fuel !== car.fuel);
+    fill(box, h('div', { class: 'card car-dvla' },
+      h('div', { class: 'car-bar' }, h('h3', { text: 'The DVLA says' }), h('button', { class: 'btn small ghost', type: 'button', text: 'Close', onclick: () => fill(box) })),
+      detail ? row('Car', detail, differs ? h('button', { class: 'btn small', type: 'button', text: 'Use these', onclick: () => apply(() => api('PATCH', `/api/cars/${car.id}`, { ...(v.make ? { make: v.make } : {}), ...(v.year ? { year: v.year } : {}), ...(v.fuel ? { fuel: v.fuel } : {}) })) }) : null) : null,
+      row('MOT', v.mot.due ? `${v.mot.status || 'Due'} until ${niceDay(v.mot.due)}` : v.mot.status || 'No date given', v.mot.due ? h('button', { class: 'btn small', type: 'button', text: 'Set MOT date', onclick: () => upsert('mot', v.mot.due) }) : null),
+      row('Road tax', v.tax.due ? `${v.tax.status || 'Due'} until ${niceDay(v.tax.due)}` : v.tax.status || 'No date given', v.tax.due ? h('button', { class: 'btn small', type: 'button', text: 'Set tax date', onclick: () => upsert('tax', v.tax.due) }) : null),
+      h('p', { class: 'muted car-soon', text: 'From the DVLA’s Vehicle Enquiry Service. Nothing changes until you press a button.' })));
+  }
+
   function carPage(id, notice) {
     const car = S.cars.find((c) => c.id === id);
     if (!car) { location.hash = '#/cars'; return; }
@@ -590,6 +616,7 @@
     const file = h('input', { type: 'file', accept: 'image/*', class: 'hidden', onchange: (e) => e.target.files[0] && sendPhoto(car, e.target.files[0]) });
     const r = root();
     const costsHolder = h('div');
+    const dvlaBox = h('div');
     fill(r, 
       h('div', { class: 'car-bar' }, h('a', { class: 'btn small ghost', href: '#/cars', 'aria-label': 'Back to cars', text: '‹' }), h('h2', { text: car.name }),
         car.archived ? h('span', { class: 'mono muted', text: 'Archived' }) : null),
@@ -598,7 +625,9 @@
       mine ? h('div', { class: 'car-actions' }, file,
         h('button', { class: 'btn small', type: 'button', text: car.photo ? 'Change photo' : 'Add photo', onclick: () => file.click() }),
         S.glint ? h('button', { class: 'btn small ghost', type: 'button', text: 'From Glint', onclick: () => glintPicker(car) }) : null,
+        S.dvla && car.plate ? h('button', { class: 'btn small ghost', type: 'button', text: 'Check with DVLA', onclick: () => checkDvla(car, dvlaBox) }) : null,
         car.photo ? h('button', { class: 'btn small ghost', type: 'button', text: 'Remove photo', onclick: async () => { try { Object.assign(car, await api('DELETE', `/api/cars/${car.id}/photo`)); carPage(id); } catch (err) { say(err.message); } } }) : null) : null,
+      dvlaBox,
       costsHolder,
       datesBlock(car),
       h('dl', { class: 'car-facts' },

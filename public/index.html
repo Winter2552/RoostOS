@@ -850,6 +850,15 @@
         <div class="msg" role="status"></div>
       </form>
 
+      <form class="card panel" id="cars-dvla" data-sec="server">
+        <h3>Cars and the DVLA</h3><span class="mono muted">Optional. Adds a Check with DVLA button to each car</span>
+        <p class="muted" id="dvla-state"></p>
+        <label>DVLA API key<input type="password" name="key" autocomplete="off" spellcheck="false" placeholder="Paste the key from the DVLA"></label>
+        <p class="muted">Free from the DVLA's Vehicle Enquiry Service (register-for-ves.driver-vehicle-licensing.api.gov.uk). Kept encrypted on this server and never shown again, only its last four characters. It only runs when someone presses the button on a car; only the plate is sent, and the answer is a suggestion they confirm.</p>
+        <div class="row"><button class="btn" type="submit">Save</button> <button class="btn ghost" type="button" id="dvla-remove" hidden>Remove key</button></div>
+        <div class="msg" role="status"></div>
+      </form>
+
       <form class="card panel" id="tls-form" data-sec="network">
         <h3>Secure connection</h3><span class="mono muted">HTTPS for your domain and every name under it, renewed automatically</span>
         <p class="tls-state" id="tls-state"><span class="dot"></span><span>Checking…</span></p>
