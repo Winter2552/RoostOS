@@ -159,3 +159,22 @@ test('bad input is refused', async () => {
   assert.equal((await call('POST', '/api/cars', { name: 'X', fuel: 'steam' }, sam)).status, 400);
   assert.equal((await call('GET', '/api/cars')).status, 401);
 });
+
+test('dates over HTTP: add, change, snooze, renew, remove, and nobody else can touch them', async () => {
+  const car = (await call('POST', '/api/cars', { name: 'Van' }, sam)).body;
+  const added = await call('POST', `/api/cars/${car.id}/dates`, { kind: 'mot', due: '2030-05-01' }, sam);
+  assert.equal(added.status, 201, JSON.stringify(added.body));
+  const did = added.body.dates[0].id;
+  assert.equal((await call('POST', `/api/cars/${car.id}/dates`, { kind: 'mot', due: 'soon' }, sam)).status, 400);
+  assert.equal((await call('PATCH', `/api/cars/${car.id}/dates/${did}`, { due: '2030-06-01', label: 'MOT test' }, sam)).body.dates[0].label, 'MOT test');
+  assert.equal((await call('POST', `/api/cars/${car.id}/dates/${did}/snooze`, null, sam)).status, 200);
+  const renewed = await call('POST', `/api/cars/${car.id}/dates/${did}/done`, {}, sam);
+  assert.equal(renewed.body.dates[0].due, '2031-06-01');
+  for (const who of [admin, guest]) {
+    assert.equal((await call('POST', `/api/cars/${car.id}/dates/${did}/done`, {}, who)).status, 404);
+    assert.equal((await call('DELETE', `/api/cars/${car.id}/dates/${did}`, null, who)).status, 404);
+  }
+  assert.equal((await call('GET', `/api/cars/${car.id}`, null, sam)).body.next.label, 'MOT test');
+  const gone = await call('DELETE', `/api/cars/${car.id}/dates/${did}`, null, sam);
+  assert.deepEqual(gone.body.dates, []);
+});

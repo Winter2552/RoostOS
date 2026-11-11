@@ -25,6 +25,12 @@
 
   const CAR = '<svg viewBox="0 0 120 50" width="120" height="50" aria-hidden="true"><path d="M6 36 L10 26 Q12 20 20 19 L38 17 L50 7 Q53 5 58 5 H80 Q86 5 90 10 L98 19 L110 22 Q116 24 116 30 V36 H104 M96 36 H30" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/><circle cx="24" cy="37" r="8" fill="var(--bg)" stroke="currentColor" stroke-width="2.5"/><circle cx="96" cy="37" r="8" fill="var(--bg)" stroke="currentColor" stroke-width="2.5"/></svg>';
 
+
+  const KINDS = [['mot', 'MOT'], ['tax', 'Road tax'], ['insurance', 'Insurance'], ['service', 'Service'], ['cover', 'Breakdown cover'], ['custom', 'Other']];
+  const niceDay = (d) => new Date(`${d}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  const leftText = (n) => (n < 0 ? `${-n} day${n === -1 ? '' : 's'} overdue` : n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : `${n} days`);
+  const pill = (n) => h('span', { class: `car-pill${n <= 30 ? ' warn' : ''}${n < 0 ? ' late' : ''}`, text: leftText(n) });
+
   async function api(method, url, body) {
     const res = await fetch(url, {
       method, credentials: 'same-origin',
@@ -73,7 +79,9 @@
   function tile(car) {
     const sub = [car.plate, car.role !== 'owner' ? `${car.owner}’s car` : car.household ? 'Household' : car.shares && car.shares.length ? `Shared with ${car.shares.length}` : ''].filter(Boolean).join(' · ');
     return h('a', { class: 'card car-tile', href: `#/cars/${car.id}` }, photo(car, 'car-photo'),
-      h('div', { class: 'car-info' }, h('b', { text: car.name }), h('span', { class: 'muted', text: sub || [car.make, car.model].filter(Boolean).join(' ') || ' ' })));
+      h('div', { class: 'car-info' },
+        h('div', { class: 'car-line' }, h('b', { text: car.name }), car.next ? h('span', { class: 'car-next' }, h('span', { class: 'muted', text: car.next.label }), pill(car.next.daysLeft)) : null),
+        h('span', { class: 'muted', text: sub || [car.make, car.model].filter(Boolean).join(' ') || ' ' })));
   }
 
   // Shrinks any picture to a 900px JPEG, so a 12 MB phone photo becomes ~150 KB.
@@ -181,6 +189,68 @@
     } catch (err) { fill(dlg, h('p', { text: err.message }), h('button', { class: 'btn small ghost', type: 'button', text: 'Close', onclick: close })); }
   }
 
+
+  // ---------- dates ----------
+
+  function dateForm(car, existing) {
+    const f = h('form', { class: 'car-form car-dateform', autocomplete: 'off' });
+    const kind = h('select', { name: 'kind' }, KINDS.map(([v, t]) => h('option', { value: v, text: t, selected: (existing ? existing.kind : 'mot') === v })));
+    const label = h('input', { name: 'label', maxlength: 40, value: existing && existing.kind === 'custom' ? existing.label : '', placeholder: 'What is it? (tyres, cambelt…)' });
+    const labelBox = h('label', { class: 'hidden' }, h('span', { class: 'mono', text: 'Name' }), label);
+    const showLabel = () => labelBox.classList.toggle('hidden', kind.value !== 'custom');
+    kind.addEventListener('change', showLabel);
+    showLabel();
+    f.append(
+      h('label', {}, h('span', { class: 'mono', text: 'What' }), kind), labelBox,
+      h('label', {}, h('span', { class: 'mono', text: 'Due on' }), h('input', { name: 'due', type: 'date', required: true, value: existing ? existing.due : '' })),
+      h('label', {}, h('span', { class: 'mono', text: 'Repeats every (months, 0 for once)' }), h('input', { name: 'repeatMonths', inputmode: 'numeric', maxlength: 3, value: existing ? existing.repeatMonths : '' , placeholder: 'Usually 12' })),
+      h('div', { class: 'car-actions' }, h('button', { class: 'btn small', type: 'submit', text: existing ? 'Save' : 'Add date' }),
+        h('button', { class: 'btn small ghost', type: 'button', text: 'Cancel', onclick: () => carPage(car.id) })),
+      h('p', { class: 'muted car-soon', text: 'Roost reminds you 30 days and 7 days before, and on the day.' }),
+    );
+    f.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const body = Object.fromEntries(new FormData(f));
+      if (body.kind !== 'custom') body.label = '';
+      try {
+        Object.assign(car, existing ? await api('PATCH', `/api/cars/${car.id}/dates/${existing.id}`, body) : await api('POST', `/api/cars/${car.id}/dates`, body));
+        carPage(car.id);
+      } catch (err) { say(err.message); }
+    });
+    return f;
+  }
+
+  function datesBlock(car) {
+    const mine = car.role === 'owner';
+    const can = mine || car.role === 'editor';
+    const box = h('section', { class: 'car-dates' });
+    const act = async (method, url, body) => {
+      try { Object.assign(car, await api(method, url, body)); carPage(car.id); } catch (err) { say(err.message); }
+    };
+    const rows = car.dates.map((d) => {
+      const more = h('div', { class: 'car-actions hidden' });
+      if (can) {
+        more.append(
+          h('button', { class: 'btn small', type: 'button', text: d.repeatMonths ? 'Renewed' : 'Done', onclick: () => act('POST', `/api/cars/${car.id}/dates/${d.id}/done`, {}) }),
+          d.repeatMonths ? h('label', { class: 'car-pickday' }, h('span', { class: 'mono muted', text: 'or new date' }), h('input', { type: 'date', 'aria-label': 'New due date', onchange: (e) => e.target.value && act('POST', `/api/cars/${car.id}/dates/${d.id}/done`, { due: e.target.value }) })) : null,
+          h('button', { class: 'btn small ghost', type: 'button', text: 'Snooze a week', onclick: () => act('POST', `/api/cars/${car.id}/dates/${d.id}/snooze`) }));
+      }
+      if (mine) {
+        more.append(
+          h('button', { class: 'btn small ghost', type: 'button', text: 'Edit', onclick: () => { fill(box, h('h3', { text: `Edit ${d.label}` }), dateForm(car, d)); } }),
+          h('button', { class: 'btn small danger', type: 'button', text: 'Remove', onclick: () => act('DELETE', `/api/cars/${car.id}/dates/${d.id}`) }));
+      }
+      const row = h('button', { class: 'car-date', type: 'button', 'aria-expanded': 'false', onclick: () => { const open = more.classList.toggle('hidden') === false; row.setAttribute('aria-expanded', String(open)); } },
+        h('span', { class: 'car-dlabel' }, h('b', { text: d.label }), h('span', { class: 'muted', text: `${niceDay(d.due)}${d.repeatMonths ? '' : ' · once'}${d.snoozedUntil ? ` · snoozed to ${niceDay(d.snoozedUntil)}` : ''}` })),
+        pill(d.daysLeft));
+      return h('div', { class: 'car-daterow' }, row, can ? more : null);
+    });
+    fill(box,
+      h('div', { class: 'car-bar' }, h('h3', { text: 'Dates' }), mine ? h('button', { class: 'btn small ghost', type: 'button', text: 'Add a date', onclick: () => fill(box, h('h3', { text: 'Add a date' }), dateForm(car, null)) }) : null),
+      rows.length ? rows : h('p', { class: 'muted', text: mine ? 'Add the MOT, tax, insurance and service dates and Roost will remind you.' : 'No dates yet.' }));
+    return box;
+  }
+
   function carPage(id) {
     const car = S.cars.find((c) => c.id === id);
     if (!car) { location.hash = '#/cars'; return; }
@@ -200,7 +270,8 @@
       h('dl', { class: 'car-facts' },
         ...[['Plate', car.plate], ['Make and model', [car.make, car.model].filter(Boolean).join(' ')], ['Year', car.year], ['Fuel', car.fuel], ['Distance in', car.units === 'km' ? 'Kilometres' : 'Miles'], ['Owner', car.owner]]
           .filter(([, v]) => v).flatMap(([k, v]) => [h('dt', { class: 'mono', text: k }), h('dd', { text: String(v) })])),
-      h('p', { class: 'muted car-soon', text: 'Dates, fuel and service history come next.' }),
+      datesBlock(car),
+      h('p', { class: 'muted car-soon', text: 'Fuel and service history come next.' }),
       mine ? h('details', { class: 'car-edit' }, h('summary', { class: 'mono', text: 'Edit details' }), form(car)) : null,
       mine ? sharePanel(car) : h('p', { class: 'muted', text: car.role === 'editor' ? 'Shared with you: you can add entries.' : 'Shared with you to look at.' }),
       mine ? h('div', { class: 'car-danger' },

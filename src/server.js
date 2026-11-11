@@ -557,6 +557,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     dir: path.join(dataDir, 'cars'),
     hasApp: (u) => visibleApps(store.db, u).some((a) => a.id === 'cars'),
     userExists: (id) => store.db.users.some((u) => u.id === id),
+    today: () => new Intl.DateTimeFormat('en-CA', { timeZone: assistant.tz() }).format(Date.now()),
   });
   const calendars = new Calendars({ assistant, seal: (t) => secrets.seal(dataDir, t), open: (b) => secrets.open(dataDir, b), fetchImpl: coffeeOptions.calendarFetch || fetch });
   // Cockerel hears what the admin's phone hears: movie requests and Sentinel alerts.
@@ -664,6 +665,21 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         },
       );
     }
+    runCarReminders();
+  };
+  // Car dates: once a day, from 8 am in Roost's time zone, tell the people who
+  // should hear about a date that has reached one of its lead times. The check
+  // each tick is a string compare; nothing else runs until the day changes.
+  const runCarReminders = () => {
+    const day = cars.today();
+    if (store.db.carsRemindedOn === day) return;
+    const hour = Number(new Intl.DateTimeFormat('en-GB', { timeZone: assistant.tz(), hour: '2-digit', hourCycle: 'h23' }).format(Date.now()));
+    if (hour < 8) return;
+    store.db.carsRemindedOn = day;
+    for (const m of cars.remind(day)) {
+      for (const uid of m.userIds) push.notify({ title: m.title, body: m.body, tag: m.tag, url: m.url }, uid);
+    }
+    store.save();
   };
   // Cockerel's notebook: reminders fire here, and a repeating job or the
   // morning brief wakes him only when its minute comes.
@@ -1586,6 +1602,26 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     'POST /api/cars/:id/archive': async (req, res, id) => {
       const user = requireUser(req);
       send(res, 200, cars.archive(user, id, (await readJson(req, 200)).on !== false));
+    },
+    'POST /api/cars/:id/dates': async (req, res, id) => {
+      const user = requireUser(req);
+      send(res, 201, cars.addDate(user, id, await readJson(req, 2000)));
+    },
+    'PATCH /api/cars/:id/dates/:d': async (req, res, id, d) => {
+      const user = requireUser(req);
+      send(res, 200, cars.updateDate(user, id, d, await readJson(req, 2000)));
+    },
+    'DELETE /api/cars/:id/dates/:d': (req, res, id, d) => {
+      const user = requireUser(req);
+      send(res, 200, cars.removeDate(user, id, d));
+    },
+    'POST /api/cars/:id/dates/:d/done': async (req, res, id, d) => {
+      const user = requireUser(req);
+      send(res, 200, cars.doneDate(user, id, d, await readJson(req, 500)));
+    },
+    'POST /api/cars/:id/dates/:d/snooze': (req, res, id, d) => {
+      const user = requireUser(req);
+      send(res, 200, cars.snoozeDate(user, id, d));
     },
     'GET /api/cars/:id/photo': (req, res, id) => {
       const user = requireUser(req);
@@ -3952,7 +3988,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     if (exact) return [exact];
     const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/movie-requests|admin\/setup|admin\/galaxies|admin\/away\/devices|storage\/users|links|me\/devices|birdhouse\/plans|cars|alerts|push\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart|\/secret|\/compose|\/check|\/dismiss|\/share|\/archive|\/photo)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
-    return handler ? [handler, m[2]] : null;
+    if (handler) return [handler, m[2]];
+    // A car's dates: /api/cars/<car>/dates[/<date>[/done|/snooze]]
+    const c = pathname.match(/^\/api\/cars\/([A-Za-z0-9]+)\/dates(?:\/([A-Za-z0-9]+)(\/done|\/snooze)?)?$/);
+    const dated = c && routes[`${method} /api/cars/:id/dates${c[2] ? '/:d' : ''}${c[3] || ''}`];
+    return dated ? [dated, c[1], c[2]] : null;
   }
 
   // What a phone or PC needs to install Roost as an app, named after the server.
@@ -4275,7 +4315,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       } else if (pathname.startsWith('/api/')) {
         const found = route(req.method, pathname);
         if (!found) throw new HttpError(404, 'Not found');
-        await found[0](req, res, found[1]);
+        await found[0](req, res, found[1], found[2]);
       } else if (pathname === '/.well-known/immich' && req.method === 'GET') {
         send(res, 200, { api: { endpoint: '/api' } });
       } else if (pathname === '/manifest.webmanifest' && (req.method === 'GET' || req.method === 'HEAD')) {

@@ -7,6 +7,12 @@
       "admin": true
     },
     {
+      "title": "Car dates that remind you",
+      "text": "Add MOT, tax, insurance and service dates to a car. Roost nudges your phone 30 days and 7 days before, and on the day, and Renewed moves the date on for next year.",
+      "image": "cars-dates.png",
+      "admin": true
+    },
+    {
       "title": "Cockerel picks his own brain",
       "text": "For each message he chooses Haiku, Sonnet or Opus, whichever is cheapest and still good enough, and says which in a small tag. Tap Think harder to use the strongest model for one message, or pin one in Admin.",
       "image": "cockerel-smarter.png",
