@@ -144,7 +144,21 @@ async function fetchJob(link, opt) {
     fail(`I can't write to the Roostflix folders (${blocked}). Tell Raven the Roostflix incoming, Movies and Series folders need write access for my share user; the fix is in the log.`);
   }
 
+  // Raven's standing word (an Admin switch) covers links he typed into the chat himself, never
+  // one from a web page, email, file or calendar. Roost is asked fresh, so switching it off works at once.
+  let standing = false;
   if (source === 'other' && !approved(`entitled-${id}`)) {
+    const typed = readJson(path.join(STATE, 'typed.json'), []).some((t) => t.key === lib.linkKey(link) && Date.now() - t.at < 2 * 3600e3);
+    if (meta.fromRavenKey === lib.linkKey(link) || typed) {
+      const word = await hook({ type: 'entitled' });
+      if (word.on) {
+        standing = true;
+        writeJson(jobFile(id), { ...meta, fromRavenKey: lib.linkKey(link) });
+        await hook({ type: 'log', text: `${name}: downloading a link Raven pasted himself, on his standing confirmation that he is entitled to it (switched on ${String(word.at).slice(0, 10)}).` });
+      }
+    }
+  }
+  if (source === 'other' && !standing && !approved(`entitled-${id}`)) {
     await hook({ type: 'ask', askId: `entitled-${id}`, text: `${name} would come from a source I don't normally use. Are you entitled to download this one yourself (you own it, or it is free to share)?`, options: ["Yes, I'm entitled to this", 'Cancel'] });
     return console.log('Asked Raven whether he is entitled to this download. Stop here and wait: he will answer and you will be woken to continue.');
   }

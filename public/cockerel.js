@@ -327,6 +327,8 @@
       f.briefTime.value = c.briefTime;
       f.briefOn.checked = c.briefOn;
       for (const g of TOOL_GROUPS) f[`tool-${g}`].checked = !c.toolsOff.includes(g);
+      f.entitled.checked = c.entitled.on;
+      $('#cx-entitled').textContent = c.entitled.on ? `Switched on ${new Date(c.entitled.at).toLocaleDateString()}. It is in his activity log.` : '';
       f.model.value = c.model;
       f.maxTier.value = c.maxTier;
       f.quietOn.checked = c.quiet.on;
@@ -368,7 +370,7 @@
     if (e.target !== form()) return;
     e.preventDefault();
     const f = e.target;
-    const body = { url: f.url.value, sizeGb: f.sizeGb.value, dayGb: f.dayGb.value, tz: f.tz.value, briefTime: f.briefTime.value, briefOn: f.briefOn.checked, model: f.model.value, maxTier: f.maxTier.value, quiet: { on: f.quietOn.checked, from: f.quietFrom.value, to: f.quietTo.value }, toolsOff: TOOL_GROUPS.filter((g) => !f[`tool-${g}`].checked) };
+    const body = { url: f.url.value, sizeGb: f.sizeGb.value, dayGb: f.dayGb.value, tz: f.tz.value, briefTime: f.briefTime.value, briefOn: f.briefOn.checked, entitled: f.entitled.checked, model: f.model.value, maxTier: f.maxTier.value, quiet: { on: f.quietOn.checked, from: f.quietFrom.value, to: f.quietTo.value }, toolsOff: TOOL_GROUPS.filter((g) => !f[`tool-${g}`].checked) };
     if (f.secret.value) body.secret = f.secret.value;
     try { await api('PUT', '/api/admin/cockerel', body); flash(f, 'Saved'); window.cockerelAdminLoad(); } catch (err) { flash(f, err.message, false); }
   });

@@ -36,6 +36,8 @@ class Cockerel {
       paused: c.paused === true,
       sizeGb: Number.isFinite(c.sizeGb) ? c.sizeGb : DEFAULTS.sizeGb,
       dayGb: Number.isFinite(c.dayGb) ? c.dayGb : DEFAULTS.dayGb,
+      // Raven's standing word that he is entitled to links he pastes himself (with the day he said it).
+      entitled: c.entitled && c.entitled.on === true ? { on: true, at: clip(c.entitled.at, 30) } : { on: false, at: '' },
     };
   }
 
@@ -47,7 +49,7 @@ class Cockerel {
   // What Admin sees: never the secret itself.
   view() {
     const c = this.config();
-    return { url: c.url, hasSecret: Boolean(c.secret), paused: c.paused, sizeGb: c.sizeGb, dayGb: c.dayGb };
+    return { url: c.url, hasSecret: Boolean(c.secret), paused: c.paused, sizeGb: c.sizeGb, dayGb: c.dayGb, entitled: c.entitled };
   }
 
   save(changes) {
@@ -58,6 +60,11 @@ class Cockerel {
     if ('paused' in changes) next.paused = changes.paused === true;
     if ('sizeGb' in changes) next.sizeGb = changes.sizeGb;
     if ('dayGb' in changes) next.dayGb = changes.dayGb;
+    if ('entitled' in changes) {
+      const on = changes.entitled === true;
+      const was = Boolean(next.entitled && next.entitled.on);
+      next.entitled = on ? { on: true, at: was ? next.entitled.at : new Date(this.now()).toISOString() } : { on: false, at: '' };
+    }
     s.cockerel = next;
     this.store.save();
   }

@@ -61,13 +61,17 @@ const TOOLS = {
   // A job that runs by itself reads and reports, but cannot start new jobs or change his notes.
   scheduled: ['events', 'jobs', 'calc', 'nest', 'watching', 'log', 'send', 'notify', 'memories', 'tasks', 'reminders', 'schedules', 'calendar', 'inbox', 'roost', 'birdhouse', 'browse'],
 };
-const MEDIA_WORDS = /\b(movies?|films?|tv shows?|series|episodes?|roostflix|jellyfin|download|downloads|torrent)\b/i;
+const MEDIA_WORDS = /\b(movies?|films?|tv shows?|series|episodes?|roostflix|jellyfin|download|downloads|torrent)\b|magnet:\?/i;
 // A plain "get me this film" goes straight to the download tools. Anything that
 // also asks a question, compares or sets a reminder runs with the web and the
 // notebook instead, and hands the film part over with `cockerel-tool handoff`
 // (so web pages and downloads are never in the same run).
 const NOT_PLAIN = /\b(compare|review|reviews|recommend|should|best|remind|reminder|schedule|what|which|why|how|worth|rating|about|and then|then)\b|\?/i;
-const modeFor = (text) => (MEDIA_WORDS.test(text) && !NOT_PLAIN.test(text) ? 'media' : 'assistant');
+// A link's own "?" and film name must not count as a question, so links are set aside first.
+const modeFor = (text) => {
+  const words = String(text).replace(/magnet:\?\S+|https?:\/\/\S+/gi, ' ');
+  return MEDIA_WORDS.test(text) && !NOT_PLAIN.test(words) ? 'media' : 'assistant';
+};
 function allowedFor(mode, off = []) {
   const blocked = new Set(off.flatMap((g) => GROUPS[g] || []));
   const tools = TOOLS[mode].filter((c) => !blocked.has(c)).map((c) => `Bash(cockerel-tool ${c}:*)`);
@@ -272,6 +276,11 @@ const server = http.createServer(async (req, res) => {
       const text = String(data.text || '').slice(0, 2000);
       live('Raven said something in chat');
       remember('Raven', text);
+      // Links Raven typed himself are remembered for two hours, so the download tool can tell them
+      // from links that came from a web page, an email or a file.
+      const typed = read('typed.json', []).filter((t) => Date.now() - t.at < 2 * 3600e3);
+      for (const key of lib.linksIn(text)) typed.push({ key, at: Date.now() });
+      write('typed.json', typed.slice(-40));
       const off = groupsOff(data.toolsOff);
       const cfg = routerCfg(data.router);
       write('router.json', cfg);
