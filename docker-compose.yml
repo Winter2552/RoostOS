@@ -10,12 +10,17 @@ services:
     # Nothing inside the container can gain extra privileges.
     security_opt:
       - no-new-privileges:true
-    # Only for the WireGuard link to the Coffee Galaxy server: lets Roost make its own
-    # network link. Remove it if you don't use Coffee Galaxy through Roost.
+    # Only for WireGuard (the link to the Coffee Galaxy server, and Away from home): lets
+    # Roost make its own network links. Remove it if you use neither.
     cap_add:
       - NET_ADMIN
+    # Away from home passes your devices' traffic on to the home network.
+    sysctls:
+      net.ipv4.ip_forward: "1"
     ports:
       - "8080:8080"
+      # Away from home (WireGuard). Forward this UDP port on your router(s) to this server.
+      - "51821:51821/udp"
       # HTTPS, once a certificate is set up under Admin → Secure connection.
       - "443:8443"
     environment:

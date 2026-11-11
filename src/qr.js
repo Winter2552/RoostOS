@@ -3,7 +3,7 @@
 // A small QR code encoder for the two-step setup screen, so Roost doesn't
 // need a library or an outside service to draw one. It covers what an
 // authenticator link needs: byte mode, error correction level M, versions
-// 1–10 (up to 213 bytes).
+// 1–13 (up to 331 bytes, enough for a WireGuard device config).
 
 // Per version (index 0 = version 1): error correction codewords per block
 // and the block layout as [count, data codewords per block] groups.
@@ -18,9 +18,12 @@ const VERSIONS = [
   [22, [[2, 38], [2, 39]]],
   [22, [[3, 36], [2, 37]]],
   [26, [[4, 43], [1, 44]]],
+  [30, [[1, 50], [4, 51]]],
+  [22, [[6, 36], [2, 37]]],
+  [22, [[8, 37], [1, 38]]],
 ];
 
-const ALIGN = [[], [6, 18], [6, 22], [6, 26], [6, 30], [6, 34], [6, 22, 38], [6, 24, 42], [6, 26, 46], [6, 28, 50]];
+const ALIGN = [[], [6, 18], [6, 22], [6, 26], [6, 30], [6, 34], [6, 22, 38], [6, 24, 42], [6, 26, 46], [6, 28, 50], [6, 30, 54], [6, 32, 58], [6, 34, 62]];
 
 // ---------- Reed–Solomon over GF(256) ----------
 

@@ -37,6 +37,7 @@ const remoteAccess = require('./remote');
 const { Coffee, validSecret, newSecret } = require('./coffee');
 const galaxies = require('./galaxies');
 const wireguard = require('./wireguard');
+const awayVpn = require('./away');
 const templates = require('./templates');
 const { cleanSchedule, isDue } = require('./schedule');
 const { CertManager, validDomain } = require('./tls');
@@ -281,7 +282,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, coffeeOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, registryFetch, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000, alertIntervalMs = 60 * 1000, readContainers, push: pushOptions = {}, portOptions = {}, aiBase } = {}) {
+function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, coffeeOptions = {}, awayOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, registryFetch, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000, alertIntervalMs = 60 * 1000, readContainers, push: pushOptions = {}, portOptions = {}, aiBase } = {}) {
   const store = new Store(dataDir);
   const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
   // The few outside services Roost leans on, for the admin's status page.
@@ -296,10 +297,26 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     extraNames: () => {
       const { domain } = store.db.settings.tls || {};
       const on = (store.db.settings.coffee || {}).enabled || (store.db.settings.galaxies || []).some((g) => g.enabled);
-      return domain && on ? [`nova.${domain}`] : [];
+      return [...(domain && on ? [`nova.${domain}`] : []), ...awayNames()];
     },
+    // The Away from home name carries UDP, which Cloudflare's proxy can't, so its record is grey.
+    greyNames: () => awayNames(),
     ...remoteOptions,
   });
+  // Away from home: a WireGuard server for phones and PCs outside the house (src/away.js).
+  const away = new awayVpn.Away(path.join(dataDir, 'wireguard'), awayOptions);
+  function awayHost() {
+    const a = store.db.settings.away || {};
+    const { domain } = store.db.settings.tls || {};
+    return a.host || (domain ? `away.${domain}` : '');
+  }
+  // The name is kept pointed at home along with the others when it is under our domain.
+  function awayNames() {
+    const { domain } = store.db.settings.tls || {};
+    const a = store.db.settings.away || {};
+    const host = awayHost();
+    return a.enabled && domain && host && (host === domain || host.endsWith(`.${domain}`)) ? [host] : [];
+  }
   // Coffee Galaxy lives on another server, reached over a WireGuard link Roost makes.
   const link = new wireguard.WireGuard(path.join(dataDir, 'wireguard'), coffeeOptions.wireguard);
   const coffee = new Coffee({
@@ -1037,7 +1054,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // Settings for the admin page. The mail password never leaves the server.
   function settingsView() {
     // The Cloudflare token (in tls) stays on the server.
-    const { mail: _mail, jellyfin: _jellyfin, tls: _tls, coffee: _coffee, wireguard: _wireguard, galaxies: _galaxies, birdhouseAi: _birdhouseAi, cockerel: _cockerel, ...rest } = db().settings;
+    const { mail: _mail, jellyfin: _jellyfin, tls: _tls, coffee: _coffee, wireguard: _wireguard, away: _away, galaxies: _galaxies, birdhouseAi: _birdhouseAi, cockerel: _cockerel, ...rest } = db().settings;
     return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()), publicLinks: rest.publicLinks !== false, birdhouseFetch: rest.birdhouseFetch === true, birdhouseAi: aiView(), ...energyView() };
   }
 
@@ -2443,6 +2460,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
         tls: certs.status(),
         remote: remote.view(),
         coffee: coffeeView(),
+        away: await awayView(),
         galaxies: galaxiesView(),
         ticked: db().settings.setupTicked || [],
         backup: backup.readStatus(dataDir),
@@ -2976,6 +2994,80 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       requireAdmin(req);
       await remote.check();
       send(res, 200, remote.view());
+    },
+
+    // ---------- Away from home (WireGuard for devices outside the house) ----------
+
+    'GET /api/admin/away': async (req, res) => {
+      requireAdmin(req);
+      send(res, 200, await awayView());
+    },
+
+    'PUT /api/admin/away': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const before = db().settings.away || {};
+      const enabled = body.enabled === true;
+      const host = body.host === undefined || body.host === '' ? '' : awayVpn.cleanHost(body.host);
+      const lan = body.lan === undefined || body.lan === '' ? (before.lan || awayVpn.DEFAULT_LAN) : awayVpn.cleanLan(body.lan);
+      if (host === null) throw new HttpError(400, 'The address should be a name like away.roostos.network or your home IP address');
+      if (lan === null) throw new HttpError(400, 'The home network should look like 192.168.4.0/24 (a private range)');
+      const next = { ...before, enabled, host, lan, devices: before.devices || [] };
+      if (enabled && !(host || awayHost())) throw new HttpError(400, 'Set the domain under Secure connection first, or type the address devices should connect to');
+      db().settings.away = next;
+      let note = '';
+      if (enabled) {
+        // A device that already has a config keeps the address it was given, so a changed name
+        // or home network only reaches devices added after this.
+        const name = awayNames()[0];
+        if (name) {
+          try { await remote.pointGrey(name); } catch (err) { note = `Saved, but Roost couldn't make the DNS record for ${name}: ${err.message}`; }
+        }
+      }
+      away.write(next);
+      next.applied = { ...(await away.apply()), at: Date.now() };
+      store.save();
+      const changes = [];
+      if (enabled !== Boolean(before.enabled)) changes.push(`Away from home ${enabled ? 'on' : 'off'}`);
+      if (changes.length) record(req, 'settings-changed', { actor: admin.username, detail: changes.join(', ') });
+      send(res, 200, { ...(await awayView()), note });
+    },
+
+    // Makes a device's keys and returns its config and QR code once; the private key is not kept.
+    'POST /api/admin/away/devices': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const a = db().settings.away || {};
+      const host = awayHost();
+      if (!a.enabled || !host) throw new HttpError(400, 'Turn on Away from home first');
+      const name = awayVpn.cleanName(body.name);
+      if (!name) throw new HttpError(400, 'Give the device a name, like "Raven iPhone"');
+      const devices = a.devices || [];
+      const made = away.newDevice(devices, { host, lan: a.lan || awayVpn.DEFAULT_LAN });
+      if (!made) throw new HttpError(400, `Roost keeps up to ${awayVpn.MAX_DEVICES} devices; remove one first`);
+      const device = { id: made.id, name, publicKey: made.publicKey, address: made.address, createdAt: Date.now() };
+      a.devices = [...devices, device];
+      db().settings.away = a;
+      away.write(a);
+      a.applied = { ...(await away.apply()), at: Date.now() };
+      store.save();
+      record(req, 'settings-changed', { actor: admin.username, detail: `Away from home: added device ${name}` });
+      let qr = '';
+      try { qr = qrSvg(made.config); } catch { /* too long for a code: the file download still works */ }
+      send(res, 200, { ...(await awayView()), added: { id: device.id, name, config: made.config, qr } });
+    },
+
+    'DELETE /api/admin/away/devices/:id': async (req, res, id) => {
+      const admin = requireAdmin(req);
+      const a = db().settings.away || {};
+      const device = (a.devices || []).find((d) => d.id === id);
+      if (!device) throw new HttpError(404, 'No such device');
+      a.devices = a.devices.filter((d) => d.id !== id);
+      away.write(a);
+      a.applied = { ...(await away.apply()), at: Date.now() };
+      store.save();
+      record(req, 'settings-changed', { actor: admin.username, detail: `Away from home: removed device ${device.name}` });
+      send(res, 200, await awayView());
     },
 
     // ---------- Coffee Galaxy gateway ----------
@@ -3706,7 +3798,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/movie-requests|admin\/setup|admin\/galaxies|storage\/users|links|me\/devices|birdhouse\/plans|alerts|push\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart|\/secret|\/compose|\/check|\/dismiss)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/movie-requests|admin\/setup|admin\/galaxies|admin\/away\/devices|storage\/users|links|me\/devices|birdhouse\/plans|alerts|push\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart|\/secret|\/compose|\/check|\/dismiss)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     return handler ? [handler, m[2]] : null;
   }
@@ -3756,6 +3848,23 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       return res.end(OPENER_HTML);
     }
     jellyfin.proxy(req, res);
+  }
+
+  // ---------- Away from home ----------
+
+  async function awayView() {
+    const a = db().settings.away || {};
+    const shakes = a.enabled ? await away.handshakes() : {};
+    const { domain } = db().settings.tls || {};
+    return {
+      enabled: Boolean(a.enabled),
+      host: a.host || '',
+      defaultHost: domain ? `away.${domain}` : '',
+      lan: a.lan || awayVpn.DEFAULT_LAN,
+      port: awayVpn.PORT,
+      applied: a.applied || null,
+      devices: (a.devices || []).map((d) => ({ id: d.id, name: d.name, address: d.address, createdAt: d.createdAt, lastSeen: shakes[d.publicKey] ? shakes[d.publicKey] * 1000 : null })),
+    };
   }
 
   // ---------- Coffee Galaxy ----------

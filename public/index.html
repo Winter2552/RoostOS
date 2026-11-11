@@ -878,6 +878,25 @@
         </div>
         <div class="msg" role="status"></div>
       </form>
+      <form class="card panel" id="away-form" data-sec="network">
+        <h3>Away from home</h3><span class="mono muted">Reach the home network from your phone or PC when you are out: SSH to the server, Roost's Admin, the router. Only home traffic goes through; browsing stays on the device's own connection.</span>
+        <p class="tls-state" id="away-state"><span class="dot"></span><span>Checking…</span></p>
+        <p class="mono muted tls-detail" id="away-detail"></p>
+        <label class="check-line"><input type="checkbox" name="enabled"> Let devices connect from outside</label>
+        <div class="form-grid">
+          <label class="field"><span>Address devices connect to</span><input type="text" name="host" autocomplete="off" spellcheck="false" autocapitalize="none"></label>
+          <label class="field"><span>Home network</span><input type="text" name="lan" placeholder="192.168.4.0/24" autocomplete="off" spellcheck="false" autocapitalize="none"></label>
+        </div>
+        <p class="mono muted tls-help">Forward UDP port 51821 on your router(s) to this server (see Setup). Roost keeps the address pointed at home, with the orange cloud off, because Cloudflare can't carry this traffic.</p>
+        <div class="row"><button class="btn" type="submit">Save</button></div>
+        <div id="away-devices"></div>
+        <div class="form-grid" id="away-add">
+          <label class="field"><span>Add a device</span><input type="text" name="deviceName" placeholder="Raven iPhone" maxlength="40" autocomplete="off"></label>
+        </div>
+        <div class="row"><button class="btn ghost small" type="button" id="away-add-btn">Add device</button></div>
+        <div id="away-new" hidden></div>
+        <div class="msg" role="status"></div>
+      </form>
       <form class="card panel" id="coffee-form" data-sec="apps">
         <h3>Coffee Galaxy</h3><span class="mono muted">A private link to the Coffee Galaxy server, opened through Roost at nova.&lt;your domain&gt;/coffee</span>
         <p class="tls-state" id="coffee-state"><span class="dot"></span><span>Checking…</span></p>
