@@ -124,6 +124,15 @@ function writableProblem(dir) {
   }
 }
 
+// True when the media share should be mounted but isn't (then /srv/media is an
+// empty folder on his own disk, and every write fails with a permissions error).
+// Only checked for the usual /srv/media layout, or where MEDIA_MOUNT names it.
+function shareMissing(mediaRoot, env = process.env) {
+  const mount = String(mediaRoot).startsWith('/srv/media') ? '/srv/media' : (env.MEDIA_MOUNT || '');
+  if (!mount) return '';
+  return require('child_process').spawnSync('mountpoint', ['-q', mount]).status === 1 ? mount : '';
+}
+
 // "3.1 MB/s · 12 min left" for the job card and the VM screen.
 function progressText(speed, bytesLeft) {
   const bits = [];
@@ -139,4 +148,4 @@ function progressText(speed, bytesLeft) {
 // (time and ratio), and upload only a trickle while downloading.
 const NO_SEED = ['--seed-time=0', '--seed-ratio=0.0', '--max-overall-upload-limit=1K'];
 
-module.exports = { writableProblem, progressText, NO_SEED, browseUrl, pageText, sign, headers, verify, OPEN_HOSTS, hostOpen, sourceKind, VIDEO, cleanName, moviePath, episodePath, jobIdOk, human };
+module.exports = { shareMissing, writableProblem, progressText, NO_SEED, browseUrl, pageText, sign, headers, verify, OPEN_HOSTS, hostOpen, sourceKind, VIDEO, cleanName, moviePath, episodePath, jobIdOk, human };
