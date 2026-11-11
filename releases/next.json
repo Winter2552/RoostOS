@@ -31,6 +31,12 @@
       "admin": true
     },
     {
+      "title": "Check a car with the DVLA",
+      "text": "Add a free DVLA key in Admin and each car gets a Check with DVLA button that suggests its make, year, fuel and the MOT and tax dates. It only runs when you press it, sends only the plate, and changes nothing until you confirm.",
+      "image": "cars-dvla.png",
+      "admin": true
+    },
+    {
       "title": "Cockerel picks his own brain",
       "text": "For each message he chooses Haiku, Sonnet or Opus, whichever is cheapest and still good enough, and says which in a small tag. Tap Think harder to use the strongest model for one message, or pin one in Admin.",
       "image": "cockerel-smarter.png",

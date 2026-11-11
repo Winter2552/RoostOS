@@ -2238,3 +2238,8 @@ button.car-stat { cursor: pointer; }
 .car-legrow { display: grid; grid-template-columns: 14px 1fr auto 44px; gap: 8px; align-items: center; font-size: 14px; }
 .car-legrow .mono { text-align: right; }
 .car-swatch { width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--line); }
+
+.car-dvla { padding: 14px 16px; margin: 10px 0; }
+.car-dvla .car-bar { margin: 0 0 4px; }
+.car-dvla h3 { margin: 0; flex: 1; }
+.car-dvlarow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }

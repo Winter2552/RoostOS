@@ -2646,6 +2646,7 @@ const adminLoaders = {
     form.publicLinks.checked = settings.publicLinks;
     form.birdhouseFetch.checked = settings.birdhouseFetch;
     showBirdhouseAi(settings.birdhouseAi);
+    showCarsDvla(settings.carsDvla);
     window.cockerelAdminLoad();
     form.energyPrice.value = settings.energyPrice;
     form.energyCurrency.value = settings.energyCurrency;
@@ -3142,6 +3143,21 @@ $('#birdhouse-ai').addEventListener('submit', (e) => {
   saveBirdhouseAi({ key: f.key.value, monthCap: f.monthCap.value, dayCap: f.dayCap.value }, f);
 });
 $('#bhai-remove').addEventListener('click', () => saveBirdhouseAi({ remove: true }, $('#birdhouse-ai')));
+
+// Cars' DVLA key: never sent back, only whether it is saved, its last four and when it last worked.
+function showCarsDvla(d) {
+  $('#cars-dvla').key.value = '';
+  $('#dvla-remove').hidden = !d.on;
+  $('#dvla-state').textContent = d.on ? `Key saved (ends ${d.last4}). ${d.lastOk ? `Last worked ${new Date(d.lastOk).toLocaleDateString('en-GB')}.` : 'Not tried yet: open a car with a plate and press Check with DVLA.'}` : 'No key saved, so the DVLA button is hidden. Cars works without it.';
+}
+async function saveCarsDvla(body, form) {
+  try {
+    showCarsDvla(await api('PUT', '/api/admin/cars-dvla', body));
+    flash(form, 'Saved');
+  } catch (err) { flash(form, err.message, false); }
+}
+$('#cars-dvla').addEventListener('submit', (e) => { e.preventDefault(); saveCarsDvla({ key: e.target.key.value }, e.target); });
+$('#dvla-remove').addEventListener('click', () => saveCarsDvla({ remove: true }, $('#cars-dvla')));
 
 // ---------- security ----------
 async function loadSecurity() {

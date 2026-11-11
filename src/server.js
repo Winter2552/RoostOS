@@ -14,6 +14,7 @@ const mailbox = require('./mailbox');
 const { Cockerel, CockerelError, GB: COCKEREL_GB, FILE_MAX: COCKEREL_FILE_MAX } = require('./cockerel');
 const birdhouse = require('./birdhouse');
 const { Cars } = require('./cars');
+const dvla = require('./dvla');
 const birdhouseAi = require('./birdhouse-ai');
 const secrets = require('./secrets');
 const birdhouseModel = require('../public/birdhouse-model');
@@ -283,7 +284,7 @@ async function timedProbe(url, timeoutMs) {
 
 // ---------- server ----------
 
-function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, coffeeOptions = {}, awayOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, registryFetch, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000, alertIntervalMs = 60 * 1000, readContainers, push: pushOptions = {}, portOptions = {}, aiBase } = {}) {
+function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false, probeTimeoutMs = 2500, disks, dockerHost, roostContainer = 'roost', smartDir = '', appToken = '', trustProxy = false, tls: tlsOptions = {}, outsideOptions = {}, remoteOptions = {}, coffeeOptions = {}, awayOptions = {}, activitySaveDelayMs, sendMail = mail.send, maxFailedSignIns = 10, registryFetch, uptimeCheckMs = 5 * 60 * 1000, scheduleCheckMs = 20 * 1000, alertIntervalMs = 60 * 1000, readContainers, push: pushOptions = {}, portOptions = {}, aiBase, dvlaBase } = {}) {
   const store = new Store(dataDir);
   const certs = new CertManager({ dataDir, getConfig: () => store.db.settings.tls, ...tlsOptions });
   // The few outside services Roost leans on, for the admin's status page.
@@ -1104,6 +1105,14 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       spent: u.month === month ? u.spent : 0,
     };
   }
+  // Car log's DVLA key: only whether it is saved, its last four characters and
+  // when a lookup last worked ever leave the server.
+  function dvlaView() {
+    const d = db().settings.carsDvla || {};
+    return { on: Boolean(d.key), last4: d.last4 || '', lastOk: d.lastOk || null };
+  }
+  const dvlaAsked = new Map();
+
   function aiView() {
     return aiState();
   }
@@ -1122,8 +1131,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   // Settings for the admin page. The mail password never leaves the server.
   function settingsView() {
     // The Cloudflare token (in tls) stays on the server.
-    const { mail: _mail, jellyfin: _jellyfin, tls: _tls, coffee: _coffee, wireguard: _wireguard, away: _away, galaxies: _galaxies, birdhouseAi: _birdhouseAi, cockerel: _cockerel, ...rest } = db().settings;
-    return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()), publicLinks: rest.publicLinks !== false, birdhouseFetch: rest.birdhouseFetch === true, birdhouseAi: aiView(), ...energyView() };
+    const { mail: _mail, jellyfin: _jellyfin, tls: _tls, coffee: _coffee, wireguard: _wireguard, away: _away, galaxies: _galaxies, birdhouseAi: _birdhouseAi, carsDvla: _carsDvla, cockerel: _cockerel, ...rest } = db().settings;
+    return { ...rest, backup: backup.config(rest.backup), publicUrl: rest.publicUrl || '', defaultLimitGb: storage.defaultLimitGb(db()), mail: mailView(), mailEnabled: mailReady(), adminsNeedTwoStep: adminsNeedTwoStep(db()), publicLinks: rest.publicLinks !== false, birdhouseFetch: rest.birdhouseFetch === true, birdhouseAi: aiView(), carsDvla: dvlaView(), ...energyView() };
   }
 
   // The admin's notice on the dashboard. Expired notices are simply not
@@ -1599,7 +1608,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     // see answers "not there".
     'GET /api/cars': (req, res) => {
       const user = requireUser(req);
-      send(res, 200, { cars: cars.list(user), people: carsPeople(user) });
+      send(res, 200, { cars: cars.list(user), people: carsPeople(user), dvla: Boolean((db().settings.carsDvla || {}).key) && cars.hasApp(user) });
     },
     'POST /api/cars': async (req, res) => {
       const user = requireUser(req);
@@ -1771,6 +1780,45 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       }
     },
     // Admin: save or remove the key, and set the spending limits.
+    'PUT /api/admin/cars-dvla': async (req, res) => {
+      const admin = requireAdmin(req);
+      const body = await readJson(req, 1000);
+      const d = db().settings.carsDvla || (db().settings.carsDvla = {});
+      if (body.remove === true && d.key) {
+        delete d.key;
+        delete d.last4;
+        delete d.lastOk;
+        record(req, 'settings-changed', { actor: admin.username, detail: 'Cars DVLA key removed' });
+      } else if (typeof body.key === 'string' && body.key.trim()) {
+        const key = body.key.trim();
+        if (!dvla.KEY_RE.test(key)) throw new HttpError(400, 'That does not look like a DVLA key (letters and numbers only)');
+        d.key = secrets.seal(dataDir, key);
+        d.last4 = key.slice(-4);
+        delete d.lastOk;
+        record(req, 'settings-changed', { actor: admin.username, detail: 'Cars DVLA key saved' });
+      }
+      store.save();
+      send(res, 200, dvlaView());
+    },
+    // "Check with DVLA": the owner presses it for one car; one request with
+    // only the plate; the answer comes back as a suggestion and is not stored.
+    'POST /api/cars/:id/dvla': async (req, res, id) => {
+      const user = requireUser(req);
+      const car = cars.get(user, id, 'owner');
+      const d = db().settings.carsDvla || {};
+      if (!d.key) throw new HttpError(409, 'The DVLA lookup isn’t switched on. An admin adds the key in Admin → Server');
+      if (Date.now() - (dvlaAsked.get(user.id) || 0) < 3000) throw new HttpError(429, 'One at a time, give it a moment');
+      dvlaAsked.set(user.id, Date.now());
+      try {
+        const out = await dvla.lookup({ key: secrets.open(dataDir, d.key), plate: car.plate, base: dvlaBase, fetchImpl: coffeeOptions.dvlaFetch });
+        d.lastOk = Date.now();
+        store.save();
+        send(res, 200, out);
+      } catch (err) {
+        if (err instanceof dvla.DvlaError) throw new HttpError(err.status, err.message);
+        throw err;
+      }
+    },
     'PUT /api/admin/birdhouse-ai': async (req, res) => {
       const admin = requireAdmin(req);
       const body = await readJson(req, 2000);
@@ -4042,7 +4090,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
   function route(method, pathname) {
     const exact = routes[`${method} ${pathname}`];
     if (exact) return [exact];
-    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/movie-requests|admin\/setup|admin\/galaxies|admin\/away\/devices|storage\/users|links|me\/devices|birdhouse\/plans|cars|alerts|push\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart|\/secret|\/compose|\/check|\/dismiss|\/share|\/archive|\/photo)?$/);
+    const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/movie-requests|admin\/setup|admin\/galaxies|admin\/away\/devices|storage\/users|links|me\/devices|birdhouse\/plans|cars|alerts|push\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart|\/secret|\/compose|\/check|\/dismiss|\/share|\/archive|\/photo|\/dvla)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     if (handler) return [handler, m[2]];
     // A car's dates and entries: /api/cars/<car>/dates|entries[/<id>[/done|/snooze]]

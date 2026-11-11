@@ -497,6 +497,23 @@ const STEPS = [
   },
 
   {
+    id: 'cars-dvla',
+    section: 'server',
+    group: 'Cars',
+    title: 'Let Cars check a plate with the DVLA',
+    why: 'Optional. A "Check with DVLA" button on a car suggests its make, year, fuel and the MOT and tax due dates. It only runs when someone presses it, sends only the plate, and nothing is saved until you confirm.',
+    how: [
+      'Apply for a free key at register-for-ves.driver-vehicle-licensing.api.gov.uk (the DVLA Vehicle Enquiry Service). Approval can take a little while.',
+      'Under Admin → Server → Cars and the DVLA, paste the key and save. It is stored encrypted, and only the last four characters are shown again. Never put it in chat or git.',
+      'Open a car with a number plate and press Check with DVLA to try it. The DVLA deletes keys left unused for 90 days.',
+    ],
+    action: { label: 'Add the key', view: 'admin', focus: 'cars-dvla' },
+    optional: true,
+    covers: ['carsDvla'],
+    check: (ctx) => Boolean(((ctx.db.settings || {}).carsDvla || {}).lastOk),
+  },
+
+  {
     id: 'car-reminders',
     section: 'apps',
     group: 'Cars',
