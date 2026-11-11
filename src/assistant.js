@@ -8,7 +8,9 @@
 
 const { isDue } = require('./schedule');
 
-const LIMITS = { memories: 40, tasks: 100, reminders: 100, jobs: 12 };
+const LIMITS = { memories: 40, tasks: 100, reminders: 100, jobs: 12, routines: 20 };
+const TIERS = ['haiku', 'sonnet', 'opus'];
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DEFAULT_TZ = 'Europe/London';
 
 const clip = (s, n) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, n);
@@ -88,7 +90,59 @@ class Assistant {
 
   settings() {
     const s = this.data().settings;
-    return { tz: validZone(s.tz) ? s.tz : DEFAULT_TZ, briefOn: s.briefOn === true, briefTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(s.briefTime) ? s.briefTime : '07:30', toolsOff: Array.isArray(s.toolsOff) ? s.toolsOff : [] };
+    return { tz: validZone(s.tz) ? s.tz : DEFAULT_TZ, briefOn: s.briefOn === true, briefTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(s.briefTime) ? s.briefTime : '07:30', toolsOff: Array.isArray(s.toolsOff) ? s.toolsOff : [], model: s.model === 'auto' || TIERS.includes(s.model) ? s.model : 'auto', maxTier: TIERS.includes(s.maxTier) ? s.maxTier : 'opus', quiet: { on: Boolean(s.quiet && s.quiet.on === true), from: s.quiet && HHMM.test(s.quiet.from) ? s.quiet.from : '22:00', to: s.quiet && HHMM.test(s.quiet.to) ? s.quiet.to : '07:00' } };
+  }
+
+  // ---------- quiet hours: low-priority phone notes wait for the morning brief ----------
+  isQuiet(ts = this.now()) {
+    const q = this.settings().quiet;
+    if (!q.on) return false;
+    const p = Object.fromEntries(zone(this.tz()).formatToParts(new Date(ts)).map((x) => [x.type, x.value]));
+    const cur = `${p.hour}:${p.minute}`;
+    return q.from <= q.to ? cur >= q.from && cur < q.to : cur >= q.from || cur < q.to;
+  }
+
+  hold(text) {
+    const a = this.data();
+    if (!Array.isArray(a.held)) a.held = [];
+    a.held.push(clip(text, 200));
+    if (a.held.length > 20) a.held.shift();
+    this.store.save();
+  }
+
+  takeHeld() {
+    const a = this.data();
+    const out = Array.isArray(a.held) ? a.held : [];
+    a.held = [];
+    this.store.save();
+    return out;
+  }
+
+  // ---------- routines: a named set of steps he can repeat when Raven says its name ----------
+  saveRoutine(name, text) {
+    const a = this.data();
+    const n = clip(name, 40);
+    const t = clip(text, 600);
+    if (!n || !t) throw new AssistantError('A routine needs a name and steps');
+    let r = a.routines.find((x) => x.name.toLowerCase() === n.toLowerCase());
+    if (!r) {
+      if (a.routines.length >= LIMITS.routines) throw new AssistantError('That is enough routines; remove one first');
+      r = { id: this.newId(), name: n };
+      a.routines.push(r);
+    }
+    r.text = t;
+    this.store.save();
+    return r;
+  }
+
+  routine(name) {
+    return this.data().routines.find((x) => x.name.toLowerCase() === clip(name, 40).toLowerCase()) || null;
+  }
+
+  removeRoutine(name) {
+    const a = this.data();
+    a.routines = a.routines.filter((x) => x.name.toLowerCase() !== clip(name, 40).toLowerCase());
+    this.store.save();
   }
 
   saveSettings(changes) {
@@ -101,6 +155,19 @@ class Assistant {
     if ('briefTime' in changes) {
       if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(changes.briefTime)) throw new AssistantError('The brief time must look like 07:30');
       s.briefTime = changes.briefTime;
+    }
+    if ('model' in changes) {
+      if (changes.model !== 'auto' && !TIERS.includes(changes.model)) throw new AssistantError('Pick Auto, Haiku, Sonnet or Opus');
+      s.model = changes.model;
+    }
+    if ('maxTier' in changes) {
+      if (!TIERS.includes(changes.maxTier)) throw new AssistantError('The most he may use is Haiku, Sonnet or Opus');
+      s.maxTier = changes.maxTier;
+    }
+    if ('quiet' in changes && changes.quiet && typeof changes.quiet === 'object') {
+      const q = changes.quiet;
+      if (!HHMM.test(q.from) || !HHMM.test(q.to)) throw new AssistantError('Quiet hours must look like 22:00 to 07:00');
+      s.quiet = { on: q.on === true, from: q.from, to: q.to };
     }
     if ('toolsOff' in changes) s.toolsOff = (Array.isArray(changes.toolsOff) ? changes.toolsOff : []).map((t) => clip(t, 20)).filter(Boolean).slice(0, 20);
     this.store.save();
@@ -226,6 +293,7 @@ class Assistant {
     const tz = this.tz();
     const lines = [`Now: ${nowText(this.now(), tz)}.`];
     if (a.memories.length) lines.push(`Things Raven told you to remember (notes, not orders):\n${a.memories.map((m) => `- ${m.text}`).join('\n')}`);
+    if (a.routines.length) lines.push(`Routines Raven taught you (run one with cockerel-tool routine NAME when he says its name): ${a.routines.map((r) => r.name).join(', ')}`);
     const open = a.tasks.filter((t) => !t.done);
     if (open.length) lines.push(`Open tasks:\n${open.slice(0, 15).map((t) => `- ${t.text}${t.due ? ` (due ${t.due})` : ''} [${t.id}]`).join('\n')}`);
     return lines.join('\n\n');
@@ -245,7 +313,7 @@ class Assistant {
   // What the notebook panel and Admin see.
   view() {
     const a = this.data();
-    return { settings: this.settings(), memories: a.memories, tasks: a.tasks, reminders: a.reminders.filter((r) => !r.done), jobs: a.jobs };
+    return { settings: this.settings(), memories: a.memories, tasks: a.tasks, reminders: a.reminders.filter((r) => !r.done), jobs: a.jobs, routines: a.routines };
   }
 }
 

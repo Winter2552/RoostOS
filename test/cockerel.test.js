@@ -118,7 +118,7 @@ test('admin links him, and the secret never comes back', async () => {
   assert.equal(bad.status, 400, 'only home-network addresses');
   const ok = await call('PUT', '/api/admin/cockerel', { url: 'http://192.168.4.40:7070', secret: SECRET, sizeGb: 4, dayGb: 12 }, cookie);
   assert.equal(ok.status, 200);
-  assert.deepEqual(ok.body, { url: 'http://192.168.4.40:7070', hasSecret: true, paused: false, sizeGb: 4, dayGb: 12, tz: 'Europe/London', briefOn: false, briefTime: '07:30', toolsOff: [] });
+  assert.deepEqual(ok.body, { url: 'http://192.168.4.40:7070', hasSecret: true, paused: false, sizeGb: 4, dayGb: 12, tz: 'Europe/London', briefOn: false, briefTime: '07:30', toolsOff: [], model: 'auto', maxTier: 'opus', quiet: { on: false, from: '22:00', to: '07:00' } });
   const settings = await call('GET', '/api/admin/settings', null, cookie);
   assert.ok(!JSON.stringify(settings.body).includes(SECRET));
   assert.ok(!fs.readFileSync(path.join(dataDir, 'roost.json'), 'utf8').includes(SECRET), 'kept encrypted');
@@ -293,4 +293,57 @@ test('finished and stuck job cards can be cleared, but never a running download'
   assert.equal(c.clearJobs('d'), 0, 'a download in progress stays');
   assert.equal(c.clearJobs(''), 3, 'b, c and f go');
   assert.deepEqual(c.data().jobs.map((j) => j.id), ['d', 'e']);
+});
+
+test('"Not right" keeps what he was asked and what he said, once', () => {
+  const store = { db: { settings: { cockerel: {} } }, save() {} };
+  let n = 0;
+  const c = new Cockerel({ store, newId: () => `m${++n}`, now: () => 1 });
+  c.add({ kind: 'you', text: 'Who is Dad?' });
+  const reply = c.add({ kind: 'cockerel', text: 'Dad is a sitcom.', model: 'haiku', why: 'quick job' });
+  const flag = c.flagWrong(reply.id, 'meant my father');
+  assert.equal(flag.asked, 'Who is Dad?');
+  assert.equal(flag.model, 'haiku');
+  assert.equal(c.flagWrong(reply.id), null, 'only once');
+  assert.equal(c.flagWrong('nope'), null);
+  assert.equal(c.data().log.find((e) => e.id === reply.id).wrong, true);
+  assert.equal(reply.model, 'haiku');
+});
+
+test('from the VM: routines, held notes and Nest reads are checked and read-only', async () => {
+  assert.equal((await hook({ type: 'routine', op: 'save', name: 'Friday check', text: 'roost status then tasks' })).status, 200);
+  const one = await hook({ type: 'routine', name: 'friday check' });
+  assert.equal(one.body.text, 'roost status then tasks');
+  assert.equal((await hook({ type: 'routine', name: 'nope' })).status, 404);
+  assert.match((await hook({ type: 'routine' })).body.lines[0], /^Friday check: /);
+  const none = await hook({ type: 'nest', path: '' });
+  assert.equal(none.status, 200);
+  assert.match(none.body.lines.join('\n'), /notes\.md|Cockerel folder/);
+  const text = await hook({ type: 'nest', path: 'notes.md' });
+  assert.equal(text.status, 200);
+  assert.equal(typeof text.body.text, 'string');
+  assert.equal((await hook({ type: 'nest', path: '../../etc/passwd' })).status, 404, 'nothing outside the Cockerel folder');
+  const watching = await hook({ type: 'watching' });
+  assert.equal(watching.status, 200);
+  // Quiet hours: a small note is held, an urgent one is not.
+  await call('PUT', '/api/admin/cockerel', { quiet: { on: true, from: '00:00', to: '23:59' } }, cookie);
+  const held = await hook({ type: 'notify', text: 'disk at 80%' });
+  assert.equal(held.body.held, true);
+  const urgent = await hook({ type: 'notify', text: 'drive failing', urgent: true });
+  assert.equal(urgent.body.held, undefined);
+  await call('PUT', '/api/admin/cockerel', { quiet: { on: false, from: '22:00', to: '07:00' } }, cookie);
+});
+
+test('a reply carries the model that answered, and "Not right" is kept', async () => {
+  const r = await call('POST', '/api/cockerel/chat', { text: 'Compare two kettles', think: true }, cookie);
+  assert.equal(r.status, 200);
+  const hit = [...sent].reverse().find((s) => s.url.endsWith('/chat'));
+  assert.equal(hit.body.think, true);
+  assert.deepEqual(hit.body.router, { model: 'auto', maxTier: 'opus' });
+  const bad = await call('POST', '/api/cockerel/wrong', { id: r.body.reply.id, note: 'too shallow' }, cookie);
+  assert.equal(bad.body.ok, true);
+  const feed = await call('GET', '/api/cockerel', null, cookie);
+  assert.equal(feed.body.flags[0].asked, 'Compare two kettles');
+  assert.equal((await call('POST', '/api/cockerel/wrong', { id: r.body.reply.id }, cookie)).body.ok, false, 'only once');
+  assert.equal((await call('POST', '/api/cockerel/wrong', { id: 'x' })).status, 401);
 });

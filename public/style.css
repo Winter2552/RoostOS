@@ -2080,6 +2080,14 @@ a.bh-btn { text-decoration: none; display: inline-block; }
 .cx-add { display: flex; gap: 6px; margin-top: 6px; }
 .cx-add input { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); font: 16px var(--grotesk); }
 .cx-switches { border: 1px solid var(--line); border-radius: 12px; display: grid; gap: 6px; padding: 10px 14px; margin: 10px 0; }
+.cx-think { flex: none; border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 999px; padding: 6px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+.cx-think.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.cx-meta { display: flex; gap: 10px; align-items: center; margin-top: 6px; font-size: 11px; color: var(--muted); }
+.cx-meta:empty { display: none; }
+.cx-tag { font-size: 11px; color: var(--muted); }
+.cx-wrong { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 11px; text-decoration: underline; cursor: pointer; padding: 0; opacity: 0; transition: opacity 0.15s; }
+.cx-row:hover .cx-wrong, .cx-wrong:focus { opacity: 1; }
+@media (hover: none) { .cx-wrong { opacity: 1; } }
 .cx-mic { flex: none; width: 36px; height: 36px; border: 0; border-radius: 50%; background: transparent; color: var(--muted); display: grid; place-items: center; cursor: pointer; }
 .cx-mic[hidden] { display: none; }
 .cx-mic svg { width: 20px; height: 20px; }

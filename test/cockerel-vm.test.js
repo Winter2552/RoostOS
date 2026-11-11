@@ -150,7 +150,7 @@ test('the tool files a finished download, and asks before an unusual source or a
     fs.mkdirSync(path.join(env.COCKEREL_HOME, 'state', 'jobs'), { recursive: true });
     fs.writeFileSync(path.join(env.COCKEREL_HOME, 'state', 'jobs', 'j3.json'), JSON.stringify({ id: 'j3', name: 'Sintel', year: '2010', kind: 'movie', requester: 'sam', status: 'downloading' }));
     seen.length = 0;
-    r = await tool('done', 'j3');
+    r = await tool('finished', 'j3');
     assert.equal(r.code, 0, r.out);
     assert.ok(fs.existsSync(path.join(env.MEDIA_ROOT, 'Movies', 'Sintel (2010)', 'Sintel (2010).mkv')));
     assert.ok(!fs.existsSync(path.join(env.INCOMING_DIR, 'j3')), 'leftovers removed');
@@ -158,8 +158,11 @@ test('the tool files a finished download, and asks before an unusual source or a
     assert.equal(seen[0].state, 'Adding');
     assert.equal(seen.find((m) => m.type === 'ready').requester, 'sam');
     seen.length = 0;
-    await tool('done', 'j3');
+    await tool('finished', 'j3');
     assert.equal(seen.length, 0, 'finishing twice does nothing');
+    // `done` is the task command; a job id that is not downloading ticks off a task.
+    await tool('done', 'task-9');
+    assert.deepEqual(seen.map((m) => m.type), ['taskdone'], 'done TASK_ID reaches the notebook');
   } finally {
     roost.close();
     fs.rmSync(root, { recursive: true, force: true });
