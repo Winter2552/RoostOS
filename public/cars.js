@@ -38,7 +38,7 @@
       body: body instanceof Blob ? body : body ? JSON.stringify(body) : undefined,
     });
     const data = await res.json().catch(() => null);
-    if (!res.ok) throw new Error((data && data.error) || 'Something went wrong');
+    if (!res.ok) throw Object.assign(new Error((data && data.error) || 'Something went wrong'), { code: data && data.code, status: res.status });
     return data;
   }
 
@@ -77,7 +77,7 @@
   }
 
   function tile(car) {
-    const sub = [car.plate, car.role !== 'owner' ? `${car.owner}’s car` : car.household ? 'Household' : car.shares && car.shares.length ? `Shared with ${car.shares.length}` : ''].filter(Boolean).join(' · ');
+    const sub = [car.plate, car.odometer ? `${car.odometer.toLocaleString('en-GB')} ${car.units}` : '', car.role !== 'owner' ? `${car.owner}’s car` : car.household ? 'Household' : car.shares && car.shares.length ? `Shared with ${car.shares.length}` : ''].filter(Boolean).join(' · ');
     return h('a', { class: 'card car-tile', href: `#/cars/${car.id}` }, photo(car, 'car-photo'),
       h('div', { class: 'car-info' },
         h('div', { class: 'car-line' }, h('b', { text: car.name }), car.next ? h('span', { class: 'car-next' }, h('span', { class: 'muted', text: car.next.label }), pill(car.next.daysLeft)) : null),
@@ -251,13 +251,130 @@
     return box;
   }
 
-  function carPage(id) {
+
+  // ---------- fill-ups and running costs ----------
+
+  const TYPES = [['fuel', 'Fuel'], ['service', 'Service'], ['repair', 'Repair'], ['mot', 'MOT'], ['parts', 'Parts'], ['tyres', 'Tyres'], ['insurance', 'Insurance'], ['tax', 'Road tax'], ['parking', 'Parking'], ['wash', 'Wash'], ['fine', 'Fine'], ['other', 'Other']];
+  const money = (p) => `£${(p / 100).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const km = (n) => (n == null ? '' : n.toLocaleString('en-GB'));
+  const store = {
+    get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private window: carry on without */ } },
+  };
+  const QUEUE = 'roost-cars-queue';
+  const newCid = () => (window.crypto && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+
+  // A fill-up typed with no signal waits on the phone and is sent when Roost is
+  // reachable again. The cid makes a resend harmless on the server.
+  async function flushQueue() {
+    const queue = store.get(QUEUE, []);
+    if (!queue.length) return 0;
+    const left = [];
+    let sent = 0;
+    for (const q of queue) {
+      try { await api('POST', `/api/cars/${q.carId}/entries`, { ...q.body, force: true }); sent++; } catch (err) { if (!err.status) left.push(q); }
+    }
+    store.set(QUEUE, left);
+    return sent;
+  }
+  window.addEventListener('online', () => { flushQueue().then((n) => { if (n && S.current) carPage(S.current); }); });
+
+  function entryForm(car, existing, done) {
+    const units = car.units === 'km' ? 'km' : 'mi';
+    const f = h('form', { class: 'car-form car-entryform', autocomplete: 'off' });
+    let type = existing ? existing.type : 'fuel';
+    const chips = h('div', { class: 'car-chips', role: 'group', 'aria-label': 'What for' });
+    const fuelBits = h('div', { class: 'car-fuelbits' });
+    const paint = () => {
+      fill(chips, TYPES.map(([v, t]) => h('button', { type: 'button', class: `car-chip${v === type ? ' on' : ''}`, 'aria-pressed': String(v === type), text: t, onclick: () => { type = v; paint(); } })));
+      fuelBits.classList.toggle('hidden', type !== 'fuel');
+    };
+    const inp = (label, name, attrs = {}) => h('label', {}, h('span', { class: 'mono', text: label }), h('input', { name, autocomplete: 'off', ...attrs }));
+    const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    fuelBits.append(
+      inp('Litres', 'litres', { inputmode: 'decimal', value: existing && existing.litres ? existing.litres : '', placeholder: '38.4' }),
+      h('label', { class: 'check-line' }, h('input', { type: 'checkbox', name: 'full', checked: existing ? existing.full : true }), ' Filled the tank'));
+    paint();
+    const status = h('p', { class: 'car-warn', 'aria-live': 'polite' });
+    f.append(chips, inp('Total (£)', 'amount', { inputmode: 'decimal', required: true, value: existing ? (existing.amount / 100).toFixed(2) : '', placeholder: '54.20' }), fuelBits,
+      inp(`Odometer (${units})`, 'odometer', { inputmode: 'numeric', value: existing && existing.odometer != null ? existing.odometer : '', placeholder: car.odometer ? `Last: ${km(car.odometer)}` : '41320' }),
+      h('div', { class: 'car-two' }, inp('Date', 'date', { type: 'date', value: existing ? existing.date : today }), inp('Note', 'note', { maxlength: 200, value: existing ? existing.note : '', placeholder: 'Optional' })),
+      status,
+      h('div', { class: 'car-actions' }, h('button', { class: 'btn', type: 'submit', text: existing ? 'Save' : 'Save entry' }), h('button', { class: 'btn ghost', type: 'button', text: 'Cancel', onclick: () => done(false) })));
+    let force = false;
+    f.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(f));
+      const body = { type, date: d.date, amount: d.amount, odometer: d.odometer, note: d.note, litres: type === 'fuel' ? d.litres : '', full: type === 'fuel' ? f.elements.full.checked : false, force };
+      if (!existing) body.cid = f.dataset.cid || (f.dataset.cid = newCid());
+      try {
+        if (existing) await api('PATCH', `/api/cars/${car.id}/entries/${existing.id}`, body);
+        else await api('POST', `/api/cars/${car.id}/entries`, body);
+        done(true);
+      } catch (err) {
+        if (err.code === 'check-odometer') {
+          force = true;
+          fill(status, `${err.message} Check it, or press Save again to keep it.`);
+        } else if (!err.status && !existing) {
+          const queue = store.get(QUEUE, []);
+          queue.push({ carId: car.id, body: { ...body, force: true } });
+          store.set(QUEUE, queue);
+          done(true, 'No signal: saved on this phone, and sent when Roost is reachable.');
+        } else fill(status, err.message);
+      }
+    });
+    return f;
+  }
+
+  function statTiles(car, stats) {
+    const mode = store.get('roost-cars-consumption', car.units === 'km' ? 'l100' : 'mpg');
+    const c = stats.overall;
+    const per = car.units === 'km' ? 'km' : 'mile';
+    const tile = (big, small, onclick) => h(onclick ? 'button' : 'div', { class: 'car-stat', type: onclick ? 'button' : null, onclick }, h('b', { text: big }), h('span', { class: 'mono muted', text: small }));
+    return h('div', { class: 'car-stats' },
+      tile(c ? String(mode === 'l100' ? c.l100 : c.mpg) : '–', c ? (mode === 'l100' ? 'L/100 km · tap' : 'mpg · tap') : 'needs 2 full tanks', c ? () => { store.set('roost-cars-consumption', mode === 'l100' ? 'mpg' : 'l100'); carPage(car.id); } : null),
+      tile(stats.perUnit != null ? `${stats.perUnit}p` : '–', stats.perUnit != null ? `per ${per}, last year` : `per ${per}, needs miles`),
+      tile(money(stats.thisMonth), 'this month'));
+  }
+
+  async function costsBlock(car) {
+    const box = h('section', { class: 'car-costs' });
+    const can = car.role === 'owner' || car.role === 'editor';
+    const open = (form) => { fill(box, h('div', { class: 'car-bar' }, h('h3', { text: form.existing ? 'Edit entry' : 'Add an entry' })), form.el); };
+    const finish = async (saved, msg) => { if (saved) { await load().catch(() => {}); carPage(car.id, msg || ''); } else paintList(); };
+    let data = null;
+    const addButton = () => (can ? h('button', { class: 'btn car-add', type: 'button', text: 'Add fill-up or cost', onclick: () => open({ el: entryForm(car, null, finish) }) }) : null);
+    function paintList() {
+      if (!data) return;
+      const shown = box.dataset.all ? data.entries : data.entries.slice(0, 8);
+      fill(box,
+        statTiles(car, data.stats),
+        h('div', { class: 'car-bar' }, h('h3', { text: 'Fuel and costs' }), addButton()),
+        shown.length ? shown.map((e) => {
+          const more = h('div', { class: 'car-actions hidden' }, e.canEdit ? [
+            h('button', { class: 'btn small ghost', type: 'button', text: 'Edit', onclick: () => open({ existing: true, el: entryForm(car, e, finish) }) }),
+            h('button', { class: 'btn small danger', type: 'button', text: 'Delete', onclick: async () => { try { await api('DELETE', `/api/cars/${car.id}/entries/${e.id}`); await load(); carPage(car.id); } catch (err) { say(err.message); } } })] : null);
+          const row = h('button', { class: 'car-date', type: 'button', 'aria-expanded': 'false', onclick: () => { const o = more.classList.toggle('hidden') === false; row.setAttribute('aria-expanded', String(o)); } },
+            h('span', { class: 'car-dlabel' }, h('b', { text: e.label + (e.litres ? ` · ${e.litres} L` : '') }), h('span', { class: 'muted', text: [niceDay(e.date), e.odometer != null ? `${km(e.odometer)} ${car.units}` : '', e.by !== car.owner ? e.by : '', e.note].filter(Boolean).join(' · ') })),
+            h('b', { text: money(e.amount) }));
+          return h('div', { class: 'car-daterow' }, row, e.canEdit ? more : null);
+        }) : h('p', { class: 'muted', text: can ? 'Nothing logged yet. Add your first fill-up and Roost works out mpg and cost per mile.' : 'Nothing logged yet.' }),
+        data.entries.length > 8 && !box.dataset.all ? h('button', { class: 'btn small ghost', type: 'button', text: `Show all ${data.count}`, onclick: () => { box.dataset.all = '1'; paintList(); } }) : null);
+    }
+    fill(box, h('p', { class: 'muted mono', text: 'Loading…' }));
+    try { data = await api('GET', `/api/cars/${car.id}/entries`); paintList(); } catch (err) { fill(box, h('p', { class: 'muted', text: err.message })); }
+    return box;
+  }
+
+  function carPage(id, notice) {
     const car = S.cars.find((c) => c.id === id);
     if (!car) { location.hash = '#/cars'; return; }
+    S.current = id;
     document.title = car.name;
     const mine = car.role === 'owner';
     const file = h('input', { type: 'file', accept: 'image/*', class: 'hidden', onchange: (e) => e.target.files[0] && sendPhoto(car, e.target.files[0]) });
     const r = root();
+    const costsHolder = h('div');
     fill(r, 
       h('div', { class: 'car-bar' }, h('a', { class: 'btn small ghost', href: '#/cars', 'aria-label': 'Back to cars', text: '‹' }), h('h2', { text: car.name }),
         car.archived ? h('span', { class: 'mono muted', text: 'Archived' }) : null),
@@ -267,17 +384,20 @@
         h('button', { class: 'btn small', type: 'button', text: car.photo ? 'Change photo' : 'Add photo', onclick: () => file.click() }),
         S.glint ? h('button', { class: 'btn small ghost', type: 'button', text: 'From Glint', onclick: () => glintPicker(car) }) : null,
         car.photo ? h('button', { class: 'btn small ghost', type: 'button', text: 'Remove photo', onclick: async () => { try { Object.assign(car, await api('DELETE', `/api/cars/${car.id}/photo`)); carPage(id); } catch (err) { say(err.message); } } }) : null) : null,
+      costsHolder,
+      datesBlock(car),
       h('dl', { class: 'car-facts' },
         ...[['Plate', car.plate], ['Make and model', [car.make, car.model].filter(Boolean).join(' ')], ['Year', car.year], ['Fuel', car.fuel], ['Distance in', car.units === 'km' ? 'Kilometres' : 'Miles'], ['Owner', car.owner]]
           .filter(([, v]) => v).flatMap(([k, v]) => [h('dt', { class: 'mono', text: k }), h('dd', { text: String(v) })])),
-      datesBlock(car),
-      h('p', { class: 'muted car-soon', text: 'Fuel and service history come next.' }),
+      h('p', { class: 'muted car-soon', text: 'Service history with receipts comes next.' }),
       mine ? h('details', { class: 'car-edit' }, h('summary', { class: 'mono', text: 'Edit details' }), form(car)) : null,
       mine ? sharePanel(car) : h('p', { class: 'muted', text: car.role === 'editor' ? 'Shared with you: you can add entries.' : 'Shared with you to look at.' }),
       mine ? h('div', { class: 'car-danger' },
         h('button', { class: 'btn small ghost', type: 'button', text: car.archived ? 'Bring back' : 'Archive (sold or gone)', onclick: async () => { try { Object.assign(car, await api('POST', `/api/cars/${car.id}/archive`, { on: !car.archived })); carPage(id); } catch (err) { say(err.message); } } }),
         h('button', { class: 'btn small danger', type: 'button', text: 'Delete…', onclick: (e) => del(car, e.target.parentNode) })) : null,
     );
+    costsBlock(car).then((b) => costsHolder.append(b));
+    if (notice) say(notice);
   }
 
   // Deleting asks for the car's name on the page itself (no pop-up).
@@ -301,6 +421,7 @@
       else if (!S.cars.some((c) => c.id === rest[0])) await load();
     } catch (err) { if (ticket === S.ask) fill(root(), h('p', { text: err.message })); return; }
     if (ticket !== S.ask) return;
+    flushQueue().then((n) => { if (n && S.current && rest[0] === S.current) carPage(S.current, `${n} saved entr${n === 1 ? 'y' : 'ies'} sent.`); });
     if (rest[0] === 'new') newCar();
     else if (rest[0]) carPage(rest[0]);
     else garage();

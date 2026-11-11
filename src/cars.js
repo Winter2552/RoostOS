@@ -11,6 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 const { HttpError, str } = require('./http');
+const entriesLib = require('./car-entries');
 
 const MAX_PHOTO = 600 * 1024;
 const FUELS = ['petrol', 'diesel', 'hybrid', 'electric', 'other'];
@@ -109,6 +110,7 @@ class Cars {
       photo: fs.existsSync(this.photoFile(car.id)) ? `/api/cars/${car.id}/photo?v=${car.photoAt || 0}` : '',
       role, owner: this.nameOf(car.ownerId),
       dates: this.datesView(car),
+      odometer: entriesLib.latestOdometer(car.entries || []),
     };
     out.next = out.dates[0] ? { label: out.dates[0].label, daysLeft: out.dates[0].daysLeft } : null;
     if (role === 'owner') {
@@ -321,6 +323,73 @@ class Cars {
     this.findDate(car, did).snoozedUntil = addDays(this.today(), SNOOZE_DAYS);
     this.store.save();
     return this.view(user, car);
+  }
+
+
+  // ---------- fill-ups and running costs ----------
+
+  entryView(user, car, e) {
+    const role = this.roleOf(user, car);
+    return {
+      id: e.id, type: e.type, label: entriesLib.TYPES[e.type], date: e.date, odometer: e.odometer, amount: e.amount, litres: e.litres,
+      full: e.full, note: e.note, by: this.nameOf(e.by), canEdit: role === 'owner' || (role === 'editor' && e.by === user.id),
+    };
+  }
+
+  entriesOf(user, id) {
+    const car = this.get(user, id);
+    const list = car.entries || [];
+    return {
+      entries: [...list].sort((a, b) => -entriesLib.order(a, b)).slice(0, 500).map((e) => this.entryView(user, car, e)),
+      count: list.length,
+      stats: entriesLib.sums(list, this.today(), car.units),
+    };
+  }
+
+  // body.cid makes a retry harmless: a fill-up sent twice (a bad signal, then
+  // the phone's saved copy) is stored once. body.force saves a reading that
+  // looked wrong after the person has said so.
+  addEntry(user, id, body) {
+    const car = this.get(user, id, 'editor');
+    if (!Array.isArray(car.entries)) car.entries = [];
+    const cid = str(body.cid, 40);
+    const twin = cid && car.entries.find((e) => e.cid === cid && e.by === user.id);
+    if (twin) return { entry: this.entryView(user, car, twin), ...this.entriesOf(user, id) };
+    if (car.entries.length >= entriesLib.MAX_ENTRIES) throw new HttpError(400, 'That’s a lot of entries for one car');
+    const entry = { id: this.store.newId(), by: user.id, created: Date.now(), ...entriesLib.clean(body, this.today()) };
+    if (cid) entry.cid = cid;
+    const warn = entriesLib.odometerWarning(car.entries, entry);
+    if (warn && body.force !== true) throw new HttpError(409, warn, 'check-odometer');
+    car.entries.push(entry);
+    this.store.save();
+    return { entry: this.entryView(user, car, entry), ...this.entriesOf(user, id) };
+  }
+
+  findEntry(user, car, eid) {
+    const e = (car.entries || []).find((x) => x.id === eid);
+    if (!e) throw new HttpError(404, 'That entry isn’t there');
+    const role = this.roleOf(user, car);
+    if (role !== 'owner' && !(role === 'editor' && e.by === user.id)) throw new HttpError(403, 'You can only change your own entries');
+    return e;
+  }
+
+  updateEntry(user, id, eid, body) {
+    const car = this.get(user, id, 'editor');
+    const e = this.findEntry(user, car, eid);
+    const next = entriesLib.clean({ ...e, ...body }, this.today());
+    const warn = entriesLib.odometerWarning(car.entries, { ...e, ...next }, e.id);
+    if (warn && body.force !== true) throw new HttpError(409, warn, 'check-odometer');
+    Object.assign(e, next);
+    this.store.save();
+    return this.entriesOf(user, id);
+  }
+
+  removeEntry(user, id, eid) {
+    const car = this.get(user, id, 'editor');
+    this.findEntry(user, car, eid);
+    car.entries = car.entries.filter((x) => x.id !== eid);
+    this.store.save();
+    return this.entriesOf(user, id);
   }
 
   // Everyone who should hear about a car's dates: the owner, the people it is

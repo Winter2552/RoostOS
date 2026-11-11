@@ -13,6 +13,12 @@
       "admin": true
     },
     {
+      "title": "Fuel and running costs per car",
+      "text": "Log a fill-up in seconds and Roost works out miles per gallon, what each mile costs and this month's spend. Add service, parking, tyres and other costs too. No signal at the pump? It saves on your phone and sends later.",
+      "image": "cars-costs.png",
+      "admin": true
+    },
+    {
       "title": "Cockerel picks his own brain",
       "text": "For each message he chooses Haiku, Sonnet or Opus, whichever is cheapest and still good enough, and says which in a small tag. Tap Think harder to use the strongest model for one message, or pin one in Admin.",
       "image": "cockerel-smarter.png",
