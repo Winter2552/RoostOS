@@ -86,6 +86,7 @@ function consumption(entries, units) {
   let litres = 0;
   let spend = 0;
   let last = null;
+  const segments = [];
   let anchor = null;
   let inLitres = 0;
   let inSpend = 0;
@@ -100,6 +101,7 @@ function consumption(entries, units) {
           litres += inLitres;
           spend += inSpend;
           last = { distance: d, litres: inLitres };
+          segments.push({ date: f.date, distance: d, litres: inLitres });
         }
       }
     }
@@ -111,7 +113,9 @@ function consumption(entries, units) {
     mpg: Math.round((miles(s.distance) / (s.litres / LITRES_PER_GALLON)) * 10) / 10,
     l100: Math.round((s.litres / km(s.distance)) * 1000) / 10,
   } : null);
-  return { overall: calc(distance ? { distance, litres } : null), last: calc(last), fuelPerUnit: distance ? Math.round(spend / distance) : null };
+  // One point per tank, oldest first, for the chart.
+  const series = segments.slice(-24).map((g) => ({ date: g.date, ...calc(g) }));
+  return { overall: calc(distance ? { distance, litres } : null), last: calc(last), fuelPerUnit: distance ? Math.round(spend / distance) : null, series };
 }
 
 function sums(entries, today, units) {

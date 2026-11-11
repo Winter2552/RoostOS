@@ -91,3 +91,14 @@ test('entries: owner edits any, an editor only their own, a viewer none', () => 
   assert.equal(cars.removeEntry(mia, car.id, hers.id).count, 1);
   assert.throws(() => cars.removeEntry(mia, car.id, mine.id), /your own/);
 });
+
+test('consumption keeps one point per tank for the chart, oldest first', () => {
+  const list = [fill('2026-09-01', 10000, 40, 6000), fill('2026-09-20', 10450, 41, 6150), fill('2026-10-10', 10900, 38, 5700)];
+  const { series, overall } = lib.consumption(list, 'mi');
+  assert.deepEqual(series.map((p) => [p.date, p.mpg]), [['2026-09-20', 49.9], ['2026-10-10', 53.8]]);
+  assert.ok(overall.mpg > 49.9 && overall.mpg < 53.8);
+  assert.deepEqual(lib.consumption([list[0]], 'mi').series, []);
+  const many = [];
+  for (let i = 0; i < 40; i++) many.push(fill(`2026-${String(1 + Math.floor(i / 4)).padStart(2, '0')}-${String(1 + (i % 4) * 7).padStart(2, '0')}`, 1000 + i * 400, 40, 6000));
+  assert.equal(lib.consumption(many, 'mi').series.length, 24, 'only the last 24 tanks');
+});

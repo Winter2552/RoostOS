@@ -421,6 +421,89 @@
     setTimeout(() => frame.remove(), 60000);
   }
 
+  // ---------- charts: plain SVG, no library ----------
+
+  const NS = 'http://www.w3.org/2000/svg';
+  const sv = (tag, attrs = {}, text) => {
+    const n = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    if (text != null) n.textContent = text;
+    return n;
+  };
+  const GROUPS = [['fuel', 'Fuel'], ['service', 'Service and repairs'], ['fixed', 'Insurance and tax'], ['other', 'Parking, washes, fines, other']];
+  const monthName = (m, withYear) => `${new Date(`${m}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'short' })}${withYear ? ` ’${m.slice(2, 4)}` : ''}`;
+  // The drawing is as wide as the page, so text stays the same size on a phone and a PC.
+  const chartWidth = () => Math.min(720, Math.max(300, (root().clientWidth || 340) - 28));
+  // The next tidy number at or above n (1, 2, 5 times a power of ten), so the axis reads cleanly.
+  const niceMax = (n) => { if (n <= 0) return 100; const p = 10 ** Math.floor(Math.log10(n)); for (const f of [1, 2, 5, 10]) if (n <= f * p) return f * p; return 10 * p; };
+  const pounds = (p) => `£${Math.round(p / 100).toLocaleString('en-GB')}`;
+
+  function spendChart(stats, caption) {
+    const months = stats.months;
+    const W = chartWidth(); const H = 180; const L = 44; const B = 24; const T = 8;
+    const top = niceMax(Math.max(...months.map((m) => m.total))) ;
+    const y = (v) => T + (H - T - B) * (1 - v / top);
+    const slot = (W - L - 6) / Math.max(months.length, 6);
+    const bar = Math.min(34, slot * 0.62);
+    const svg = sv('svg', { viewBox: `0 0 ${W} ${H}`, class: 'car-chart', role: 'img', 'aria-label': `Spending each month, most recent ${months.length} months` });
+    for (const v of [0, top / 2, top]) {
+      svg.append(sv('line', { x1: L, x2: W - 4, y1: y(v), y2: y(v), class: 'car-grid-line' }), sv('text', { x: L - 6, y: y(v) + 4, class: 'car-axis', 'text-anchor': 'end' }, pounds(v)));
+    }
+    months.forEach((m, i) => {
+      const g = sv('g', { tabindex: '0', role: 'button', class: 'car-bar-g', 'aria-label': `${monthName(m.m, true)}: ${money(m.total)}` });
+      let base = 0;
+      GROUPS.forEach(([k], gi) => {
+        if (!m[k]) return;
+        g.append(sv('rect', { x: L + 6 + i * slot + (slot - bar) / 2, y: y(base + m[k]), width: bar, height: Math.max(1, y(base) - y(base + m[k])), class: `car-g${gi}` }));
+        base += m[k];
+      });
+      g.append(sv('rect', { x: L + 6 + i * slot, y: T, width: slot, height: H - T - B, class: 'car-hit' }));
+      const show = () => fill(caption, `${monthName(m.m, true)}: ${money(m.total)}`, GROUPS.filter(([k]) => m[k]).map(([k, t]) => ` · ${t} ${money(m[k])}`));
+      g.addEventListener('click', show);
+      g.addEventListener('focus', show);
+      svg.append(g);
+      if (months.length <= 6 || i % 2 === months.length % 2 || i === months.length - 1) svg.append(sv('text', { x: L + 6 + i * slot + slot / 2, y: H - 7, class: 'car-axis', 'text-anchor': 'middle' }, monthName(m.m, i === 0 || m.m.endsWith('-01'))));
+    });
+    return svg;
+  }
+
+  function consumptionChart(car, stats) {
+    const pts = stats.series || [];
+    const mode = store.get('roost-cars-consumption', car.units === 'km' ? 'l100' : 'mpg');
+    const val = (p) => (mode === 'l100' ? p.l100 : p.mpg);
+    const W = chartWidth(); const H = 140; const L = 44; const B = 22; const T = 10;
+    const lo = Math.min(...pts.map(val)); const hi = Math.max(...pts.map(val));
+    const pad = Math.max(1, (hi - lo) * 0.2);
+    const a = Math.floor(lo - pad); const b = Math.ceil(hi + pad);
+    const y = (v) => T + (H - T - B) * (1 - (v - a) / (b - a));
+    const x = (i) => L + 6 + ((W - L - 14) * i) / Math.max(1, pts.length - 1);
+    const svg = sv('svg', { viewBox: `0 0 ${W} ${H}`, class: 'car-chart', role: 'img', 'aria-label': `${mode === 'l100' ? 'Litres per 100 km' : 'Miles per gallon'} for each tank` });
+    for (const v of [a, b]) svg.append(sv('line', { x1: L, x2: W - 4, y1: y(v), y2: y(v), class: 'car-grid-line' }), sv('text', { x: L - 6, y: y(v) + 4, class: 'car-axis', 'text-anchor': 'end' }, String(v)));
+    svg.append(sv('polyline', { points: pts.map((p, i) => `${x(i)},${y(val(p))}`).join(' '), class: 'car-line-path' }));
+    pts.forEach((p, i) => { const c = sv('circle', { cx: x(i), cy: y(val(p)), r: 3.2, class: 'car-dot' }); c.append(sv('title', {}, `${niceDay(p.date)}: ${val(p)}`)); svg.append(c); });
+    svg.append(sv('text', { x: x(0), y: H - 6, class: 'car-axis', 'text-anchor': 'start' }, niceDay(pts[0].date)), sv('text', { x: x(pts.length - 1), y: H - 6, class: 'car-axis', 'text-anchor': 'end' }, niceDay(pts[pts.length - 1].date)));
+    return svg;
+  }
+
+  function chartsTab(car, stats) {
+    if (!stats.months.length) return [h('p', { class: 'muted', text: 'Add a few fill-ups and costs and the charts appear here.' })];
+    const caption = h('p', { class: 'car-caption mono', 'aria-live': 'polite', text: 'Tap a bar for that month.' });
+    const mode = store.get('roost-cars-consumption', car.units === 'km' ? 'l100' : 'mpg');
+    const split = stats.split;
+    const total = GROUPS.reduce((n, [k]) => n + split[k], 0);
+    const out = [
+      h('h4', { class: 'car-ch', text: 'Spent each month' }), spendChart(stats, caption), caption,
+      h('h4', { class: 'car-ch', text: mode === 'l100' ? 'Litres per 100 km, each tank' : 'Miles per gallon, each tank' }),
+      stats.series && stats.series.length >= 2 ? consumptionChart(car, stats) : h('p', { class: 'muted', text: 'Needs three full-tank fill-ups with the odometer to draw.' }),
+      h('h4', { class: 'car-ch', text: 'Where the last 12 months went' }),
+    ];
+    if (total > 0) {
+      out.push(h('div', { class: 'car-splitbar', role: 'img', 'aria-label': 'Share of spending by kind' }, GROUPS.map(([k], gi) => (split[k] ? h('span', { class: `car-g${gi}`, style: `flex: ${split[k]}` }) : null))),
+        h('div', { class: 'car-legend' }, GROUPS.filter(([k]) => split[k]).map(([k, t]) => h('div', { class: 'car-legrow' }, h('span', { class: `car-swatch car-g${GROUPS.findIndex(([x]) => x === k)}` }), h('span', { text: t }), h('b', { text: money(split[k]) }), h('span', { class: 'muted mono', text: `${Math.round((split[k] / total) * 100)}%` })))));
+    } else out.push(h('p', { class: 'muted', text: 'Nothing in the last 12 months.' }));
+    return out;
+  }
+
   // ---------- the ledger: costs, history and papers ----------
 
   async function costsBlock(car) {
@@ -487,11 +570,11 @@
     function paint() {
       if (!data) return;
       const tab = S.tab || 'costs';
-      const tabs = h('div', { class: 'car-chips', role: 'tablist', 'aria-label': 'Fuel, history and papers' }, [['costs', 'Costs'], ['history', 'History'], ['papers', 'Papers']].map(([v, t]) =>
+      const tabs = h('div', { class: 'car-chips', role: 'tablist', 'aria-label': 'Costs, history, charts and papers' }, [['costs', 'Costs'], ['history', 'History'], ['charts', 'Charts'], ['papers', 'Papers']].map(([v, t]) =>
         h('button', { type: 'button', role: 'tab', 'aria-selected': String(v === tab), class: `car-chip${v === tab ? ' on' : ''}`, text: t, onclick: () => { S.tab = v; paint(); } })));
       fill(box, statTiles(car, data.stats),
         h('div', { class: 'car-bar' }, h('h3', { text: 'Fuel and costs' }), can ? h('button', { class: 'btn car-add', type: 'button', text: 'Add fill-up or cost', onclick: add }) : null),
-        tabs, tab === 'costs' ? costsTab() : tab === 'history' ? historyTab() : papersTab());
+        tabs, tab === 'costs' ? costsTab() : tab === 'history' ? historyTab() : tab === 'charts' ? chartsTab(car, data.stats) : papersTab());
     }
     fill(box, h('p', { class: 'muted mono', text: 'Loading…' }));
     try { data = await api('GET', `/api/cars/${car.id}/entries`); paint(); } catch (err) { fill(box, h('p', { class: 'muted', text: err.message })); }
