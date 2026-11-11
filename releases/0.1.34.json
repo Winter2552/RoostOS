@@ -1,0 +1,14 @@
+{
+  "version": "0.1.34",
+  "date": "2026-11-11",
+  "title": "Away from home",
+  "summary": "Reach your home network from your phone or PC when you are out.",
+  "items": [
+    {
+      "title": "Reach home from anywhere",
+      "text": "A new Away from home card in Admin → Network gives your phone and PC a private WireGuard link to the home network. Scan a QR code in the WireGuard app, then SSH to the server or open Roost's Admin when you are out. Only home traffic goes through the link.",
+      "image": "away-from-home.png",
+      "admin": true
+    }
+  ]
+}
