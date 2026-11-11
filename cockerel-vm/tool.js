@@ -118,7 +118,15 @@ async function fetchJob(link, opt) {
   writeJson(jobFile(id), meta);
   await hook({ type: 'job', id, title: name, state: 'Finding', requester: meta.requester });
 
-  // Folders first: a share he can't write to would fail the download (or the filing) later.
+  // Share first: if it isn't connected, say so rather than a puzzling permissions error.
+  const missing = lib.shareMissing(MEDIA);
+  if (missing) {
+    writeJson(jobFile(id), { ...meta, status: 'failed' });
+    await hook({ type: 'job', id, state: 'Failed' });
+    await hook({ type: 'log', text: `Did not start ${name}: the media share isn't connected (${missing} is empty). In my VM: sudo mount ${missing}` });
+    fail(`The media share isn't connected to my VM (${missing}), so I can't save anything yet. Tell Raven it needs reconnecting; the fix is in the log.`);
+  }
+  // Folders next: a share he can't write to would fail the download (or the filing) later.
   const blocked = [INCOMING, path.join(MEDIA, 'Movies'), path.join(MEDIA, 'Series')].map(lib.writableProblem).find(Boolean);
   if (blocked) {
     writeJson(jobFile(id), { ...meta, status: 'failed' });

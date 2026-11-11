@@ -223,3 +223,9 @@ test('Roost shows the download detail only while downloading', () => {
   assert.equal(c.data().jobs[0].state, 'Adding');
   assert.equal(c.data().jobs[0].detail, '');
 });
+
+test('he notices when the media share is not connected', () => {
+  assert.equal(lib.shareMissing('/tmp/some/other/place', {}), '', 'not checked outside the usual layout');
+  assert.equal(lib.shareMissing('/tmp', { MEDIA_MOUNT: '/' }), '', '/ is always a mount point');
+  assert.equal(lib.shareMissing('/tmp', { MEDIA_MOUNT: '/definitely/not/mounted' }), '/definitely/not/mounted', 'a folder that is not a mount is reported');
+});
