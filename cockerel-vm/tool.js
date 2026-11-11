@@ -123,7 +123,7 @@ async function fetchJob(link, opt) {
   const kind = opt.kind === 'show' ? 'show' : 'movie';
   const source = lib.sourceKind(link);
   if (source === 'bad') fail('That link is not allowed. Only https links to the open internet, or a magnet link Raven gave you.');
-  const meta = { ...readJson(jobFile(id), {}), id, link, name, year: opt.year || '', kind, requester: opt.requester || '', status: 'new' };
+  const meta = { ...readJson(jobFile(id), {}), id, link, name, year: opt.year || '', genre: opt.genre || '', kind, requester: opt.requester || '', status: 'new' };
   writeJson(jobFile(id), meta);
   await hook({ type: 'job', id, title: name, state: 'Finding', requester: meta.requester });
 
@@ -273,7 +273,7 @@ async function done(id) {
       if (probe.status !== 0 || !(Number(probe.stdout) > 60)) throw new Error(`${path.basename(f)} does not look like a video`);
     }
     await hook({ type: 'job', id, state: 'Adding', progress: 99 });
-    const target = (f) => (meta.kind === 'show' ? lib.episodePath(MEDIA, meta.name, path.basename(f)) : lib.moviePath(MEDIA, meta.name, meta.year, path.extname(f).toLowerCase()));
+    const target = (f) => (meta.kind === 'show' ? lib.episodePath(MEDIA, meta.name, path.basename(f)) : lib.moviePath(MEDIA, meta.name, meta.year, path.extname(f).toLowerCase(), lib.genreFolder(MEDIA, meta.genre)));
     if (files.some((f) => !target(f))) throw new Error('could not tell the episode numbers from the file names');
     for (const f of files) {
       const to = target(f);
@@ -355,7 +355,7 @@ const COMMANDS = {
     console.log(out.found.length ? out.found.map((i) => `${i.name} (${i.year || '?'}) ${i.type}`).join('\n') : 'Not on Roostflix.');
   },
   find: async ([title]) => { if (!title) fail('find "Title"'); await find(title); },
-  fetch: async ([link], opt) => { if (!link) fail('fetch <link> --job ID --name "Name" [--year 2010] [--kind movie|show] [--requester username]'); await fetchJob(link, opt); },
+  fetch: async ([link], opt) => { if (!link) fail('fetch <link> --job ID --name "Name" [--year 2010] [--genre Action] [--kind movie|show] [--requester username]'); await fetchJob(link, opt); },
   send: async (_pos, opt) => { await send(opt); },
   // His notebook lives in Roost; these just talk to it.
   remember: async ([text]) => { if (!text) fail('remember "something to keep in mind"'); await hook({ type: 'remember', text }); console.log('Noted.'); },
@@ -481,6 +481,23 @@ const COMMANDS = {
   },
   birdhouse: async ([id]) => { console.log((await hook({ type: 'birdhouse', id })).lines.join('\n') || 'No Birdhouse plans yet.'); },
   notify: async ([text]) => { if (!text) fail('notify "short message"'); await hook({ type: 'notify', text }); console.log('Sent to Raven\'s phone.'); },
+  genres: () => { console.log(lib.genreFolders(MEDIA).join(', ') || 'No genre folders in Movies yet.'); },
+  // Moves a film that sits loose in Movies into one of Raven's genre folders.
+  shelve: async ([film], opt) => {
+    if (!film || !opt.genre) fail('shelve "Name (Year)" --genre Action   (see `genres` for the folders)');
+    const genre = lib.genreFolder(MEDIA, opt.genre);
+    if (!genre) fail(`There is no genre folder for "${opt.genre}". Folders: ${lib.genreFolders(MEDIA).join(', ') || 'none'}.`);
+    const name = lib.cleanName(film);
+    const from = path.join(MEDIA, 'Movies', name);
+    const to = path.join(MEDIA, 'Movies', genre, name);
+    if (!name || lib.genreFolders(MEDIA).includes(name) || !fs.existsSync(from)) fail(`I can't find "${film}" loose in Movies.`);
+    if (fs.existsSync(to)) fail(`${genre}/${name} already exists.`);
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.renameSync(from, to);
+    await hook({ type: 'refresh' });
+    await hook({ type: 'log', text: `Filed ${name} under ${genre}.` });
+    console.log(`Moved ${name} into ${genre} and asked Roostflix to refresh.`);
+  },
   finished: async ([id]) => { await done(id); },
   failed: async ([id]) => { await failed(id); },
 };
@@ -488,7 +505,7 @@ const COMMANDS = {
 (async () => {
   const [cmd, ...rest] = process.argv.slice(2);
   const run = COMMANDS[cmd];
-  if (!run) fail(`Commands: ${Object.keys(COMMANDS).filter((c) => !['done', 'failed', 'watch'].includes(c)).join(', ')}`);
+  if (!run) fail(`Commands: ${Object.keys(COMMANDS).filter((c) => !['done', 'failed', 'watch', 'finished'].includes(c)).join(', ')}`);
   const { pos, opt } = parse(rest);
   await run(pos, opt);
 })().catch((err) => fail(err.message));

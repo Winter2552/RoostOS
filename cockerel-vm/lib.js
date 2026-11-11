@@ -57,12 +57,29 @@ function cleanName(name) {
   return String(name || '').replace(BAD_CHARS, ' ').replace(/\s+/g, ' ').replace(/^[. ]+|[. ]+$/g, '').slice(0, 120);
 }
 
-// Movies/Name (Year)/Name (Year).ext
-function moviePath(root, name, year, ext) {
+// Movies/[Genre/]Name (Year)/Name (Year).ext
+function moviePath(root, name, year, ext, genre = '') {
   const n = cleanName(name);
   if (!n) throw new Error('A film needs a name');
   const label = /^\d{4}$/.test(String(year)) ? `${n} (${year})` : n;
-  return path.join(root, 'Movies', label, `${label}${ext}`);
+  return path.join(root, 'Movies', genre, label, `${label}${ext}`);
+}
+
+// Raven's genre folders are whatever folders already sit in Movies that are not
+// a film ("Name (Year)"). A genre Claude names maps onto one of them, or to ''.
+const GENRE_ALIASES = { documentary: 'documentaries', animation: 'animated', cartoon: 'animated', 'science fiction': 'sci-fi', scifi: 'sci-fi', 'sci fi': 'sci-fi', thriller: 'crime' };
+function genreFolders(root) {
+  try {
+    return require('fs').readdirSync(path.join(root, 'Movies'), { withFileTypes: true })
+      .filter((e) => e.isDirectory() && !/\(\d{4}\)\s*$/.test(e.name) && !e.name.startsWith('.')).map((e) => e.name).sort();
+  } catch { return []; }
+}
+function genreFolder(root, genre) {
+  const want = String(genre || '').trim().toLowerCase();
+  if (!want) return '';
+  const folders = genreFolders(root);
+  const hit = (w) => folders.find((f) => f.toLowerCase() === w);
+  return hit(want) || (GENRE_ALIASES[want] && hit(GENRE_ALIASES[want])) || '';
 }
 
 // Series/Name/Season 01/Name - S01E02.ext, from a file called ...S01E02...
@@ -148,4 +165,4 @@ function progressText(speed, bytesLeft) {
 // (time and ratio), and upload only a trickle while downloading.
 const NO_SEED = ['--seed-time=0', '--seed-ratio=0.0', '--max-overall-upload-limit=1K'];
 
-module.exports = { shareMissing, writableProblem, progressText, NO_SEED, browseUrl, pageText, sign, headers, verify, OPEN_HOSTS, hostOpen, sourceKind, VIDEO, cleanName, moviePath, episodePath, jobIdOk, human };
+module.exports = { genreFolders, genreFolder, shareMissing, writableProblem, progressText, NO_SEED, browseUrl, pageText, sign, headers, verify, OPEN_HOSTS, hostOpen, sourceKind, VIDEO, cleanName, moviePath, episodePath, jobIdOk, human };

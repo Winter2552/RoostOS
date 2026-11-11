@@ -56,8 +56,8 @@ const GROUPS = {
   watching: ['watching'],
 };
 const TOOLS = {
-  media: ['events', 'library', 'find', 'fetch', 'ask', 'log', 'job', 'jobs', 'retry'],
-  assistant: ['events', 'handoff', 'jobs', 'calc', 'nest', 'watching', 'routine', 'ask', 'log', 'send', 'remember', 'memories', 'forget', 'task', 'tasks', 'done', 'remind', 'reminders', 'cancel', 'schedule', 'schedules', 'unschedule', 'notify', 'calendar', 'inbox', 'roost', 'email', 'birdhouse', 'browse'],
+  media: ['events', 'library', 'find', 'fetch', 'genres', 'shelve', 'ask', 'log', 'job', 'jobs', 'retry'],
+  assistant: ['events', 'genres', 'shelve', 'handoff', 'jobs', 'calc', 'nest', 'watching', 'routine', 'ask', 'log', 'send', 'remember', 'memories', 'forget', 'task', 'tasks', 'done', 'remind', 'reminders', 'cancel', 'schedule', 'schedules', 'unschedule', 'notify', 'calendar', 'inbox', 'roost', 'email', 'birdhouse', 'browse'],
   // A job that runs by itself reads and reports, but cannot start new jobs or change his notes.
   scheduled: ['events', 'jobs', 'calc', 'nest', 'watching', 'log', 'send', 'notify', 'memories', 'tasks', 'reminders', 'schedules', 'calendar', 'inbox', 'roost', 'birdhouse', 'browse'],
 };
@@ -216,7 +216,7 @@ async function onAnswer({ askId, choice }) {
     approvals[askId] = new Date().toISOString();
     write('approvals.json', approvals);
     const meta = read(path.join('jobs', `${job}.json`), null);
-    if (meta) await tool('fetch', meta.link, '--job', job, '--name', meta.name, '--year', meta.year || '', '--kind', meta.kind, '--requester', meta.requester || '');
+    if (meta) await tool('fetch', meta.link, '--job', job, '--name', meta.name, '--year', meta.year || '', '--genre', meta.genre || '', '--kind', meta.kind, '--requester', meta.requester || '');
     return;
   }
   const want = pending[askId];
