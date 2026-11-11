@@ -2147,7 +2147,7 @@ a.bh-btn { text-decoration: none; display: inline-block; }
 .car-photo { aspect-ratio: 2 / 1; background: linear-gradient(135deg, #2a2a2a, #161616); display: grid; place-items: center; overflow: hidden; border-bottom: 1px solid var(--line); }
 .car-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .car-ph { opacity: 0.55; color: var(--ink); }
-.car-hero { aspect-ratio: 16 / 9; border: 2px solid var(--ink); border-radius: var(--radius); }
+.car-hero { aspect-ratio: 3 / 1; border: 2px solid var(--ink); border-radius: var(--radius); }
 .car-info { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; }
 .car-info .muted { font-size: 13px; }
 .car-empty { text-align: center; padding: 40px 10px; }
@@ -2192,3 +2192,19 @@ a.bh-btn { text-decoration: none; display: inline-block; }
 .car-daterow .car-actions { margin: 0 0 12px; align-items: center; }
 .car-pickday { display: inline-flex; align-items: center; gap: 6px; }
 .car-pickday input, .car-form input[type="date"] { background: var(--panel); color: var(--ink); border: 1.5px solid var(--line); border-radius: 12px; padding: 8px 10px; font: inherit; font-size: 16px; color-scheme: dark; }
+
+.car-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0 4px; }
+.car-stat { border: 1.5px solid var(--line); border-radius: 14px; padding: 10px 6px; text-align: center; background: var(--panel); color: var(--ink); font: inherit; display: flex; flex-direction: column; gap: 2px; align-items: center; }
+button.car-stat { cursor: pointer; }
+.car-stat b { font-size: 22px; }
+.car-stat .mono { font-size: 10px; }
+.car-costs { margin: 8px 0 18px; }
+.car-costs .car-bar { margin: 14px 0 4px; }
+.car-costs h3 { margin: 0; flex: 1; }
+.car-add { padding: 10px 20px; }
+.car-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.car-chip { border: 1.5px solid var(--line); background: none; color: var(--muted); border-radius: 999px; padding: 6px 13px; font: inherit; font-size: 13px; cursor: pointer; }
+.car-chip.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.car-chip:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.car-fuelbits { display: flex; flex-direction: column; gap: 12px; }
+.car-warn { margin: 0; min-height: 1em; color: #e8c46a; font-size: 13px; }

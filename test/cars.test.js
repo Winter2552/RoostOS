@@ -178,3 +178,26 @@ test('dates over HTTP: add, change, snooze, renew, remove, and nobody else can t
   const gone = await call('DELETE', `/api/cars/${car.id}/dates/${did}`, null, sam);
   assert.deepEqual(gone.body.dates, []);
 });
+
+test('fill-ups over HTTP: stats, the odometer check, editing rights and privacy', async () => {
+  const car = (await call('POST', '/api/cars', { name: 'Polo' }, sam)).body;
+  const post = (b, who = sam) => call('POST', `/api/cars/${car.id}/entries`, b, who);
+  assert.equal((await post({ type: 'fuel', date: '2030-01-01', odometer: 1000, litres: 40, amount: '60' })).status, 400, 'too far ahead');
+  const today = new Date().toISOString().slice(0, 10);
+  assert.equal((await post({ type: 'fuel', date: today, odometer: 10000, litres: 40, amount: '60' })).status, 201);
+  assert.equal((await post({ type: 'fuel', date: today, odometer: 10450, litres: 41, amount: '61.50' })).status, 201);
+  const warn = await post({ type: 'fuel', date: today, odometer: 100, litres: 41, amount: '61.50' });
+  assert.equal(warn.status, 409);
+  assert.equal(warn.body.code, 'check-odometer');
+  const list = await call('GET', `/api/cars/${car.id}/entries`, null, sam);
+  assert.equal(list.body.count, 2);
+  assert.equal(list.body.stats.overall.mpg, 49.9);
+  assert.equal(list.body.stats.thisMonth, 12150);
+  for (const who of [admin, guest]) {
+    assert.equal((await call('GET', `/api/cars/${car.id}/entries`, null, who)).status, 404);
+    assert.equal((await post({ type: 'wash', amount: '5' }, who)).status, 404);
+  }
+  const id = list.body.entries[0].id;
+  assert.equal((await call('DELETE', `/api/cars/${car.id}/entries/${id}`, null, admin)).status, 404);
+  assert.equal((await call('DELETE', `/api/cars/${car.id}/entries/${id}`, null, sam)).body.count, 1);
+});

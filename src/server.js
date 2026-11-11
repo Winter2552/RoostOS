@@ -1623,6 +1623,22 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const user = requireUser(req);
       send(res, 200, cars.snoozeDate(user, id, d));
     },
+    'GET /api/cars/:id/entries': (req, res, id) => {
+      const user = requireUser(req);
+      send(res, 200, cars.entriesOf(user, id));
+    },
+    'POST /api/cars/:id/entries': async (req, res, id) => {
+      const user = requireUser(req);
+      send(res, 201, cars.addEntry(user, id, await readJson(req, 2000)));
+    },
+    'PATCH /api/cars/:id/entries/:d': async (req, res, id, e) => {
+      const user = requireUser(req);
+      send(res, 200, cars.updateEntry(user, id, e, await readJson(req, 2000)));
+    },
+    'DELETE /api/cars/:id/entries/:d': (req, res, id, e) => {
+      const user = requireUser(req);
+      send(res, 200, cars.removeEntry(user, id, e));
+    },
     'GET /api/cars/:id/photo': (req, res, id) => {
       const user = requireUser(req);
       const jpg = cars.photo(user, id);
@@ -3989,10 +4005,10 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     const m = pathname.match(/^(\/api\/(?:admin\/users|admin\/apps|admin\/invites|admin\/storage-requests|admin\/movie-requests|admin\/setup|admin\/galaxies|admin\/away\/devices|storage\/users|links|me\/devices|birdhouse\/plans|cars|alerts|push\/devices))\/([A-Za-z0-9._-]+)(\/usage|\/reset-link|\/restart|\/secret|\/compose|\/check|\/dismiss|\/share|\/archive|\/photo)?$/);
     const handler = m && routes[`${method} ${m[1]}/:id${m[3] || ''}`];
     if (handler) return [handler, m[2]];
-    // A car's dates: /api/cars/<car>/dates[/<date>[/done|/snooze]]
-    const c = pathname.match(/^\/api\/cars\/([A-Za-z0-9]+)\/dates(?:\/([A-Za-z0-9]+)(\/done|\/snooze)?)?$/);
-    const dated = c && routes[`${method} /api/cars/:id/dates${c[2] ? '/:d' : ''}${c[3] || ''}`];
-    return dated ? [dated, c[1], c[2]] : null;
+    // A car's dates and entries: /api/cars/<car>/dates|entries[/<id>[/done|/snooze]]
+    const c = pathname.match(/^\/api\/cars\/([A-Za-z0-9]+)\/(dates|entries)(?:\/([A-Za-z0-9]+)(\/done|\/snooze)?)?$/);
+    const dated = c && routes[`${method} /api/cars/:id/${c[2]}${c[3] ? '/:d' : ''}${c[4] || ''}`];
+    return dated ? [dated, c[1], c[3]] : null;
   }
 
   // What a phone or PC needs to install Roost as an app, named after the server.
