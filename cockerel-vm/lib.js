@@ -49,6 +49,20 @@ function sourceKind(link) {
   return hostOpen(u.hostname) ? 'open' : 'other';
 }
 
+// A link Raven pasted himself counts as his word that he is entitled to it, so
+// the chat remembers the links in his messages and the tool skips the question
+// for exactly those links (for a couple of hours). Links Cockerel found or got
+// from anyone else still ask.
+function linkKey(link) {
+  const text = String(link || '').trim();
+  const m = /^magnet:\?.*?xt=urn:btih:([a-z0-9]+)/i.exec(text);
+  return m ? `btih:${m[1].toLowerCase()}` : text;
+}
+function linksIn(text) {
+  const found = String(text || '').match(/magnet:\?\S+|https:\/\/\S+/gi) || [];
+  return found.map((l) => linkKey(l.replace(/[).,;]+$/, '')));
+}
+
 // ---------- Jellyfin naming ----------
 const VIDEO = /\.(mkv|mp4|m4v|avi|mov|webm|ts)$/i;
 const BAD_CHARS = /[\\/:*?"<>|\u0000-\u001f]/g;
@@ -165,4 +179,5 @@ function progressText(speed, bytesLeft) {
 // (time and ratio), and upload only a trickle while downloading.
 const NO_SEED = ['--seed-time=0', '--seed-ratio=0.0', '--max-overall-upload-limit=1K'];
 
-module.exports = { genreFolders, genreFolder, shareMissing, writableProblem, progressText, NO_SEED, browseUrl, pageText, sign, headers, verify, OPEN_HOSTS, hostOpen, sourceKind, VIDEO, cleanName, moviePath, episodePath, jobIdOk, human };
+module.exports = {
+  linkKey, linksIn, genreFolders, genreFolder, shareMissing, writableProblem, progressText, NO_SEED, browseUrl, pageText, sign, headers, verify, OPEN_HOSTS, hostOpen, sourceKind, VIDEO, cleanName, moviePath, episodePath, jobIdOk, human };

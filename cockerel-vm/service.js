@@ -272,6 +272,13 @@ const server = http.createServer(async (req, res) => {
       const text = String(data.text || '').slice(0, 2000);
       live('Raven said something in chat');
       remember('Raven', text);
+      const pasted = lib.linksIn(text);
+      if (pasted.length) {
+        const now = Date.now();
+        const mine = Object.fromEntries(Object.entries(read('raven-links.json', {})).filter(([, at]) => now - at < 2 * 3600 * 1000));
+        pasted.forEach((k) => { mine[k] = now; });
+        write('raven-links.json', mine);
+      }
       const off = groupsOff(data.toolsOff);
       const cfg = routerCfg(data.router);
       write('router.json', cfg);
