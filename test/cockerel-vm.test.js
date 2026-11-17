@@ -140,6 +140,12 @@ test('the tool files a finished download, and asks before an unusual source or a
     assert.match(r.out, /entitled/);
     assert.equal(seen.find((m) => m.type === 'ask').askId, 'entitled-j1');
     assert.ok(!seen.some((m) => m.type === 'spend'));
+    // 1b. A link Raven pasted into chat himself is his word: no question.
+    seen.length = 0;
+    fs.mkdirSync(path.join(env.COCKEREL_HOME, 'state'), { recursive: true });
+    fs.writeFileSync(path.join(env.COCKEREL_HOME, 'state', 'raven-links.json'), JSON.stringify({ [require('../cockerel-vm/lib').linkKey('magnet:?xt=urn:btih:ABCDEF&dn=x')]: Date.now() }));
+    r = await tool('fetch', 'magnet:?xt=urn:btih:abcdef&tr=y', '--job', 'j1b', '--name', 'Pasted');
+    assert.ok(!seen.some((m) => m.type === 'ask'), r.out);
     // 2. A link that must never be fetched.
     r = await tool('fetch', 'https://192.168.4.35/secret', '--job', 'j2', '--name', 'X');
     assert.notEqual(r.code, 0);

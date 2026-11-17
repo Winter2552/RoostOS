@@ -144,7 +144,9 @@ async function fetchJob(link, opt) {
     fail(`I can't write to the Roostflix folders (${blocked}). Tell Raven the Roostflix incoming, Movies and Series folders need write access for my share user; the fix is in the log.`);
   }
 
-  if (source === 'other' && !approved(`entitled-${id}`)) {
+  const ownLink = Date.now() - Number((readJson(path.join(STATE, 'raven-links.json'), {}))[lib.linkKey(link)] || 0) < 2 * 3600 * 1000;
+  if (source === 'other' && ownLink && !opt.requester) await hook({ type: 'log', text: `${name}: you pasted this link yourself, so I took that as your word that you are entitled to it.` });
+  if (source === 'other' && !(ownLink && !opt.requester) && !approved(`entitled-${id}`)) {
     await hook({ type: 'ask', askId: `entitled-${id}`, text: `${name} would come from a source I don't normally use. Are you entitled to download this one yourself (you own it, or it is free to share)?`, options: ["Yes, I'm entitled to this", 'Cancel'] });
     return console.log('Asked Raven whether he is entitled to this download. Stop here and wait: he will answer and you will be woken to continue.');
   }

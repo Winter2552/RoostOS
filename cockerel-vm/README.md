@@ -97,7 +97,7 @@ Snapshot the VM before big changes and weekly. Use the VM app's snapshot or back
 ## What he will and won't fetch
 
 - Anything on the Internet Archive's open collections (public domain, Creative Commons), Blender's open movies, and Wikimedia, on his own.
-- A link or magnet **you** give him: he asks you to confirm you are entitled to it, and the answer is kept in the activity feed.
+- A link or magnet **you** paste into his chat: he takes that as your word that you are entitled to it (noted in the activity feed) and does not ask again. Any other link, or one for a guest request, still asks.
 - He never searches pirate sites or indexes and has no tool that can. Copyrighted films you don't own are not something he will find or download.
 - Under the size limit he acts alone; over it he asks you. Roost keeps the day's total, so restarting the VM can't reset it.
 
