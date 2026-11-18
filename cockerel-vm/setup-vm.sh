@@ -8,6 +8,8 @@
 # turn on the VPN: follow README.md for the rest (Windscribe, Claude sign-in,
 # the shared folders, then linking him in Roost).
 set -euo pipefail
+# If any step fails, say which one last, so Roost can show it instead of the end of apt's chatter.
+trap 'echo "SETUP FAILED at line $LINENO: $BASH_COMMAND" >&2' ERR
 [ "$(id -u)" = 0 ] || { echo "Run this as root (sudo)."; exit 1; }
 DESKTOP=1
 [ "${1:-}" = "--no-desktop" ] && DESKTOP=0
@@ -69,7 +71,7 @@ if(o.permissions&&o.permissions.deny){o.permissions.deny=o.permissions.deny.filt
 ' || true
 
 # Raven's own Claude Code (his login on the VM desktop, separate from Cockerel's).
-RAVEN_USER="$(grep '^RAVEN_USER=' /etc/cockerel/env 2>/dev/null | cut -d= -f2-)"
+RAVEN_USER="$(grep '^RAVEN_USER=' /etc/cockerel/env 2>/dev/null | cut -d= -f2- || true)"
 RAVEN_USER="${RAVEN_USER:-raven}"
 if id "$RAVEN_USER" >/dev/null 2>&1; then
   if [ ! -x "/home/$RAVEN_USER/.local/bin/claude" ]; then
