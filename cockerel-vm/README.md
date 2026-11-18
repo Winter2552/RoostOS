@@ -107,9 +107,9 @@ Snapshot the VM before big changes and weekly. Use the VM app's snapshot or back
 
 ## Claude on the desktop (and from the Claude app)
 
-The desktop is Raven's own login (`raven`). **Claude** (applications menu) opens Claude Code in a terminal in `~/claude-work`, and it opens by itself a few seconds after the desktop starts. Close the window and nothing keeps running. This is Raven's own Claude sign-in, separate from Cockerel's (his service keeps its own). `setup-vm.sh` installs it for `raven` (set `RAVEN_USER=` in `/etc/cockerel/env` if the desktop user has another name). It asks before it runs commands or changes files, and is blocked from reading `/etc/wireguard`, `/etc/cockerel`, `/home/cockerel`, the media share `/srv/media`, and from `sudo`.
+The desktop is Raven's own login (`raven`). **Claude** (an icon on his desktop, and in the applications menu under Accessories) opens Claude Code in a terminal in `~/claude-work`, and it opens by itself a few seconds after the desktop starts. Close the window and nothing keeps running. This is Raven's own Claude sign-in, separate from Cockerel's (his service keeps its own). `setup-vm.sh` installs it for `raven` (set `RAVEN_USER=` in `/etc/cockerel/env` if the desktop user has another name). It asks before it runs commands or changes files, and is blocked from reading `/etc/wireguard`, `/etc/cockerel`, `/home/cockerel`, the media share `/srv/media`, and from `sudo`.
 
-**Claude (remote)** starts it so you can open it from the Claude app on your phone or PC. It makes an outbound connection only (nothing is opened on the router) and runs only while its window is open. If the command is missing it tells you and falls back to `/remote-control` inside Claude. Close the window to stop it.
+**Claude (remote)** (also on his desktop) starts it so you can open it from the Claude app on your phone or PC. It makes an outbound connection only (nothing is opened on the router) and runs only while its window is open. If the command is missing it tells you and falls back to `/remote-control` inside Claude. Close the window to stop it.
 
 Updates (Update all) also run `claude update` for `raven`.
 

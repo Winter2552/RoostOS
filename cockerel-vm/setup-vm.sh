@@ -77,7 +77,13 @@ if id "$RAVEN_USER" >/dev/null 2>&1; then
   else
     sudo -u "$RAVEN_USER" -H bash -lc "$HOME/.local/bin/claude update" >/dev/null 2>&1 || true
   fi
-  sudo -u "$RAVEN_USER" -H mkdir -p "/home/$RAVEN_USER/claude-work"
+  sudo -u "$RAVEN_USER" -H mkdir -p "/home/$RAVEN_USER/claude-work" "/home/$RAVEN_USER/Desktop"
+  # Icons on his desktop, so they are there without logging out and in.
+  for f in claude-code claude-remote; do
+    D="/home/$RAVEN_USER/Desktop/$f.desktop"
+    install -m 755 -o "$RAVEN_USER" -g "$RAVEN_USER" "$HERE/$f.desktop" "$D"
+    sudo -u "$RAVEN_USER" -H gio set "$D" metadata::xfce-exe-checksum "$(sha256sum "$D" | cut -d' ' -f1)" >/dev/null 2>&1 || true
+  done
   # Safety rails for his session: never read the VPN or Cockerel secrets, never sudo, stay out of the media share.
   sudo -u "$RAVEN_USER" -H node -e '
 const fs=require("fs"),p=process.env.HOME+"/.claude/settings.json";
