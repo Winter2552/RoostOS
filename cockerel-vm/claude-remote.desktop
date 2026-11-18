@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Claude (remote)
+Comment=Lets you drive this Claude session from the Claude app
+Exec=xfce4-terminal --title="Claude (remote)" --working-directory=/home/cockerel/cockerel -x /opt/cockerel/claude-remote.sh
+Icon=utilities-terminal
+Terminal=false
+Categories=Utility;

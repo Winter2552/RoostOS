@@ -36,6 +36,12 @@ cp "$HERE/cockerel.service" "$HERE/cockerel-update.service" "$HERE/cockerel-upda
 install -d -m 755 /etc/xdg/autostart
 cp "$HERE/cockerel-watch.desktop" /etc/xdg/autostart/cockerel-watch.desktop
 cp "$HERE/cockerel-watch.desktop" /usr/share/applications/cockerel-watch.desktop
+cp "$HERE/claude-code.desktop" "$HERE/claude-remote.desktop" /usr/share/applications/
+if [ "$DESKTOP" = 1 ]; then
+  # The desktop signs in as `cockerel`, so the Claude launchers run as him (same login as his service).
+  install -d -m 755 /etc/lightdm/lightdm.conf.d
+  printf '[Seat:*]\nautologin-user=cockerel\nautologin-user-timeout=0\n' > /etc/lightdm/lightdm.conf.d/50-cockerel-autologin.conf
+fi
 
 if [ ! -f /etc/cockerel/env ]; then
   SECRET="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
@@ -56,6 +62,18 @@ if ! sudo -u cockerel -H bash -lc 'command -v claude' >/dev/null 2>&1; then
   sudo -u cockerel -H bash -lc 'curl -fsSL https://claude.ai/install.sh | bash' || echo "Claude Code did not install; see README.md step 4."
 fi
 ln -sf /home/cockerel/.local/bin/claude /usr/local/bin/claude
+# Keep Claude Code current (runs on every VM update too). Never fatal.
+sudo -u cockerel -H bash -lc 'claude update' >/dev/null 2>&1 || true
+# Safety rails for his hands-on desktop session: never read the VPN or Cockerel secrets, never sudo.
+sudo -u cockerel -H node -e '
+const fs=require("fs"),p=process.env.HOME+"/.claude/settings.json";
+let o={};try{o=JSON.parse(fs.readFileSync(p,"utf8"))}catch{}
+o.permissions=o.permissions||{};
+const deny=new Set(o.permissions.deny||[]);
+["Read(/etc/wireguard/**)","Read(/etc/cockerel/**)","Read(/home/cockerel/.ssh/**)","Bash(sudo:*)"].forEach(x=>deny.add(x));
+o.permissions.deny=[...deny];
+fs.mkdirSync(require("path").dirname(p),{recursive:true});fs.writeFileSync(p,JSON.stringify(o,null,2));
+' || true
 
 systemctl daemon-reload
 systemctl enable --now cockerel-update.path
