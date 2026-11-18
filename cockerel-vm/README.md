@@ -107,11 +107,11 @@ Snapshot the VM before big changes and weekly. Use the VM app's snapshot or back
 
 ## Claude on the desktop (and from the Claude app)
 
-On the VM desktop, **Claude** (in the applications menu) opens Claude Code as Cockerel in his own folder `~/cockerel`. It is the same user and the same sign-in as his service, so there is no second login. The desktop now signs in as `cockerel` by itself. It asks before it runs commands or changes files, and it is blocked from reading `/etc/wireguard`, `/etc/cockerel` and `~/.ssh`, and from `sudo`. His rules and tools in `/opt/cockerel` are owned by root, so only an update changes them. He already reaches `incoming`, `Movies` and `Series` on the media share, and so does this session.
+The desktop is Raven's own login (`raven`). **Claude** (applications menu) opens Claude Code in a terminal in `~/claude-work`, and it opens by itself a few seconds after the desktop starts. Close the window and nothing keeps running. This is Raven's own Claude sign-in, separate from Cockerel's (his service keeps its own). `setup-vm.sh` installs it for `raven` (set `RAVEN_USER=` in `/etc/cockerel/env` if the desktop user has another name). It asks before it runs commands or changes files, and is blocked from reading `/etc/wireguard`, `/etc/cockerel`, `/home/cockerel`, the media share `/srv/media`, and from `sudo`.
 
-**Claude (remote)** starts the same thing so you can open it from the Claude app on your phone or PC. It makes an outbound connection only (nothing is opened on the router) and runs only while its window is open. It needs your sign-in to have Remote Control; if the command is missing it tells you and falls back to `/remote-control` inside Claude. Close the window to stop it.
+**Claude (remote)** starts it so you can open it from the Claude app on your phone or PC. It makes an outbound connection only (nothing is opened on the router) and runs only while its window is open. If the command is missing it tells you and falls back to `/remote-control` inside Claude. Close the window to stop it.
 
-Updates (Update all) also run `claude update` for him.
+Updates (Update all) also run `claude update` for `raven`.
 
 ## As a personal assistant
 

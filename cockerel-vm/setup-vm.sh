@@ -37,11 +37,9 @@ install -d -m 755 /etc/xdg/autostart
 cp "$HERE/cockerel-watch.desktop" /etc/xdg/autostart/cockerel-watch.desktop
 cp "$HERE/cockerel-watch.desktop" /usr/share/applications/cockerel-watch.desktop
 cp "$HERE/claude-code.desktop" "$HERE/claude-remote.desktop" /usr/share/applications/
-if [ "$DESKTOP" = 1 ]; then
-  # The desktop signs in as `cockerel`, so the Claude launchers run as him (same login as his service).
-  install -d -m 755 /etc/lightdm/lightdm.conf.d
-  printf '[Seat:*]\nautologin-user=cockerel\nautologin-user-timeout=0\n' > /etc/lightdm/lightdm.conf.d/50-cockerel-autologin.conf
-fi
+cp "$HERE/claude-code-autostart.desktop" /etc/xdg/autostart/claude-code.desktop
+# Undo the earlier cockerel auto-login: the desktop is Raven's own login.
+rm -f /etc/lightdm/lightdm.conf.d/50-cockerel-autologin.conf
 
 if [ ! -f /etc/cockerel/env ]; then
   SECRET="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
@@ -62,18 +60,37 @@ if ! sudo -u cockerel -H bash -lc 'command -v claude' >/dev/null 2>&1; then
   sudo -u cockerel -H bash -lc 'curl -fsSL https://claude.ai/install.sh | bash' || echo "Claude Code did not install; see README.md step 4."
 fi
 ln -sf /home/cockerel/.local/bin/claude /usr/local/bin/claude
-# Keep Claude Code current (runs on every VM update too). Never fatal.
-sudo -u cockerel -H bash -lc 'claude update' >/dev/null 2>&1 || true
-# Safety rails for his hands-on desktop session: never read the VPN or Cockerel secrets, never sudo.
+# Cockerel's own Claude (his service) stays as it was. Drop the deny rules the earlier version put in his settings.
 sudo -u cockerel -H node -e '
+const fs=require("fs"),p=process.env.HOME+"/.claude/settings.json";
+try{const o=JSON.parse(fs.readFileSync(p,"utf8"));
+const rm=new Set(["Read(/etc/wireguard/**)","Read(/etc/cockerel/**)","Read(/home/cockerel/.ssh/**)","Bash(sudo:*)"]);
+if(o.permissions&&o.permissions.deny){o.permissions.deny=o.permissions.deny.filter(x=>!rm.has(x));fs.writeFileSync(p,JSON.stringify(o,null,2))}}catch{}
+' || true
+
+# Raven's own Claude Code (his login on the VM desktop, separate from Cockerel's).
+RAVEN_USER="$(grep '^RAVEN_USER=' /etc/cockerel/env 2>/dev/null | cut -d= -f2-)"
+RAVEN_USER="${RAVEN_USER:-raven}"
+if id "$RAVEN_USER" >/dev/null 2>&1; then
+  if [ ! -x "/home/$RAVEN_USER/.local/bin/claude" ]; then
+    sudo -u "$RAVEN_USER" -H bash -lc 'curl -fsSL https://claude.ai/install.sh | bash' || echo "Claude Code did not install for $RAVEN_USER."
+  else
+    sudo -u "$RAVEN_USER" -H bash -lc "$HOME/.local/bin/claude update" >/dev/null 2>&1 || true
+  fi
+  sudo -u "$RAVEN_USER" -H mkdir -p "/home/$RAVEN_USER/claude-work"
+  # Safety rails for his session: never read the VPN or Cockerel secrets, never sudo, stay out of the media share.
+  sudo -u "$RAVEN_USER" -H node -e '
 const fs=require("fs"),p=process.env.HOME+"/.claude/settings.json";
 let o={};try{o=JSON.parse(fs.readFileSync(p,"utf8"))}catch{}
 o.permissions=o.permissions||{};
 const deny=new Set(o.permissions.deny||[]);
-["Read(/etc/wireguard/**)","Read(/etc/cockerel/**)","Read(/home/cockerel/.ssh/**)","Bash(sudo:*)"].forEach(x=>deny.add(x));
+["Read(/etc/wireguard/**)","Read(/etc/cockerel/**)","Read(/home/cockerel/**)","Read(/srv/media/**)","Bash(sudo:*)"].forEach(x=>deny.add(x));
 o.permissions.deny=[...deny];
 fs.mkdirSync(require("path").dirname(p),{recursive:true});fs.writeFileSync(p,JSON.stringify(o,null,2));
 ' || true
+else
+  echo "No '$RAVEN_USER' user on this VM, so no desktop Claude was set up. Set RAVEN_USER=<name> in /etc/cockerel/env and run this again."
+fi
 
 systemctl daemon-reload
 systemctl enable --now cockerel-update.path

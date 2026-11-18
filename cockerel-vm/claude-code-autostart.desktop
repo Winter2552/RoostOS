@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Claude
+Comment=Claude Code in ~/claude-work
+Exec=/opt/cockerel/claude-desktop.sh --delay
+Icon=utilities-terminal
+Terminal=false
+Categories=Utility;
