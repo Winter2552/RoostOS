@@ -39,10 +39,12 @@ st '{"state":"running","detail":"Fetching the new version"}'
 FROM="$(as git -C "$REPO" rev-parse --short HEAD)"
 if ! OUT="$(as git -C "$REPO" pull --ff-only 2>&1)"; then st "{\"state\":\"failed\",\"detail\":$(js "$OUT"),\"from\":\"$FROM\"}"; exit 1; fi
 TO="$(as git -C "$REPO" rev-parse --short HEAD)"
-if [ "$FROM" = "$TO" ]; then st "{\"state\":\"current\",\"behind\":0,\"commits\":[],\"from\":\"$FROM\",\"to\":\"$TO\"}"; exit 0; fi
+# Already at this version AND its setup finished last time: nothing to do. (If setup failed before, run it again.)
+if [ "$FROM" = "$TO" ] && [ "$(cat "$DIR/installed-head" 2>/dev/null)" = "$TO" ]; then st "{\"state\":\"current\",\"behind\":0,\"commits\":[],\"from\":\"$FROM\",\"to\":\"$TO\"}"; exit 0; fi
 
 st "{\"state\":\"running\",\"detail\":\"Installing the new version\",\"from\":\"$FROM\",\"to\":\"$TO\"}"
 if ! OUT="$(bash "$REPO/cockerel-vm/setup-vm.sh" --no-desktop 2>&1)"; then st "{\"state\":\"failed\",\"detail\":$(js "$OUT"),\"from\":\"$FROM\",\"to\":\"$TO\"}"; exit 1; fi
+echo "$TO" > "$DIR/installed-head"
 systemctl daemon-reload
 st "{\"state\":\"done\",\"detail\":\"Updated\",\"behind\":0,\"commits\":[],\"head\":\"$TO\",\"checkedAt\":\"$(date -u +%FT%TZ)\"}"
 systemctl restart cockerel
