@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Claude
+Comment=Claude Code as Cockerel, in his own folder
+Exec=xfce4-terminal --title=Claude --working-directory=/home/cockerel/cockerel -x claude
+Icon=utilities-terminal
+Terminal=false
+Categories=Utility;

@@ -105,6 +105,14 @@ Snapshot the VM before big changes and weekly. Use the VM app's snapshot or back
 
 `setup-vm.sh` installs XFCE and Chromium. The desktop shows in the ZimaOS VM console. A full-screen **Cockerel live** page opens by itself when the desktop starts: a breathing orb while he works, what he is doing and for how long, status pills (VPN, runs today, CPU and memory graphs) and an activity list. It is served only to the VM itself at `http://127.0.0.1:7070/live`. If Chromium is missing it falls back to a text window, and `cockerel-watch` shows the same activity as text in any terminal. It is a plain log file (`/var/log/cockerel/live.log`), so it costs nothing while he sleeps. Claude does not click or type in the browser. His `browse` command opens a page in a headless Chromium and reads back the text, for shops and sites that need JavaScript; it is https only and refuses addresses on a network.
 
+## Claude on the desktop (and from the Claude app)
+
+On the VM desktop, **Claude** (in the applications menu) opens Claude Code as Cockerel in his own folder `~/cockerel`. It is the same user and the same sign-in as his service, so there is no second login. The desktop now signs in as `cockerel` by itself. It asks before it runs commands or changes files, and it is blocked from reading `/etc/wireguard`, `/etc/cockerel` and `~/.ssh`, and from `sudo`. His rules and tools in `/opt/cockerel` are owned by root, so only an update changes them. He already reaches `incoming`, `Movies` and `Series` on the media share, and so does this session.
+
+**Claude (remote)** starts the same thing so you can open it from the Claude app on your phone or PC. It makes an outbound connection only (nothing is opened on the router) and runs only while its window is open. It needs your sign-in to have Remote Control; if the command is missing it tells you and falls back to `/remote-control` inside Claude. Close the window to stop it.
+
+Updates (Update all) also run `claude update` for him.
+
 ## As a personal assistant
 
 Besides films, he can research the web, send you files (saved in Nest under Cockerel), keep notes, tasks and reminders, run repeating jobs you approve, send a morning brief, read your calendar and unread email (read-only), read your Birdhouse plans and propose emails or Roost actions. All of it is set up in Roost under Admin → Server → Cockerel (time zone, brief, a switch per tool, calendar link, email app password). Things that change anything outside his own notebook (an email, a restart, a backup, an update, a repeating job) wait for your tap in his chat. Research and general chat can use the web but cannot download; film jobs can download but cannot browse.
