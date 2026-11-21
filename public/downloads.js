@@ -79,23 +79,31 @@
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
 
-  // "Add a magnet": the name and Film/Show pick appear once something is pasted.
+  // "Add a magnet": a small chip that opens into its own box, and closes after adding.
   let wired = false;
+  function setOpen(open) {
+    const box = $('#dl-addbox');
+    box.classList.toggle('open', open);
+    $('#dl-chip').setAttribute('aria-expanded', String(open));
+    $('#dl-chip-text').textContent = open ? 'Add a magnet' : '+ Add magnet';
+    const form = $('#dl-add');
+    if (open) { form.removeAttribute('inert'); setTimeout(() => $('#dl-link').focus(), 180); } else form.setAttribute('inert', '');
+  }
   function wire() {
     if (wired) return;
     wired = true;
-    const link = $('#dl-link');
-    link.addEventListener('input', () => { $('#dl-add-more').hidden = !link.value.trim(); });
+    $('#dl-chip').addEventListener('click', () => setOpen(!$('#dl-addbox').classList.contains('open')));
+    $('#dl-add').addEventListener('keydown', (e) => { if (e.key === 'Escape') { setOpen(false); $('#dl-chip').focus(); } });
     $('#dl-add').addEventListener('submit', async (e) => {
       e.preventDefault();
       const note = $('#dl-note');
       const go = $('#dl-go');
       go.disabled = true;
       try {
-        await api('POST', '/api/downloads/add', { link: link.value.trim(), name: $('#dl-name').value, kind: $('#dl-kind').value });
-        link.value = '';
+        await api('POST', '/api/downloads/add', { link: $('#dl-link').value.trim(), name: $('#dl-name').value, kind: $('#dl-kind').value });
+        $('#dl-link').value = '';
         $('#dl-name').value = '';
-        $('#dl-add-more').hidden = true;
+        setOpen(false);
         note.hidden = false;
         note.textContent = 'Added. It is being checked, and will appear below in a moment.';
         setTimeout(() => load(true), 2500);

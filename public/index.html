@@ -281,15 +281,20 @@
     <section id="view-downloads" class="downloads hidden">
       <div class="dl-page">
         <header class="dl-head"><h2>Downloads</h2></header>
-        <form class="dl-add" id="dl-add" autocomplete="off">
-          <label class="sr" for="dl-link">Magnet link</label>
-          <input type="text" id="dl-link" placeholder="Paste a magnet link" spellcheck="false" autocapitalize="off" autocorrect="off">
-          <div class="dl-add-more" id="dl-add-more" hidden>
-            <input type="text" id="dl-name" maxlength="120" placeholder="Name (optional)">
-            <select id="dl-kind" aria-label="Film or show"><option value="movie">Film</option><option value="show">Show</option></select>
+        <div class="dl-addbox" id="dl-addbox">
+          <button class="dl-chip" type="button" id="dl-chip" aria-expanded="false" aria-controls="dl-add"><span id="dl-chip-text">+ Add magnet</span><span class="dl-chip-x" aria-hidden="true">×</span></button>
+          <div class="dl-panel" id="dl-panel">
+            <form class="dl-add" id="dl-add" autocomplete="off" inert>
+              <label class="sr" for="dl-link">Magnet link</label>
+              <input type="text" id="dl-link" placeholder="Paste a magnet link" spellcheck="false" autocapitalize="off" autocorrect="off">
+              <div class="dl-add-row">
+                <input type="text" id="dl-name" maxlength="120" placeholder="Name (optional)">
+                <select id="dl-kind" aria-label="Film or show"><option value="movie">Film</option><option value="show">Show</option></select>
+              </div>
+              <button class="dl-btn dl-go" type="submit" id="dl-go">Add</button>
+            </form>
           </div>
-          <button class="dl-btn dl-go" type="submit" id="dl-go">Add</button>
-        </form>
+        </div>
         <div class="dl-stats" id="dl-stats"></div>
         <p class="muted mono" id="dl-note" hidden></p>
         <div class="dl-list" id="dl-list"></div>
