@@ -67,7 +67,16 @@ const MEDIA_WORDS = /\b(movies?|films?|tv shows?|series|episodes?|roostflix|jell
 // notebook instead, and hands the film part over with `cockerel-tool handoff`
 // (so web pages and downloads are never in the same run).
 const NOT_PLAIN = /\b(compare|review|reviews|recommend|should|best|remind|reminder|schedule|what|which|why|how|worth|rating|about|and then|then)\b|\?/i;
-const modeFor = (text) => (MEDIA_WORDS.test(text) && !NOT_PLAIN.test(text) ? 'media' : 'assistant');
+// A pasted magnet or .torrent link is a download request on its own, and its long
+// name and tracker list must not be read as words ("what", "how", "then" in a title
+// used to push it into chat mode, which has no fetch command and so "requires approval").
+const TORRENT_LINK = /magnet:\?\S+|\bhttps?:\/\/\S+\.torrent\b\S*/gi;
+function modeFor(text) {
+  const words = String(text).replace(TORRENT_LINK, ' ');
+  const hasLink = words !== String(text);
+  if (NOT_PLAIN.test(words)) return 'assistant';
+  return hasLink || MEDIA_WORDS.test(words) ? 'media' : 'assistant';
+}
 function allowedFor(mode, off = []) {
   const blocked = new Set(off.flatMap((g) => GROUPS[g] || []));
   const tools = TOOLS[mode].filter((c) => !blocked.has(c)).map((c) => `Bash(cockerel-tool ${c}:*)`);
