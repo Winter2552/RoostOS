@@ -358,3 +358,22 @@ test('a release title becomes a plain name and year', () => {
   assert.deepEqual(lib.titleFromRelease('Sintel.2010.1080p.BluRay.x264'), { name: 'Sintel', year: '2010' });
   assert.deepEqual(lib.titleFromRelease('Big Buck Bunny (2008)'), { name: 'Big Buck Bunny', year: '2008' });
 });
+
+test('the torrent itself tells film from show, and gives its name and year', () => {
+  const lib = require('../cockerel-vm/lib');
+  const pack = `Name: The.Apothecary.Diaries.S01-S08.1080p.WEB-DL
+Files:
+idx|path/length
+===+====
+  1|./The.Apothecary.Diaries.S01-S08/The.Apothecary.Diaries.S01E01.mkv
+   |700MiB (734,003,200)
+---+----
+  2|./The.Apothecary.Diaries.S01-S08/The.Apothecary.Diaries.S01E02.mkv
+   |700MiB (734,003,200)
+`;
+  const info = lib.parseTorrentInfo(pack);
+  assert.equal(info.files.length, 2);
+  assert.deepEqual(lib.guessFromTorrent(info, 'Download'), { kind: 'show', name: 'The Apothecary Diaries', year: '' });
+  const film = lib.parseTorrentInfo('Name: Sintel.2010.1080p\nFiles:\nidx|path/length\n===+===\n  1|./Sintel.2010.1080p.mkv\n   |1GiB (1)\n');
+  assert.deepEqual(lib.guessFromTorrent(film, 'x'), { kind: 'movie', name: 'Sintel', year: '2010' });
+});

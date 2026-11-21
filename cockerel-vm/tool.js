@@ -101,8 +101,10 @@ function sizeOf(link, id) {
       file = path.join(tmp, 'x.torrent');
     }
     let total = 0;
+    let info = { name: '', files: [] };
     if (file && fs.existsSync(file)) {
       const out = spawnSync('aria2c', ['-S', file], { encoding: 'utf8' }).stdout || '';
+      info = lib.parseTorrentInfo(out);
       const m = /Total Length:[^(]*\(([\d,]+)\)/.exec(out);
       if (m) total = Number(m[1].replace(/,/g, ''));
     }
@@ -114,7 +116,7 @@ function sizeOf(link, id) {
       fs.copyFileSync(file, kept);
     }
     fs.rmSync(tmp, { recursive: true, force: true });
-    return { size: total, torrent: kept };
+    return { size: total, torrent: kept, info };
   }
   const out = spawnSync('curl', ['-sIL', '--max-time', '30', '--proto', '=https', '--proto-redir', '=https', '--max-redirs', '5', link], { encoding: 'utf8' }).stdout || '';
   const lens = [...out.matchAll(/^content-length:\s*(\d+)/gim)].map((m) => Number(m[1]));
@@ -125,9 +127,11 @@ function sizeOf(link, id) {
 async function fetchJob(link, opt) {
   const id = opt.job;
   if (!lib.jobIdOk(id)) fail('--job needs a short plain id, like sintel-1');
-  const name = lib.cleanName(opt.name);
+  let name = lib.cleanName(opt.name);
   if (!name) fail('--name "Film name" is required');
-  const kind = opt.kind === 'show' ? 'show' : 'movie';
+  // 'auto' (or a name Raven did not type) is settled from the torrent once it is read.
+  const auto = opt.auto === '1' || opt.kind === 'auto';
+  let kind = opt.kind === 'show' ? 'show' : 'movie';
   const source = lib.sourceKind(link);
   if (source === 'bad') fail('That link is not allowed. Only https links to the open internet, or a magnet link Raven gave you.');
   const meta = { ...readJson(jobFile(id), {}), id, link, name, year: opt.year || '', genre: opt.genre || '', kind, requester: opt.requester || '', status: 'new' };
@@ -162,7 +166,17 @@ async function fetchJob(link, opt) {
     await hook({ type: 'log', text: `Did not start ${name}: the VPN is down.` });
     fail('The VPN is down, so downloads are stopped. Tell Raven.');
   }
-  const { size, torrent } = sizeOf(link, id);
+  const { size, torrent, info } = sizeOf(link, id);
+  if (auto && info && (info.name || info.files.length)) {
+    const g = lib.guessFromTorrent(info, name);
+    if (opt.auto === '1' && g.name) name = g.name;
+    if (opt.kind === 'auto') kind = g.kind;
+    if (!opt.year && g.year && kind === 'movie') meta.year = g.year;
+    meta.name = name;
+    meta.kind = kind;
+    writeJson(jobFile(id), meta);
+    await hook({ type: 'job', id, title: name, kind });
+  }
   const verdict = await hook({ type: 'check', bytes: size });
   if (verdict.decision === 'ask' && !approved(`size-${id}`)) {
     const how = size ? lib.human(size) : 'an unknown size';

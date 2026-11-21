@@ -328,14 +328,14 @@ const server = http.createServer(async (req, res) => {
         const rel = lib.titleFromRelease(guess);
         const name = typed || rel.name || 'Download';
         const year = typed ? '' : rel.year;
-        const kind = data.kind === 'show' ? 'show' : 'movie';
+        const kind = data.kind === 'show' ? 'show' : data.kind === 'auto' ? 'auto' : 'movie';
         const id = `m-${Date.now().toString(36)}`;
         const mine = read('raven-links.json', {});
         mine[lib.linkKey(link)] = Date.now();
         write('raven-links.json', mine);
         live(`Downloads page: add ${name}`);
         reply(200, { ok: true, id });
-        return void tool('fetch', link, '--job', id, '--name', name, '--kind', kind, ...(year && kind === 'movie' ? ['--year', year] : []));
+        return void tool('fetch', link, '--job', id, '--name', name, '--kind', kind, ...(typed ? [] : ['--auto', '1']), ...(year && kind === 'movie' ? ['--year', year] : []));
       }
       const action = String(data.action || '');
       const id = String(data.id || '');

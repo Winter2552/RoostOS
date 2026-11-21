@@ -3377,7 +3377,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       const link = str(body.link, 4000).trim();
       if (!/^magnet:\?\S+$/i.test(link) && !/^https:\/\/\S+\.torrent(\?\S*)?$/i.test(link)) throw new HttpError(400, 'Paste a magnet link (it starts with magnet:?) or a link to a .torrent file');
       try {
-        const out = await cockerel.addLink(link, str(body.name, 120).trim(), body.kind === 'show' ? 'show' : 'movie');
+        const out = await cockerel.addLink(link, str(body.name, 120).trim(), body.kind === 'show' ? 'show' : body.kind === 'auto' ? 'auto' : 'movie');
         send(res, 200, { ok: true, id: out.id });
       } catch (err) {
         if (err instanceof CockerelError) throw new HttpError(err.status, err.message);
