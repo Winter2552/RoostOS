@@ -5,7 +5,7 @@
 
 (() => {
   const EVERY_MS = 4000;
-  const S = { timer: null, key: '', busy: false };
+  const S = { timer: null, key: '', busy: false, seen: null };
   const GB = 1024 ** 3;
   const size = (b) => (b >= GB ? `${(b / GB).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1048576))} MB`);
   const speed = (b) => (b > 0 ? `${(b / 1048576).toFixed(1)} MB/s` : '0 MB/s');
@@ -37,13 +37,14 @@
     else if (done) line = `On Roostflix · ${ago(j.updatedAt || j.at)}`;
     else if (j.state === 'Cancelled') line = 'Cancelled';
     else if (j.state === 'Failed') line = 'Stopped. Retry to start it again.';
+    else if (j.state === 'Finding' || j.state === 'Requested') line = 'Checking the torrent…';
     else line = j.state;
     const buttons = running ? [button('Pause', 'pause', j), button('Cancel', 'cancel', j)]
       : paused ? [button('Resume', 'resume', j), button('Cancel', 'cancel', j)]
       : bad ? [button('Retry', 'retry', j), el('button', { type: 'button', class: 'dl-btn', text: 'Clear', onclick: async () => { try { await api('POST', '/api/cockerel/jobs/clear', { id: j.id }); } catch { /* shown next refresh */ } load(true); } })]
       : done ? [el('button', { type: 'button', class: 'dl-btn', text: 'Clear', onclick: async () => { try { await api('POST', '/api/cockerel/jobs/clear', { id: j.id }); } catch { /* shown next refresh */ } load(true); } })]
       : [];
-    return el('div', { class: `dl-card${done ? ' done' : ''}${bad ? ' bad' : ''}` },
+    return el('div', { class: `dl-card${done ? ' done' : ''}${bad ? ' bad' : ''}${S.seen && !S.seen.has(j.id) ? ' dl-new' : ''}${j.state === 'Finding' || j.state === 'Requested' ? ' checking' : ''}`, 'data-id': j.id },
       el('div', { class: 'dl-top' }, el('div', {}, el('div', { class: 'dl-name', text: j.title || 'Download' }), el('div', { class: 'dl-sub mono', text: sub })), el('div', { class: 'dl-btns' }, ...buttons)),
       el('div', { class: 'dl-bar' }, el('i', { style: `width:${pct}%` })),
       el('div', { class: 'dl-line mono', text: line }));
@@ -68,6 +69,7 @@
       ...(d.jobs.length ? [] : [el('div', { class: 'cx-empty' }, el('strong', { text: 'Nothing downloading' }), el('p', { text: 'Ask Cockerel for a film or paste a magnet link in the chat, and it shows up here.' }))]),
       ...going.map(card),
       ...(past.length ? [el('h3', { class: 'dl-h', text: 'Finished' }), ...past.map(card)] : []));
+    S.seen = new Set(d.jobs.map((j) => j.id));
   }
 
   // The page refreshes only while it is shown and the tab is visible.
@@ -85,13 +87,16 @@
     const box = $('#dl-addbox');
     box.classList.toggle('open', open);
     $('#dl-chip').setAttribute('aria-expanded', String(open));
-    $('#dl-chip-text').textContent = open ? 'Add a magnet' : '+ Add magnet';
+    $('#dl-chip-text').textContent = open ? 'Add a magnet' : 'Add magnet';
     const form = $('#dl-add');
     if (open) { form.removeAttribute('inert'); setTimeout(() => $('#dl-link').focus(), 180); } else form.setAttribute('inert', '');
   }
   function wire() {
     if (wired) return;
     wired = true;
+    document.querySelectorAll('.dl-seg button').forEach((b) => b.addEventListener('click', () => {
+      document.querySelectorAll('.dl-seg button').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', String(x === b)); });
+    }));
     $('#dl-chip').addEventListener('click', () => setOpen(!$('#dl-addbox').classList.contains('open')));
     $('#dl-add').addEventListener('keydown', (e) => { if (e.key === 'Escape') { setOpen(false); $('#dl-chip').focus(); } });
     $('#dl-add').addEventListener('submit', async (e) => {
@@ -100,7 +105,7 @@
       const go = $('#dl-go');
       go.disabled = true;
       try {
-        await api('POST', '/api/downloads/add', { link: $('#dl-link').value.trim(), name: $('#dl-name').value, kind: $('#dl-kind').value });
+        await api('POST', '/api/downloads/add', { link: $('#dl-link').value.trim(), name: $('#dl-name').value, kind: (document.querySelector('.dl-seg .on') || {}).dataset.kind });
         $('#dl-link').value = '';
         $('#dl-name').value = '';
         setOpen(false);
@@ -116,6 +121,7 @@
     wire();
     document.title = `Downloads · ${state.serverName}`;
     S.key = '';
+    S.seen = null; // the first look shows everything as it is
     load(true);
     clearTimeout(S.timer);
     S.timer = setTimeout(tick, EVERY_MS);

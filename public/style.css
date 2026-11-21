@@ -2161,18 +2161,37 @@ a.bh-btn { text-decoration: none; display: inline-block; }
 .dl-card.done .dl-bar i { opacity: 0.45; }
 .dl-card.bad .dl-bar i { opacity: 0.25; }
 @media (max-width: 520px) { .dl-top { flex-direction: column; } }
-.dl-addbox { border: 1px solid var(--line); border-radius: 99px; overflow: hidden; transition: border-radius 0.35s ease, border-color 0.2s; justify-self: start; width: 150px; }
-.dl-addbox.open { border-radius: 20px; border-color: var(--muted); width: 100%; }
-.dl-addbox { transition: border-radius 0.35s ease, border-color 0.2s, width 0.35s ease; }
-.dl-chip { display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 10px 16px; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 14px; cursor: pointer; white-space: nowrap; }
-.dl-chip-x { opacity: 0; font-size: 18px; line-height: 1; transition: opacity 0.2s; }
+
+/* Add a magnet: a chip that opens into its own box */
+.dl-addbox { justify-self: start; width: 158px; background: var(--panel); border: 1px solid var(--line); border-radius: 99px; overflow: hidden; box-shadow: 0 0 0 0 transparent; transition: width 0.38s cubic-bezier(.3,.8,.3,1), border-radius 0.38s ease, border-color 0.2s, box-shadow 0.3s; }
+.dl-addbox:hover:not(.open) { border-color: var(--ink); }
+.dl-addbox.open { width: 100%; border-radius: var(--radius); border-color: rgba(242,239,233,.45); box-shadow: 0 10px 30px rgba(0,0,0,.45); }
+.dl-chip { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 16px; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; white-space: nowrap; text-align: left; }
+.dl-ico { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--ink); color: var(--bg); flex-shrink: 0; }
+.dl-ico svg { width: 15px; height: 15px; }
+.dl-chip-x { margin-left: auto; width: 22px; height: 22px; display: grid; place-items: center; opacity: 0; color: var(--muted); transition: opacity 0.2s; }
+.dl-chip-x svg { width: 14px; height: 14px; }
 .dl-addbox.open .dl-chip-x { opacity: 1; }
-.dl-panel { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 0.35s ease, opacity 0.25s ease; }
+.dl-panel { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 0.38s cubic-bezier(.3,.8,.3,1), opacity 0.25s ease; }
 .dl-addbox.open .dl-panel { grid-template-rows: 1fr; opacity: 1; }
-.dl-add { min-height: 0; overflow: hidden; display: grid; gap: 8px; padding: 0 12px; }
-.dl-addbox.open .dl-add { padding-bottom: 12px; }
-.dl-add input, .dl-add select { min-width: 0; padding: 10px 14px; border: 1px solid var(--line); border-radius: 99px; background: transparent; color: var(--ink); font: inherit; font-size: 14px; }
-.dl-add input:focus, .dl-add select:focus { outline: none; border-color: var(--ink); }
-.dl-add-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
-@media (prefers-reduced-motion: reduce) { .dl-addbox, .dl-panel, .dl-chip-x { transition: none; } }
-.dl-go { padding: 8px 18px; background: var(--ink); color: var(--bg); border-color: var(--ink); font-weight: 500; }
+.dl-add { min-height: 0; overflow: hidden; display: grid; gap: 10px; padding: 0 14px; }
+.dl-addbox.open .dl-add { padding-bottom: 14px; }
+.dl-add-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end; }
+.dl-field { display: grid; gap: 4px; min-width: 0; }
+.dl-flab { font-size: 10px; letter-spacing: 0.1em; color: var(--muted); padding-left: 4px; }
+.dl-field input { min-width: 0; padding: 11px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); color: var(--ink); font: inherit; font-size: 14px; }
+.dl-field input::placeholder { color: rgba(154,151,143,.6); }
+.dl-field input:focus { outline: none; border-color: var(--ink); }
+.dl-seg { display: flex; padding: 3px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); }
+.dl-seg button { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 11px; cursor: pointer; transition: background 0.2s, color 0.2s; }
+.dl-seg button.on { background: var(--ink); color: var(--bg); font-weight: 500; }
+.dl-go { border: 0; border-radius: 14px; background: var(--ink); color: var(--bg); font: inherit; font-weight: 600; font-size: 14px; padding: 12px; cursor: pointer; box-shadow: 0 3px 0 rgba(242,239,233,.28); transition: transform 0.1s, box-shadow 0.1s; }
+.dl-go:active { transform: translateY(2px); box-shadow: 0 1px 0 rgba(242,239,233,.28); }
+.dl-go:disabled { opacity: 0.5; }
+
+/* A new download slides in, and shimmers while the torrent is checked */
+.dl-new { animation: dl-in 0.5s cubic-bezier(.3,.8,.3,1); }
+@keyframes dl-in { from { opacity: 0; transform: translateY(-14px) scale(.98); } to { opacity: 1; transform: none; } }
+.dl-card.checking .dl-bar i { width: 30% !important; background: linear-gradient(90deg, transparent, var(--ink), transparent); animation: dl-shim 1.3s ease-in-out infinite; }
+@keyframes dl-shim { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+@media (prefers-reduced-motion: reduce) { .dl-addbox, .dl-panel, .dl-chip-x, .dl-new, .dl-card.checking .dl-bar i { transition: none; animation: none; } }
