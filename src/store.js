@@ -62,6 +62,16 @@ const DEFAULT_APPS = [
     icon: 'cockerel',
     adminOnly: true, // only ever for the person who set him up
   },
+  {
+    id: 'downloads',
+    name: 'Downloads',
+    tagline: 'Torrents',
+    description: 'What Cockerel is downloading: progress, speed and time left, with pause and cancel.',
+    // Built into Roost: the link opens the Downloads page.
+    url: '#/downloads',
+    icon: 'download',
+    adminOnly: true,
+  },
 ];
 
 function emptyDb() {

@@ -81,3 +81,19 @@ test('the eval cases are well formed and cover every model', () => {
   // The router agrees with what the cases expect.
   for (const c of CASES.filter((x) => x.model && typeof x.say === 'string')) assert.equal(router.choose({ text: c.say }).tier, c.model, c.name);
 });
+
+test('a job keeps its download numbers and pauses', () => {
+  const { Cockerel } = require('../src/cockerel');
+  const store = { db: { settings: {} }, save() {} };
+  const c = new Cockerel({ store, newId: () => '1' });
+  c.setJob({ id: 'a1', title: 'Show', state: 'Downloading', progress: 41, size: 20e9, speed: 2.8e6, eta: 7800, peers: 31, kind: 'show' });
+  let j = c.data().jobs[0];
+  assert.deepEqual([j.size, j.speed, j.eta, j.peers, j.kind], [20e9, 2.8e6, 7800, 31, 'show']);
+  c.setJob({ id: 'a1', state: 'Paused' });
+  j = c.data().jobs[0];
+  assert.equal(j.state, 'Paused');
+  assert.equal(c.clearJobs(), 0, 'a paused download is never cleared');
+  c.setJob({ id: 'a1', state: 'Cancelled' });
+  assert.equal(c.data().jobs[0].speed, 0);
+  assert.equal(c.clearJobs(), 1);
+});

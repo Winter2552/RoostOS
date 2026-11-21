@@ -349,6 +349,12 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     if (!store.db.apps.some((a) => a.id === 'cockerel')) store.db.apps.push({ ...DEFAULT_APPS.find((a) => a.id === 'cockerel') });
     linked = true;
   }
+  // Downloads, the page that shows what Cockerel is fetching.
+  if (!store.db.settings.downloadsAdded) {
+    store.db.settings.downloadsAdded = true;
+    if (!store.db.apps.some((a) => a.id === 'downloads')) store.db.apps.push({ ...DEFAULT_APPS.find((a) => a.id === 'downloads') });
+    linked = true;
+  }
   if (linked) store.save();
   let designing = false; // one Claude design at a time
   const priceAsked = new Map(); // when each person last pressed Fetch price
@@ -3333,6 +3339,35 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       requireAdmin(req);
       const body = await readJson(req);
       send(res, 200, { cleared: cockerel.clearJobs(body.id ? str(body.id, 60) : '') });
+    },
+
+    // The Downloads page: every download Cockerel has, newest first.
+    'GET /api/downloads': async (req, res) => {
+      requireAdmin(req);
+      const c = cockerel.data();
+      const jobs = [...c.jobs].reverse();
+      const live = jobs.filter((j) => j.state === 'Downloading');
+      send(res, 200, {
+        enabled: cockerel.enabled(),
+        paused: Boolean(cockerel.config().paused),
+        jobs,
+        active: live.length,
+        speed: live.reduce((n, j) => n + (j.speed || 0), 0),
+        todayGb: Math.round((cockerel.dayBytes() / COCKEREL_GB) * 10) / 10,
+        dayGb: cockerel.config().dayGb,
+      });
+    },
+
+    'POST /api/downloads/control': async (req, res) => {
+      requireAdmin(req);
+      const body = await readJson(req);
+      try {
+        await cockerel.control(str(body.action, 20), str(body.id, 60));
+      } catch (err) {
+        if (err instanceof CockerelError) throw new HttpError(err.status || 502, err.message);
+        throw err;
+      }
+      send(res, 200, { ok: true });
     },
 
     'POST /api/cockerel/chat': async (req, res) => {

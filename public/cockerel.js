@@ -178,10 +178,15 @@
     if (S.typing) { S.again = true; return; } // let him finish the sentence
     S.last = key;
     const jobs = $('#cx-jobs');
-    const live = d.jobs.filter((j) => j.state !== 'Added' || Date.now() - Date.parse(j.updatedAt || j.at) < 3600e3).slice(0, 4);
-    const finished = live.filter((j) => j.state !== 'Downloading' && j.state !== 'Adding').length;
-    jobs.replaceChildren(...live.map(job), ...(finished > 1 ? [el('button', { type: 'button', class: 'cx-clear', text: 'Clear finished', onclick: () => clearJobs('') })] : []));
-    jobs.hidden = !live.length;
+    // Downloads live on their own page; here is only a line that leads there.
+    const going = d.jobs.filter((j) => j.state === 'Downloading' || j.state === 'Paused' || j.state === 'Adding' || j.state === 'Finding' || j.state === 'Requested');
+    const dl = going.filter((j) => j.state === 'Downloading');
+    const avg = dl.length ? Math.round(dl.reduce((n, j) => n + (j.progress || 0), 0) / dl.length) : 0;
+    jobs.replaceChildren(...(going.length ? [el('a', { class: 'cx-chip', href: '#/downloads' },
+      el('span', { text: `${going.length} download${going.length === 1 ? '' : 's'}${dl.length ? '' : ' waiting'}` }),
+      el('span', { class: 'cx-track' }, el('i', { style: `width:${avg}%` })),
+      el('span', { class: 'mono muted', text: dl.length ? `${avg}%  ›` : '›' }))] : []));
+    jobs.hidden = !going.length;
     const feed = $('#cx-feed');
     const stick = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
     const shown = d.log.filter((e) => S.steps || (e.kind !== 'note' && e.kind !== 'event'));

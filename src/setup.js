@@ -819,6 +819,7 @@ const NO_STEP = {
   birdhouseFetch: 'off by default, switched under Admin → Server (Birdhouse may read a shop page when asked)',
   birdhouseAdded: 'Roost\'s own record that the Birdhouse app was added once',
   cockerelAdded: 'Roost\'s own record that the Cockerel app was added once',
+  downloadsAdded: 'Roost\'s own record that the Downloads app was added once',
   setupTicked: 'this checklist\'s own record',
   notice: 'optional, posted under Admin → Notice',
 };

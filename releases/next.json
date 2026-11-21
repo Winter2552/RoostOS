@@ -11,6 +11,12 @@
       "text": "He keeps the thread of a long chat, reads text files you drop in his Nest folder, knows what you are watching, does sums properly, learns routines, holds small notes for the morning in quiet hours, and double-checks risky actions. Tap Not right when he gets one wrong.",
       "image": "cockerel-smarter.png",
       "admin": true
+    },
+    {
+      "title": "A Downloads page",
+      "text": "Everything Cockerel is downloading in one place: progress, speed, time left and peers, with Pause, Cancel and Retry. The chat shows just a small line that takes you there.",
+      "image": "downloads.png",
+      "admin": true
     }
   ]
 }

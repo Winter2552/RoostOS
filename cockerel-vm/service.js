@@ -314,6 +314,17 @@ const server = http.createServer(async (req, res) => {
       return void runClaude(promptFor(`Film job handed over from your chat run: ${text}\nFollow your film steps.`), 'media', read('toolsoff.json', []), { text: 'film job', router: read('router.json', {}) })
         .then((out) => tool('log', out.text.slice(0, 900))).catch(() => {});
     }
+    if (req.url === '/downloads') {
+      // From the Downloads page. Not available to Claude: it runs outside any chat.
+      const action = String(data.action || '');
+      const id = String(data.id || '');
+      if (!['pause', 'resume', 'cancel', 'retry'].includes(action) || !/^[\w-]{1,60}$/.test(id)) return reply(400, { error: 'bad request' });
+      live(`Downloads page: ${action} ${id}`);
+      // retry may take minutes (it checks the torrent), so answer first.
+      if (action === 'retry') { reply(200, { ok: true }); return void tool('control', action, id); }
+      const code = await tool('control', action, id);
+      return code === 0 ? reply(200, { ok: true }) : reply(409, { error: `I couldn't ${action} that one` });
+    }
     if (req.url === '/review') {
       // Second opinion (Haiku, one turn, no tools) on an outward action before it reaches Raven's tap.
       const action = String(data.action || '').slice(0, 300);

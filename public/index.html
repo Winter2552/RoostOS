@@ -277,6 +277,16 @@
     </section>
 
     <!-- Birdhouse: woodworking plans (public/birdhouse.js) -->
+    <!-- Downloads: what Cockerel is fetching (public/downloads.js) -->
+    <section id="view-downloads" class="downloads hidden">
+      <div class="dl-page">
+        <header class="dl-head"><h2>Downloads</h2></header>
+        <div class="dl-stats" id="dl-stats"></div>
+        <p class="muted mono" id="dl-note" hidden></p>
+        <div class="dl-list" id="dl-list"></div>
+      </div>
+    </section>
+
     <section id="view-birdhouse" class="birdhouse hidden">
       <div class="bh-page">
         <div class="bh-sheet" id="bh-home"></div>
@@ -1036,6 +1046,7 @@
   <script src="/birdhouse-model.js"></script>
   <script src="/birdhouse.js"></script>
   <script src="/cockerel.js"></script>
+  <script src="/downloads.js"></script>
   <script src="/whatsnew.js"></script>
   <script src="/search.js"></script>
   <script src="/motion.js"></script>
