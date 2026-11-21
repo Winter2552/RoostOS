@@ -166,6 +166,14 @@ test('admin sees the default apps', async () => {
   assert.deepEqual(body.apps.map((a) => a.name), ['Jellyfin', 'Nova', 'Nest', 'Glint', 'Birdhouse', 'Cockerel', 'Downloads']);
 });
 
+test('the Downloads page only takes magnet or .torrent links', async () => {
+  const bad = await call('POST', '/api/downloads/add', { link: 'https://example.com/film.mp4' }, adminCookie);
+  assert.equal(bad.status, 400);
+  const none = await call('POST', '/api/downloads/add', { link: '' }, adminCookie);
+  assert.equal(none.status, 400);
+  assert.equal((await call('POST', '/api/downloads/add', { link: 'magnet:?xt=urn:btih:abc' })).status, 401);
+});
+
 test('admin can add a user limited to some apps', async () => {
   const res = await call('POST', '/api/admin/users',
     { username: 'guest', password: 'guest pass 1', displayName: 'Guest', apps: ['jellyfin', 'glint', 'bogus'] }, adminCookie);

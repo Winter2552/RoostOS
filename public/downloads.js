@@ -79,7 +79,33 @@
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
 
+  // "Add a magnet": the name and Film/Show pick appear once something is pasted.
+  let wired = false;
+  function wire() {
+    if (wired) return;
+    wired = true;
+    const link = $('#dl-link');
+    link.addEventListener('input', () => { $('#dl-add-more').hidden = !link.value.trim(); });
+    $('#dl-add').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const note = $('#dl-note');
+      const go = $('#dl-go');
+      go.disabled = true;
+      try {
+        await api('POST', '/api/downloads/add', { link: link.value.trim(), name: $('#dl-name').value, kind: $('#dl-kind').value });
+        link.value = '';
+        $('#dl-name').value = '';
+        $('#dl-add-more').hidden = true;
+        note.hidden = false;
+        note.textContent = 'Added. It is being checked, and will appear below in a moment.';
+        setTimeout(() => load(true), 2500);
+      } catch (err) { note.hidden = false; note.textContent = err.message; }
+      go.disabled = false;
+    });
+  }
+
   window.downloadsOpen = () => {
+    wire();
     document.title = `Downloads · ${state.serverName}`;
     S.key = '';
     load(true);

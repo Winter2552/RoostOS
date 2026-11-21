@@ -2161,3 +2161,8 @@ a.bh-btn { text-decoration: none; display: inline-block; }
 .dl-card.done .dl-bar i { opacity: 0.45; }
 .dl-card.bad .dl-bar i { opacity: 0.25; }
 @media (max-width: 520px) { .dl-top { flex-direction: column; } }
+.dl-add { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.dl-add input, .dl-add select { min-width: 0; padding: 10px 14px; border: 1px solid var(--line); border-radius: 99px; background: transparent; color: var(--ink); font: inherit; font-size: 14px; }
+.dl-add input:focus, .dl-add select:focus { outline: none; border-color: var(--ink); }
+.dl-add-more { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.dl-go { padding: 8px 18px; background: var(--ink); color: var(--bg); border-color: var(--ink); font-weight: 500; }
