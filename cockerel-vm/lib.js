@@ -71,6 +71,30 @@ function cleanName(name) {
   return String(name || '').replace(BAD_CHARS, ' ').replace(/\s+/g, ' ').replace(/^[. ]+|[. ]+$/g, '').slice(0, 120);
 }
 
+// A release title ("Show.Name.2019.S01-S08.1080p.WEB-DL.x265-GRP") to a plain name and year.
+function titleFromRelease(raw) {
+  const text = String(raw || '').replace(/[._]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const stop = /\b(S\d{1,2}|Season|Complete|\d{3,4}p|WEB|BluRay|BDRip|HDTV|x26[45]|HEVC)\b|\[|\(?\b(19|20)\d{2}\b\)?/i.exec(text);
+  const name = cleanName(stop ? text.slice(0, stop.index) : text);
+  const y = /\b((?:19|20)\d{2})\b/.exec(text.slice(name.length));
+  return { name, year: y ? y[1] : '' };
+}
+
+// What `aria2c -S file.torrent` prints: the torrent's own name and its file paths.
+function parseTorrentInfo(out) {
+  const text = String(out || '');
+  const name = (/^Name:\s*(.+)$/m.exec(text) || [])[1] || '';
+  const files = [...text.matchAll(/^\s*\d+\|(.+)$/gm)].map((m) => m[1].trim().replace(/^\.\//, ''));
+  return { name: name.trim(), files };
+}
+
+// Film or show, and its name and year, from what the torrent itself says.
+function guessFromTorrent(info, fallbackName = '') {
+  const episodes = (info.files || []).filter((f) => VIDEO.test(f) && /S\d{1,2}[ ._-]*E\d{1,3}/i.test(f));
+  const rel = titleFromRelease(info.name || fallbackName);
+  return { kind: episodes.length ? 'show' : 'movie', name: rel.name || cleanName(fallbackName), year: rel.year };
+}
+
 // Movies/[Genre/]Name (Year)/Name (Year).ext
 function moviePath(root, name, year, ext, genre = '') {
   const n = cleanName(name);
@@ -180,4 +204,4 @@ function progressText(speed, bytesLeft) {
 const NO_SEED = ['--seed-time=0', '--seed-ratio=0.0', '--max-overall-upload-limit=1K'];
 
 module.exports = {
-  linkKey, linksIn, genreFolders, genreFolder, shareMissing, writableProblem, progressText, NO_SEED, browseUrl, pageText, sign, headers, verify, OPEN_HOSTS, hostOpen, sourceKind, VIDEO, cleanName, moviePath, episodePath, jobIdOk, human };
+  linkKey, linksIn, genreFolders, genreFolder, shareMissing, writableProblem, progressText, titleFromRelease, parseTorrentInfo, guessFromTorrent, NO_SEED, browseUrl, pageText, sign, headers, verify, OPEN_HOSTS, hostOpen, sourceKind, VIDEO, cleanName, moviePath, episodePath, jobIdOk, human };

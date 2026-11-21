@@ -316,6 +316,27 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.url === '/downloads') {
       // From the Downloads page. Not available to Claude: it runs outside any chat.
+      if (data.action === 'add') {
+        // Raven pasted a link into the Downloads page himself, so (like a chat paste)
+        // it counts as his word. No Claude involved: the tool does the checks.
+        const link = String(data.link || '').trim().replace(/[).,;]+$/, '');
+        if (!/^magnet:\?\S+$/i.test(link) && !/^https:\/\/\S+\.torrent(\?\S*)?$/i.test(link)) return reply(400, { error: 'That is not a magnet or .torrent link' });
+        const dn = /[?&]dn=([^&]+)/i.exec(link);
+        let guess = '';
+        try { guess = dn ? decodeURIComponent(dn[1].replace(/\+/g, ' ')) : ''; } catch { guess = dn ? dn[1] : ''; }
+        const typed = lib.cleanName(String(data.name || '').trim());
+        const rel = lib.titleFromRelease(guess);
+        const name = typed || rel.name || 'Download';
+        const year = typed ? '' : rel.year;
+        const kind = data.kind === 'show' ? 'show' : data.kind === 'auto' ? 'auto' : 'movie';
+        const id = `m-${Date.now().toString(36)}`;
+        const mine = read('raven-links.json', {});
+        mine[lib.linkKey(link)] = Date.now();
+        write('raven-links.json', mine);
+        live(`Downloads page: add ${name}`);
+        reply(200, { ok: true, id });
+        return void tool('fetch', link, '--job', id, '--name', name, '--kind', kind, ...(typed ? [] : ['--auto', '1']), ...(year && kind === 'movie' ? ['--year', year] : []));
+      }
       const action = String(data.action || '');
       const id = String(data.id || '');
       if (!['pause', 'resume', 'cancel', 'retry'].includes(action) || !/^[\w-]{1,60}$/.test(id)) return reply(400, { error: 'bad request' });

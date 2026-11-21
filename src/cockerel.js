@@ -183,6 +183,11 @@ class Cockerel {
     return this.call('POST', '/downloads', { action, id }, 20000);
   }
 
+  // A magnet (or .torrent link) Raven pasted on the Downloads page. The VM starts it.
+  async addLink(link, name, kind) {
+    return this.call('POST', '/downloads', { action: 'add', link, name, kind }, 20000);
+  }
+
   setJob(job) {
     const c = this.data();
     const id = clip(job.id, 60);

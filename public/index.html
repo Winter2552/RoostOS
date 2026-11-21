@@ -281,6 +281,19 @@
     <section id="view-downloads" class="downloads hidden">
       <div class="dl-page">
         <header class="dl-head"><h2>Downloads</h2></header>
+        <div class="dl-addbox" id="dl-addbox">
+          <button class="dl-chip" type="button" id="dl-chip" aria-expanded="false" aria-controls="dl-add"><span class="dl-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4v7a7 7 0 0 0 14 0V4h-4v7a3 3 0 0 1-6 0V4z"/><path d="M5 8h4M15 8h4"/></svg></span><span id="dl-chip-text">Add magnet</span><span class="dl-chip-x" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></span></button>
+          <div class="dl-panel" id="dl-panel">
+            <form class="dl-add" id="dl-add" autocomplete="off" inert>
+              <label class="dl-field" for="dl-link"><span class="dl-flab mono">LINK</span><input type="text" id="dl-link" placeholder="magnet:?xt=urn:btih:…" spellcheck="false" autocapitalize="off" autocorrect="off"></label>
+              <div class="dl-add-row">
+                <label class="dl-field" for="dl-name"><span class="dl-flab mono">NAME</span><input type="text" id="dl-name" maxlength="120" placeholder="Optional, taken from the link"></label>
+                <div class="dl-seg" role="group" aria-label="Film or show"><button type="button" class="on" data-kind="auto" aria-pressed="true">Auto</button><button type="button" data-kind="movie" aria-pressed="false">Film</button><button type="button" data-kind="show" aria-pressed="false">Show</button></div>
+              </div>
+              <button class="dl-go" type="submit" id="dl-go">Start download</button>
+            </form>
+          </div>
+        </div>
         <div class="dl-stats" id="dl-stats"></div>
         <p class="muted mono" id="dl-note" hidden></p>
         <div class="dl-list" id="dl-list"></div>
