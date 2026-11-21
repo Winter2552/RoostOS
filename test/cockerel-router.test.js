@@ -42,6 +42,11 @@ test('only a plain film request goes to the download run; mixed ones hand off', 
   assert.equal(modeFor('Find Sintel and add it to Roostflix'), 'media');
   assert.equal(modeFor('Which Blender film is best, and then get it for Sam?'), 'assistant');
   assert.equal(modeFor('Remind me to download the thing'), 'assistant');
+  // A pasted magnet is a download, even when its title holds words like "what" or "then".
+  const mag = 'magnet:?xt=urn:btih:abc&dn=What.Then.How.S01-S08&tr=udp%3A%2F%2Ftracker.zer0day.to%3A1337%2Fannounce';
+  assert.equal(modeFor(mag), 'media');
+  assert.equal(modeFor(`Get all eight seasons ${mag}`), 'media');
+  assert.equal(modeFor(`Is this worth watching? ${mag}`), 'assistant');
   const chat = allowedFor('assistant');
   assert.ok(chat.includes('Bash(cockerel-tool handoff:*)'));
   assert.ok(chat.includes('WebSearch') && !chat.some((t) => /cockerel-tool (fetch|find|retry):/.test(t)), 'web and downloads never share a run');
