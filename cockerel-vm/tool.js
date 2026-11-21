@@ -78,6 +78,13 @@ async function find(title) {
   }
 }
 
+async function retryJob(id) {
+  const meta = lib.jobIdOk(id) ? readJson(jobFile(id), null) : null;
+  if (!meta) fail('retry JOB_ID (see `jobs`)');
+  if (meta.status === 'downloading' || meta.status === 'added') fail(`That job is ${meta.status}; nothing to retry.`);
+  await fetchJob(meta.link, { job: id, name: meta.name, year: meta.year, kind: meta.kind, requester: meta.requester, genre: meta.genre });
+}
+
 const torrentFile = (id) => path.join(STATE, 'torrents', `${id}.torrent`);
 
 function sizeOf(link, id) {
@@ -200,13 +207,14 @@ function setProgress(id, entry) {
 async function watch(id) {
   if (!lib.jobIdOk(id)) fail('bad job');
   let last = -1;
+  let lastSent = 0;
   let misses = 0;
   for (;;) {
     const meta = readJson(jobFile(id), null);
     if (!meta || meta.status !== 'downloading' || !meta.rpc) break;
     let st = null;
     try {
-      const res = await fetch(`http://127.0.0.1:${meta.rpc.port}/jsonrpc`, { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 'w', method: 'aria2.tellActive', params: [`token:${meta.rpc.secret}`, ['completedLength', 'totalLength', 'downloadSpeed']] }), signal: AbortSignal.timeout(4000) });
+      const res = await fetch(`http://127.0.0.1:${meta.rpc.port}/jsonrpc`, { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 'w', method: 'aria2.tellActive', params: [`token:${meta.rpc.secret}`, ['completedLength', 'totalLength', 'downloadSpeed', 'connections']] }), signal: AbortSignal.timeout(4000) });
       const list = ((await res.json()).result || []).sort((a, b) => Number(b.totalLength) - Number(a.totalLength));
       st = list[0] || null;
       misses = 0;
@@ -218,15 +226,53 @@ async function watch(id) {
       const pct = Math.min(99, Math.floor((got / total) * 100));
       const detail = `${pct}%${lib.progressText(Number(st.downloadSpeed), total - got) ? ` · ${lib.progressText(Number(st.downloadSpeed), total - got)}` : ''}`;
       setProgress(id, { name: meta.name, pct, detail, at: Date.now() });
-      if (pct !== last) {
+      // Tell Roost when the percent moves, or every 30 s so speed and time left stay fresh.
+      if (pct !== last || Date.now() - lastSent > 30000) {
+        const changed = pct !== last;
         last = pct;
-        try { await hook({ type: 'job', id, state: 'Downloading', progress: pct, detail: lib.progressText(Number(st.downloadSpeed), total - got) }); } catch { /* Roost busy; try on the next change */ }
+        lastSent = Date.now();
+        const speed = Number(st.downloadSpeed);
+        try { await hook({ type: 'job', id, state: 'Downloading', progress: pct, detail: lib.progressText(speed, total - got), size: total, speed, eta: speed > 0 ? Math.round((total - got) / speed) : 0, peers: Number(st.connections) || 0, kind: meta.kind }); } catch { /* Roost busy; try on the next change */ }
+        if (!changed) { await new Promise((r) => setTimeout(r, 5000)); continue; }
         if (pct % 10 === 0) await hook({ type: 'log', text: `${meta.name}: ${detail}` }).catch(() => {});
       }
     }
     await new Promise((r) => setTimeout(r, 5000));
   }
   setProgress(id, null);
+}
+
+// ---------- Pause, resume, cancel (from the Downloads page, via the service) ----------
+async function aria(meta, method) {
+  if (!meta.rpc) throw new Error('not running');
+  const res = await fetch(`http://127.0.0.1:${meta.rpc.port}/jsonrpc`, { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 'c', method, params: [`token:${meta.rpc.secret}`] }), signal: AbortSignal.timeout(5000) });
+  const out = await res.json();
+  if (out.error) throw new Error(out.error.message);
+}
+
+async function control(action, id) {
+  if (!lib.jobIdOk(id)) fail('bad job');
+  const meta = readJson(jobFile(id), null);
+  if (!meta) fail('No such download.');
+  if (action === 'retry') return retryJob(id);
+  if (meta.status !== 'downloading') fail(`That download is ${meta.status}, not running.`);
+  if (action === 'pause' || action === 'resume') {
+    try { await aria(meta, action === 'pause' ? 'aria2.forcePauseAll' : 'aria2.unpauseAll'); } catch (err) { fail(`I couldn't ${action} it: ${err.message}`); }
+    await hook({ type: 'job', id, state: action === 'pause' ? 'Paused' : 'Downloading' });
+    await hook({ type: 'log', text: `${meta.name}: ${action === 'pause' ? 'paused' : 'resumed'} from the Downloads page.` });
+    return console.log(`${action}d`);
+  }
+  if (action === 'cancel') {
+    writeJson(jobFile(id), { ...meta, status: 'cancelled' });
+    stopAria(meta.pid);
+    fs.rmSync(torrentFile(id), { force: true });
+    fs.rmSync(path.join(INCOMING, id), { recursive: true, force: true });
+    setProgress(id, null);
+    await hook({ type: 'job', id, state: 'Cancelled' });
+    await hook({ type: 'log', text: `${meta.name}: cancelled from the Downloads page, and the partial files were removed.` });
+    return console.log('cancelled');
+  }
+  fail('pause, resume, cancel or retry');
 }
 
 // ---------- when aria2 finishes (called by hook.sh) ----------
@@ -418,12 +464,9 @@ const COMMANDS = {
     console.log(rows.length ? rows.slice(-15).map((m) => `${m.id}  ${m.name}${m.year ? ` (${m.year})` : ''}  ${m.status}${prog[m.id] ? `  ${prog[m.id].pct}%` : ''}`).join('\n') : 'No download jobs yet.');
   },
   // Starts a failed or stuck job again from its saved details; the usual checks run again.
-  retry: async ([id]) => {
-    const meta = lib.jobIdOk(id) ? readJson(jobFile(id), null) : null;
-    if (!meta) fail('retry JOB_ID (see `jobs`)');
-    if (meta.status === 'downloading' || meta.status === 'added') fail(`That job is ${meta.status}; nothing to retry.`);
-    await fetchJob(meta.link, { job: id, name: meta.name, year: meta.year, kind: meta.kind, requester: meta.requester });
-  },
+  retry: async ([id]) => { await retryJob(id); },
+  // Used by the Downloads page through the service, not by Claude.
+  control: async ([action, id]) => { await control(action, id); },
   // Sums and small scripts in a throwaway sandbox: no files, no network, no modules, 5 seconds.
   calc: async ([code]) => {
     if (!code) fail('calc "expression or a few lines of JavaScript; use return for the answer"');
