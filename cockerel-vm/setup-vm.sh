@@ -77,7 +77,7 @@ if id "$RAVEN_USER" >/dev/null 2>&1; then
   if [ ! -x "/home/$RAVEN_USER/.local/bin/claude" ]; then
     sudo -u "$RAVEN_USER" -H bash -lc 'curl -fsSL https://claude.ai/install.sh | bash' || echo "Claude Code did not install for $RAVEN_USER."
   else
-    sudo -u "$RAVEN_USER" -H bash -lc "$HOME/.local/bin/claude update" >/dev/null 2>&1 || true
+    sudo -u "$RAVEN_USER" -H bash -lc '"$HOME/.local/bin/claude" update' >/dev/null 2>&1 || true
   fi
   sudo -u "$RAVEN_USER" -H mkdir -p "/home/$RAVEN_USER/claude-work" "/home/$RAVEN_USER/Desktop"
   # Icons on his desktop, so they are there without logging out and in.
