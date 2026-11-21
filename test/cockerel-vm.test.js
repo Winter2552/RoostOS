@@ -351,3 +351,10 @@ test('films are filed into the genre folders Raven already has', async () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('a release title becomes a plain name and year', () => {
+  const lib = require('../cockerel-vm/lib');
+  assert.deepEqual(lib.titleFromRelease('The.Apothecary.Diaries.S01-S08.1080p.WEB-DL.x265-GRP'), { name: 'The Apothecary Diaries', year: '' });
+  assert.deepEqual(lib.titleFromRelease('Sintel.2010.1080p.BluRay.x264'), { name: 'Sintel', year: '2010' });
+  assert.deepEqual(lib.titleFromRelease('Big Buck Bunny (2008)'), { name: 'Big Buck Bunny', year: '2008' });
+});

@@ -324,7 +324,10 @@ const server = http.createServer(async (req, res) => {
         const dn = /[?&]dn=([^&]+)/i.exec(link);
         let guess = '';
         try { guess = dn ? decodeURIComponent(dn[1].replace(/\+/g, ' ')) : ''; } catch { guess = dn ? dn[1] : ''; }
-        const name = lib.cleanName(String(data.name || '').trim() || guess.replace(/[._]+/g, ' ')) || 'Download';
+        const typed = lib.cleanName(String(data.name || '').trim());
+        const rel = lib.titleFromRelease(guess);
+        const name = typed || rel.name || 'Download';
+        const year = typed ? '' : rel.year;
         const kind = data.kind === 'show' ? 'show' : 'movie';
         const id = `m-${Date.now().toString(36)}`;
         const mine = read('raven-links.json', {});
@@ -332,7 +335,7 @@ const server = http.createServer(async (req, res) => {
         write('raven-links.json', mine);
         live(`Downloads page: add ${name}`);
         reply(200, { ok: true, id });
-        return void tool('fetch', link, '--job', id, '--name', name, '--kind', kind);
+        return void tool('fetch', link, '--job', id, '--name', name, '--kind', kind, ...(year && kind === 'movie' ? ['--year', year] : []));
       }
       const action = String(data.action || '');
       const id = String(data.id || '');

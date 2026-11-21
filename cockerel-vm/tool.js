@@ -311,6 +311,8 @@ async function done(id) {
     if (meta.kind === 'show') {
       const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (lib.VIDEO.test(e.name)) files.push(p); } };
       walk(dir);
+      // Trailers and samples that ride along in a pack are left out, not a reason to fail.
+      for (let i = files.length - 1; i >= 0; i--) if (/(^|[\W_])sample([\W_]|$)/i.test(path.basename(files[i])) && files.length > 1) files.splice(i, 1);
     } else {
       const v = biggestVideo(dir);
       if (v) files.push(v.p);
