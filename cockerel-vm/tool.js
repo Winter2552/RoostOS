@@ -134,7 +134,10 @@ async function fetchJob(link, opt) {
   let kind = opt.kind === 'show' ? 'show' : 'movie';
   const source = lib.sourceKind(link);
   if (source === 'bad') fail('That link is not allowed. Only https links to the open internet, or a magnet link Raven gave you.');
-  const meta = { ...readJson(jobFile(id), {}), id, link, name, year: opt.year || '', genre: opt.genre || '', kind, requester: opt.requester || '', status: 'new' };
+  const prior = readJson(jobFile(id), {});
+  // A link Raven added on the Downloads page stays his word for the life of the job, retries included.
+  const own = opt.own === '1' || prior.own === true;
+  const meta = { ...prior, own, id, link, name, year: opt.year || '', genre: opt.genre || '', kind, requester: opt.requester || '', status: 'new' };
   writeJson(jobFile(id), meta);
   await hook({ type: 'job', id, title: name, state: 'Finding', requester: meta.requester });
 
@@ -155,7 +158,7 @@ async function fetchJob(link, opt) {
     fail(`I can't write to the Roostflix folders (${blocked}). Tell Raven the Roostflix incoming, Movies and Series folders need write access for my share user; the fix is in the log.`);
   }
 
-  const ownLink = Date.now() - Number((readJson(path.join(STATE, 'raven-links.json'), {}))[lib.linkKey(link)] || 0) < 2 * 3600 * 1000;
+  const ownLink = own || Date.now() - Number((readJson(path.join(STATE, 'raven-links.json'), {}))[lib.linkKey(link)] || 0) < 2 * 3600 * 1000;
   if (source === 'other' && ownLink && !opt.requester) await hook({ type: 'log', text: `${name}: you pasted this link yourself, so I took that as your word that you are entitled to it.` });
   if (source === 'other' && !(ownLink && !opt.requester) && !approved(`entitled-${id}`)) {
     await hook({ type: 'job', id, state: 'Waiting', note: 'Needs your OK in the Cockerel chat' });

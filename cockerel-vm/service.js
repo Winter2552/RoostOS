@@ -335,7 +335,7 @@ const server = http.createServer(async (req, res) => {
         write('raven-links.json', mine);
         live(`Downloads page: add ${name}`);
         reply(200, { ok: true, id });
-        return void tool('fetch', link, '--job', id, '--name', name, '--kind', kind, ...(typed ? [] : ['--auto', '1']), ...(year && kind === 'movie' ? ['--year', year] : []));
+        return void tool('fetch', link, '--job', id, '--name', name, '--kind', kind, '--own', '1', ...(typed ? [] : ['--auto', '1']), ...(year && kind === 'movie' ? ['--year', year] : []));
       }
       const action = String(data.action || '');
       const id = String(data.id || '');

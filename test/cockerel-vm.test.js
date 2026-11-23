@@ -418,3 +418,44 @@ test('a magnet whose file list never arrives fails with a clear note, not a size
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('a link added on the Downloads page stays his word, so a late retry never asks again', async () => {
+  const fs = require('fs');
+  const http = require('http');
+  const os = require('os');
+  const path = require('path');
+  const { spawn } = require('child_process');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cockerel-o-'));
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'aria2c'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'ip'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const seen = [];
+  const roost = http.createServer(async (req, res) => {
+    let body = '';
+    for await (const c of req) body += c;
+    seen.push(JSON.parse(body));
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ decision: 'auto', ok: true }));
+  });
+  await new Promise((r) => roost.listen(0, '127.0.0.1', r));
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, COCKEREL_HOME: path.join(root, 'home'), MEDIA_ROOT: path.join(root, 'media'), INCOMING_DIR: path.join(root, 'media', 'incoming'), ROOST_URL: `http://127.0.0.1:${roost.address().port}`, COCKEREL_SECRET: 'own-test-secret-0123456789abcd' };
+  fs.mkdirSync(path.join(env.COCKEREL_HOME, 'state'), { recursive: true });
+  const run = (...args) => new Promise((resolve) => {
+    const child = spawn('node', [path.join(__dirname, '..', 'cockerel-vm', 'tool.js'), ...args], { env });
+    child.on('close', resolve);
+  });
+  try {
+    const mag = 'magnet:?xt=urn:btih:abc';
+    await run('fetch', mag, '--job', 'o1', '--name', 'Own Show', '--own', '1');
+    // Hours later: no raven-links entry and no approval, retried the way the Downloads page does it.
+    await run('retry', 'o1');
+    assert.ok(!seen.some((m) => m.type === 'ask'), 'never asked whether he is entitled');
+    // A link nobody vouched for still asks.
+    await run('fetch', mag, '--job', 'o2', '--name', 'Other Show');
+    assert.ok(seen.some((m) => m.type === 'ask' && m.askId === 'entitled-o2'), 'an unvouched link still asks');
+  } finally {
+    roost.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
