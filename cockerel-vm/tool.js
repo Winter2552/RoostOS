@@ -158,6 +158,7 @@ async function fetchJob(link, opt) {
   const ownLink = Date.now() - Number((readJson(path.join(STATE, 'raven-links.json'), {}))[lib.linkKey(link)] || 0) < 2 * 3600 * 1000;
   if (source === 'other' && ownLink && !opt.requester) await hook({ type: 'log', text: `${name}: you pasted this link yourself, so I took that as your word that you are entitled to it.` });
   if (source === 'other' && !(ownLink && !opt.requester) && !approved(`entitled-${id}`)) {
+    await hook({ type: 'job', id, state: 'Waiting', note: 'Needs your OK in the Cockerel chat' });
     await hook({ type: 'ask', askId: `entitled-${id}`, text: `${name} would come from a source I don't normally use. Are you entitled to download this one yourself (you own it, or it is free to share)?`, options: ["Yes, I'm entitled to this", 'Cancel'] });
     return console.log('Asked Raven whether he is entitled to this download. Stop here and wait: he will answer and you will be woken to continue.');
   }
@@ -166,7 +167,19 @@ async function fetchJob(link, opt) {
     await hook({ type: 'log', text: `Did not start ${name}: the VPN is down.` });
     fail('The VPN is down, so downloads are stopped. Tell Raven.');
   }
+  const torrentLink = /^magnet:|\.torrent(\?|$)/i.test(link);
+  if (torrentLink) await hook({ type: 'job', id, state: 'Finding', note: 'Looking for peers and the file list, up to 3 minutes…' });
   const { size, torrent, info } = sizeOf(link, id);
+  // Cancelled from the Downloads page while it was looking: stop here.
+  if ((readJson(jobFile(id), {}) || {}).status === 'cancelled') return console.log('That download was cancelled.');
+  if (torrentLink && !torrent) {
+    // No file list in 3 minutes: say so on the card, instead of asking about a size nobody knows.
+    writeJson(jobFile(id), { ...meta, status: 'failed' });
+    const why = "I couldn't get the file list from that link in 3 minutes. Usually no peers answered (a dead or very quiet torrent) or the VPN is blocking peers. Try again later, or use a different magnet.";
+    await hook({ type: 'job', id, state: 'Failed', note: why });
+    await hook({ type: 'log', text: `${name}: ${why}` });
+    fail(why);
+  }
   if (auto && info && (info.name || info.files.length)) {
     const g = lib.guessFromTorrent(info, name);
     if (opt.auto === '1' && g.name) name = g.name;
@@ -180,6 +193,7 @@ async function fetchJob(link, opt) {
   const verdict = await hook({ type: 'check', bytes: size });
   if (verdict.decision === 'ask' && !approved(`size-${id}`)) {
     const how = size ? lib.human(size) : 'an unknown size';
+    await hook({ type: 'job', id, state: 'Waiting', note: `Needs your OK in the Cockerel chat: ${verdict.reason}` });
     await hook({ type: 'ask', askId: `size-${id}`, text: `${name} is ${how}: ${verdict.reason}. Download it anyway?`, options: ['Download', 'Cancel'] });
     return console.log('Asked Raven because of the size. Stop here and wait: he will answer and you will be woken to continue.');
   }
@@ -269,6 +283,7 @@ async function control(action, id) {
   const meta = readJson(jobFile(id), null);
   if (!meta) fail('No such download.');
   if (action === 'retry') return retryJob(id);
+  if (action === 'cancel' && !['added', 'cancelled'].includes(meta.status)) return cancelJob(id, meta);
   if (meta.status !== 'downloading') fail(`That download is ${meta.status}, not running.`);
   if (action === 'pause' || action === 'resume') {
     try { await aria(meta, action === 'pause' ? 'aria2.forcePauseAll' : 'aria2.unpauseAll'); } catch (err) { fail(`I couldn't ${action} it: ${err.message}`); }
@@ -276,17 +291,18 @@ async function control(action, id) {
     await hook({ type: 'log', text: `${meta.name}: ${action === 'pause' ? 'paused' : 'resumed'} from the Downloads page.` });
     return console.log(`${action}d`);
   }
-  if (action === 'cancel') {
-    writeJson(jobFile(id), { ...meta, status: 'cancelled' });
-    stopAria(meta.pid);
-    fs.rmSync(torrentFile(id), { force: true });
-    fs.rmSync(path.join(INCOMING, id), { recursive: true, force: true });
-    setProgress(id, null);
-    await hook({ type: 'job', id, state: 'Cancelled' });
-    await hook({ type: 'log', text: `${meta.name}: cancelled from the Downloads page, and the partial files were removed.` });
-    return console.log('cancelled');
-  }
   fail('pause, resume, cancel or retry');
+}
+
+async function cancelJob(id, meta) {
+  writeJson(jobFile(id), { ...meta, status: 'cancelled' });
+  stopAria(meta.pid);
+  fs.rmSync(torrentFile(id), { force: true });
+  fs.rmSync(path.join(INCOMING, id), { recursive: true, force: true });
+  setProgress(id, null);
+  await hook({ type: 'job', id, state: 'Cancelled' });
+  await hook({ type: 'log', text: `${meta.name}: cancelled from the Downloads page, and the partial files were removed.` });
+  console.log('cancelled');
 }
 
 // ---------- when aria2 finishes (called by hook.sh) ----------

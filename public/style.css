@@ -2195,3 +2195,4 @@ a.bh-btn { text-decoration: none; display: inline-block; }
 .dl-card.checking .dl-bar i { width: 30% !important; background: linear-gradient(90deg, transparent, var(--ink), transparent); animation: dl-shim 1.3s ease-in-out infinite; }
 @keyframes dl-shim { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
 @media (prefers-reduced-motion: reduce) { .dl-addbox, .dl-panel, .dl-chip-x, .dl-new, .dl-card.checking .dl-bar i { transition: none; animation: none; } }
+a.dl-btn { text-decoration: none; display: inline-block; }

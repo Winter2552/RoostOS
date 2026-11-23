@@ -168,7 +168,7 @@ class Cockerel {
   // or being filed). With an id, just that card; without, all of them.
   clearJobs(id) {
     const c = this.data();
-    const busy = (j) => j.state === 'Downloading' || j.state === 'Adding' || j.state === 'Paused';
+    const busy = (j) => j.state === 'Downloading' || j.state === 'Adding' || j.state === 'Paused' || j.state === 'Waiting';
     const before = c.jobs.length;
     c.jobs = c.jobs.filter((j) => busy(j) || (id && j.id !== id));
     if (c.jobs.length !== before) this.store.save();
@@ -203,6 +203,9 @@ class Cockerel {
     if (typeof job.detail === 'string' && j.state === 'Downloading') j.detail = clip(job.detail, 60);
     if (Number.isFinite(job.progress)) j.progress = Math.max(0, Math.min(100, Math.round(job.progress)));
     if (job.requester) j.requester = clip(job.requester, 60);
+    // A short line saying what it is waiting for or why it stopped; cleared once it moves on.
+    if (typeof job.note === 'string') j.note = clip(job.note, 200);
+    else if (job.state && !['Finding', 'Waiting', 'Failed'].includes(job.state)) j.note = '';
     // Numbers for the Downloads page, only while it is downloading.
     for (const k of ['size', 'speed', 'eta', 'peers']) if (Number.isFinite(job[k]) && job[k] >= 0) j[k] = Math.round(job[k]);
     if (job.state && job.state !== 'Downloading' && job.state !== 'Paused') { j.speed = 0; j.eta = 0; j.peers = 0; }
@@ -242,7 +245,7 @@ class Cockerel {
   }
 }
 
-const STATES = ['Requested', 'Finding', 'Downloading', 'Paused', 'Adding', 'Added', 'Failed', 'Cancelled'];
+const STATES = ['Requested', 'Finding', 'Downloading', 'Paused', 'Waiting', 'Adding', 'Added', 'Failed', 'Cancelled'];
 
 class CockerelError extends Error {
   constructor(message, status = 400) {

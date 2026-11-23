@@ -179,7 +179,8 @@
     S.last = key;
     const jobs = $('#cx-jobs');
     // Downloads live on their own page; here is only a line that leads there.
-    const going = d.jobs.filter((j) => j.state === 'Downloading' || j.state === 'Paused' || j.state === 'Adding' || j.state === 'Finding' || j.state === 'Requested');
+    const fresh = (j) => Date.now() - Date.parse(j.updatedAt || j.at) < 5 * 60000; // a stalled check is not "going"
+    const going = d.jobs.filter((j) => ['Downloading', 'Paused', 'Adding', 'Waiting'].includes(j.state) || ((j.state === 'Finding' || j.state === 'Requested') && fresh(j)));
     const dl = going.filter((j) => j.state === 'Downloading');
     const avg = dl.length ? Math.round(dl.reduce((n, j) => n + (j.progress || 0), 0) / dl.length) : 0;
     jobs.replaceChildren(...(going.length ? [el('a', { class: 'cx-chip', href: '#/downloads' },

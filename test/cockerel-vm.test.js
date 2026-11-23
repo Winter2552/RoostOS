@@ -377,3 +377,44 @@ idx|path/length
   const film = lib.parseTorrentInfo('Name: Sintel.2010.1080p\nFiles:\nidx|path/length\n===+===\n  1|./Sintel.2010.1080p.mkv\n   |1GiB (1)\n');
   assert.deepEqual(lib.guessFromTorrent(film, 'x'), { kind: 'movie', name: 'Sintel', year: '2010' });
 });
+
+test('a magnet whose file list never arrives fails with a clear note, not a size question', async () => {
+  const fs = require('fs');
+  const http = require('http');
+  const os = require('os');
+  const path = require('path');
+  const { spawn } = require('child_process');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cockerel-n-'));
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'aria2c'), '#!/bin/sh\nexit 0\n', { mode: 0o755 }); // finds no peers, saves nothing
+  fs.writeFileSync(path.join(bin, 'ip'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const seen = [];
+  const roost = http.createServer(async (req, res) => {
+    let body = '';
+    for await (const c of req) body += c;
+    seen.push(JSON.parse(body));
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ decision: 'auto', ok: true }));
+  });
+  await new Promise((r) => roost.listen(0, '127.0.0.1', r));
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, COCKEREL_HOME: path.join(root, 'home'), MEDIA_ROOT: path.join(root, 'media'), INCOMING_DIR: path.join(root, 'media', 'incoming'), ROOST_URL: `http://127.0.0.1:${roost.address().port}`, COCKEREL_SECRET: 'nofiles-test-secret-0123456789a' };
+  fs.mkdirSync(path.join(env.COCKEREL_HOME, 'state'), { recursive: true });
+  fs.writeFileSync(path.join(env.COCKEREL_HOME, 'state', 'approvals.json'), JSON.stringify({ 'entitled-n1': true }));
+  try {
+    const out = await new Promise((resolve) => {
+      const child = spawn('node', [path.join(__dirname, '..', 'cockerel-vm', 'tool.js'), 'fetch', 'magnet:?xt=urn:btih:abc', '--job', 'n1', '--name', 'Dead Show'], { env });
+      let o = '';
+      child.stdout.on('data', (d) => { o += d; });
+      child.stderr.on('data', (d) => { o += d; });
+      child.on('close', () => resolve(o));
+    });
+    assert.match(out, /file list/, out);
+    const failed = seen.find((m) => m.type === 'job' && m.state === 'Failed');
+    assert.ok(failed && /file list/.test(failed.note), 'the card says why it failed');
+    assert.ok(!seen.some((m) => m.type === 'ask'), 'no size question for a link with no file list');
+  } finally {
+    roost.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
