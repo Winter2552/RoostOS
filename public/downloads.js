@@ -28,7 +28,11 @@
     const running = j.state === 'Downloading';
     const paused = j.state === 'Paused';
     const done = j.state === 'Added';
-    const bad = j.state === 'Failed' || j.state === 'Cancelled';
+    const checking = j.state === 'Finding' || j.state === 'Requested';
+    // Looking for the file list takes up to 3 minutes; much longer than that and it is stuck.
+    const stuck = checking && Date.now() - Date.parse(j.updatedAt || j.at) > 5 * 60000;
+    const waiting = j.state === 'Waiting';
+    const bad = j.state === 'Failed' || j.state === 'Cancelled' || stuck;
     const pct = done ? 100 : Math.max(running || paused ? 2 : 0, j.progress || 0);
     const sub = [j.kind === 'show' ? 'show' : j.kind === 'movie' ? 'movie' : '', j.size ? size(j.size) : '', j.requester ? `for ${j.requester}` : ''].filter(Boolean).join(' · ');
     let line;
@@ -36,15 +40,19 @@
     else if (paused) line = `Paused at ${j.progress || 0}%`;
     else if (done) line = `On Roostflix · ${ago(j.updatedAt || j.at)}`;
     else if (j.state === 'Cancelled') line = 'Cancelled';
-    else if (j.state === 'Failed') line = 'Stopped. Retry to start it again.';
-    else if (j.state === 'Finding' || j.state === 'Requested') line = 'Checking the torrent…';
+    else if (stuck) line = 'Stuck: the torrent never answered. Retry, or clear it.';
+    else if (j.state === 'Failed') line = j.note || 'Stopped. Retry to start it again.';
+    else if (waiting) line = j.note || 'Needs your OK in the Cockerel chat';
+    else if (checking) line = j.note || 'Checking the torrent…';
     else line = j.state;
     const buttons = running ? [button('Pause', 'pause', j), button('Cancel', 'cancel', j)]
       : paused ? [button('Resume', 'resume', j), button('Cancel', 'cancel', j)]
+      : waiting ? [el('a', { class: 'dl-btn', href: '#/cockerel', text: 'Open chat' }), button('Cancel', 'cancel', j)]
+      : checking && !stuck ? [button('Cancel', 'cancel', j)]
       : bad ? [button('Retry', 'retry', j), el('button', { type: 'button', class: 'dl-btn', text: 'Clear', onclick: async () => { try { await api('POST', '/api/cockerel/jobs/clear', { id: j.id }); } catch { /* shown next refresh */ } load(true); } })]
       : done ? [el('button', { type: 'button', class: 'dl-btn', text: 'Clear', onclick: async () => { try { await api('POST', '/api/cockerel/jobs/clear', { id: j.id }); } catch { /* shown next refresh */ } load(true); } })]
       : [];
-    return el('div', { class: `dl-card${done ? ' done' : ''}${bad ? ' bad' : ''}${S.seen && !S.seen.has(j.id) ? ' dl-new' : ''}${j.state === 'Finding' || j.state === 'Requested' ? ' checking' : ''}`, 'data-id': j.id },
+    return el('div', { class: `dl-card${done ? ' done' : ''}${bad ? ' bad' : ''}${S.seen && !S.seen.has(j.id) ? ' dl-new' : ''}${checking && !stuck ? ' checking' : ''}`, 'data-id': j.id },
       el('div', { class: 'dl-top' }, el('div', {}, el('div', { class: 'dl-name', text: j.title || 'Download' }), el('div', { class: 'dl-sub mono', text: sub })), el('div', { class: 'dl-btns' }, ...buttons)),
       el('div', { class: 'dl-bar' }, el('i', { style: `width:${pct}%` })),
       el('div', { class: 'dl-line mono', text: line }));
@@ -63,8 +71,9 @@
     note.textContent = !d.enabled ? 'Cockerel is not linked yet. Link him under Admin → Server → Cockerel.' : d.paused ? 'Cockerel is paused, so nothing new will start.' : '';
     $('#dl-stats').replaceChildren(stat(String(d.active), 'ACTIVE'), stat(speed(d.speed), 'SPEED'), stat(`${d.todayGb} GB`, `TODAY OF ${d.dayGb}`));
     const list = $('#dl-list');
-    const going = d.jobs.filter((j) => !['Added', 'Failed', 'Cancelled'].includes(j.state));
-    const past = d.jobs.filter((j) => ['Added', 'Failed', 'Cancelled'].includes(j.state));
+    const isStuck = (j) => (j.state === 'Finding' || j.state === 'Requested') && Date.now() - Date.parse(j.updatedAt || j.at) > 5 * 60000;
+    const going = d.jobs.filter((j) => !['Added', 'Failed', 'Cancelled'].includes(j.state) && !isStuck(j));
+    const past = d.jobs.filter((j) => ['Added', 'Failed', 'Cancelled'].includes(j.state) || isStuck(j));
     list.replaceChildren(
       ...(d.jobs.length ? [] : [el('div', { class: 'cx-empty' }, el('strong', { text: 'Nothing downloading' }), el('p', { text: 'Ask Cockerel for a film or paste a magnet link in the chat, and it shows up here.' }))]),
       ...going.map(card),

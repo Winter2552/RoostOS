@@ -97,3 +97,13 @@ test('a job keeps its download numbers and pauses', () => {
   assert.equal(c.data().jobs[0].speed, 0);
   assert.equal(c.clearJobs(), 1);
 });
+
+test('a job keeps a note while it waits or fails, and loses it when it moves on', () => {
+  const { Cockerel } = require('../src/cockerel');
+  const c = new Cockerel({ store: { db: { settings: {} }, save() {} }, newId: () => '1' });
+  c.setJob({ id: 'w1', title: 'Show', state: 'Waiting', note: 'Needs your OK in the Cockerel chat' });
+  assert.equal(c.data().jobs[0].note, 'Needs your OK in the Cockerel chat');
+  assert.equal(c.clearJobs(), 0, 'a download waiting for an answer is never cleared');
+  c.setJob({ id: 'w1', state: 'Downloading', progress: 1 });
+  assert.equal(c.data().jobs[0].note, '');
+});
