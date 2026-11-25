@@ -423,3 +423,15 @@ test('projects cut together share sheets and need no more than one at a time, wi
   assert.equal(c.materials.filter((m) => m.key === 'glue').length, 1);
   assert.equal(model.combine([a]).together, model.combine([a]).apart);
 });
+
+test('a narrow ply board stays on the sheet; only real timber goes to timber lengths', () => {
+  const b = (name, w, h, join, d = 18) => ({ name, x: 0, y: 0, z: 0, w, d, h, join });
+  const boards = [b('Panel', 120, 2310, '18 mm ply'), b('Strip', 100, 2320, '18 mm ply ripped from the sheet'), b('Batten', 44, 2310, '44 x 44 mm timber', 44)];
+  const l = model.layout(model.clean({ template: 'custom', boards }), {});
+  assert.equal(l.sheets.reduce((n, s) => n + s.pieces.length, 0), 2);
+  assert.deepEqual(l.timber.map((t) => [t.width, t.thickness]), [[44, 44]]);
+  // A stated sheet keeps boards of its thickness on the sheet even without ply wording.
+  const s = model.layout(model.clean({ template: 'custom', stock: { w: 1220, l: 2440, t: 18, qty: 1 }, boards: [b('Strip', 100, 2320, 'rail')] }), {});
+  assert.equal(s.sheets[0].pieces.length, 1);
+  assert.equal(s.timber.length, 0);
+});

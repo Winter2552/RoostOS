@@ -43,7 +43,8 @@
 
   // ---------- units ----------
   // Sizes are millimetres inside; inches are only how they are shown and typed.
-  const prefs = () => S.data.prefs;
+  // Older saved prefs may lack the saw cut and trim; fill the defaults the server uses.
+  const prefs = () => { const p = S.data.prefs; if (!Number.isFinite(p.kerf)) p.kerf = 3; if (!Number.isFinite(p.trim)) p.trim = 0; return p; };
   const inch = () => prefs().units === 'in';
   const unit = () => (inch() ? 'in' : 'mm');
   function inches(mm) {

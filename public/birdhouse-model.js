@@ -561,7 +561,8 @@ Rules for custom designs:
   // fit either way round is listed in tooBig rather than dropped.
   //   -> { sheets: [{ thickness, pieces: [{ part, x, y, w, h }] }], timber: [{ width,
   //        thickness, stock, bars: [{ pieces: [{ part, x, len }] }] }], tooBig, area, used }
-  // Strips 100 mm wide or less are cut from 2400 mm lengths instead, end to end.
+  // Strips 100 mm wide or less are cut from 2400 mm lengths instead, end to end,
+  // unless they are sheet material (ply, MDF, or as thick as the stated sheet).
   const SHEET = [2440, 1220];
   const KERF = 3;
   const STRIP = 100; // boards this narrow or less are cut from timber lengths
@@ -641,16 +642,21 @@ Rules for custom designs:
     const kerf = opts && opts.kerf !== undefined ? opts.kerf : KERF;
     const rows = (opts && opts.rows) || parts(d);
     const pieces = [];
-    rows.forEach((r, part) => { for (let i = 0; i < r.qty; i++) pieces.push({ part, l: r.length, w: r.width, t: r.thickness }); });
+    rows.forEach((r, part) => { for (let i = 0; i < r.qty; i++) pieces.push({ part, l: r.length, w: r.width, t: r.thickness, join: r.join }); });
     // Narrow boards (strips) come from lengths of timber; the rest from sheets.
     const strip = opts && opts.strip === false ? 0 : STRIP;
     const noBuy = !!(opts && opts.noBuy); // only the stock given: what does not fit is reported, never bought
     const unplaced = [];
     const other = [];
-    const strips = pieces.filter((p) => p.w <= strip);
-    const flats = pieces.filter((p) => p.w > strip);
-    flats.sort((a, b) => b.t - a.t || b.l - a.l || b.w - a.w);
+    // A narrow board is only timber if it is not sheet material: one the design says
+    // is ply/MDF, or one as thick as a sheet the person has or stated, stays on the sheet.
     const have = ownedStock(opts && opts.stock);
+    const sheetThick = new Set(have.sheets.map((s) => s.thick));
+    if (d && d.stock && d.stock.t) sheetThick.add(d.stock.t);
+    const isSheet = (p) => sheetThick.has(p.t) || /^\s*\d+(\.\d+)?\s*mm\s+(ply|plywood|mdf|osb|chipboard|hardboard|sheet)\b/i.test(p.join || '');
+    const strips = pieces.filter((p) => p.w <= strip && !isSheet(p));
+    const flats = pieces.filter((p) => p.w > strip || isSheet(p));
+    flats.sort((a, b) => b.t - a.t || b.l - a.l || b.w - a.w);
     // Wood already in the workshop goes in first, biggest pieces first.
     const tooBig = [];
     const timber = [];
