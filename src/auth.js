@@ -32,6 +32,8 @@ function verifyAgainstNobody(password) {
 // written, so the file can't be used to sign in.
 const APP_KEY_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 // "Last active" only needs to be roughly right, so it's written at most this often.
+// A TV sign-in lasts until it has been unused this long.
+const TV_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const TOUCH_EVERY_MS = 5 * 60 * 1000;
 const MAX_PER_USER = 30;
 
@@ -55,7 +57,8 @@ class Sessions {
     }
   }
 
-  // kind is 'browser' (cookie) or 'app' (a device key sent as a Bearer token).
+  // kind is 'browser' (cookie), 'app' (a device key sent as a Bearer token) or
+  // 'tv' (a cookie that only opens Roostflix, from signing in with a TV code).
   create(userId, { kind = 'browser', name = '' } = {}) {
     const token = crypto.randomBytes(32).toString('hex');
     const now = Date.now();
@@ -70,7 +73,7 @@ class Sessions {
       name: String(name).slice(0, 60),
       created: now,
       lastSeen: now,
-      expires: now + (kind === 'app' ? APP_KEY_TTL_MS : SESSION_TTL_MS),
+      expires: now + (kind === 'app' ? APP_KEY_TTL_MS : kind === 'tv' ? TV_TTL_MS : SESSION_TTL_MS),
     });
     this.save();
     return token;
@@ -87,6 +90,7 @@ class Sessions {
     }
     if (now - s.lastSeen > TOUCH_EVERY_MS) {
       s.lastSeen = now;
+      if (s.kind === 'tv') s.expires = now + TV_TTL_MS;
       this.saveSoon();
     }
     return s;

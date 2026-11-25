@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in to Roostflix</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+html,body{margin:0;height:100%;background:#000;color:#fff;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:4vh 4vw;box-sizing:border-box}
+h1{font-size:4vw;margin:0 0 1vh}
+p{font-size:2.2vw;color:#bbb;margin:.6vh 0}
+b{color:#fff}
+.code{font:700 8vw/1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.12em;border:.4vw solid #fff;border-radius:2vw;padding:2.2vw 3.4vw;margin:3vh 0}
+.row{display:flex;align-items:center;justify-content:center;gap:3vw}
+.qr{width:16vw;height:16vw;background:#fff;padding:1vw;border-radius:.8vw;box-sizing:border-box}
+.qr svg{width:100%;height:100%;display:block}
+.btn{display:inline-block;margin-top:3vh;padding:1.6vw 4vw;border:.3vw solid #fff;border-radius:1.4vw;font-size:2.4vw;font-weight:700;color:#fff;background:#000;cursor:pointer}
+.hide{display:none}
+@media (max-width:700px){h1{font-size:28px}p{font-size:16px}.code{font-size:40px;padding:12px 18px;border-width:3px;border-radius:14px}.qr{width:120px;height:120px}.btn{font-size:18px;padding:12px 24px}}
+</style>
+</head>
+<body>
+<main>
+  <div id="wait">
+    <h1>Sign in to Roostflix</h1>
+    <p>On your phone, open <b id="addr"></b> and enter</p>
+    <div class="code" id="code">········</div>
+    <div class="row">
+      <div class="qr hide" id="qr"></div>
+      <p id="note" style="text-align:left">Or scan the QR code<br><span id="left"></span></p>
+    </div>
+  </div>
+  <div id="end" class="hide">
+    <h1 id="end-title"></h1>
+    <p id="end-text"></p>
+    <a class="btn" id="again" href="/tv">Get a new code</a>
+  </div>
+</main>
+<script src="/tv.js"></script>
+
+</body>
+</html>

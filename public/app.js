@@ -279,6 +279,7 @@ function showWelcome(setup) {
   $('#welcome-form [name=password]').autocomplete = setup ? 'new-password' : 'current-password';
   $('#welcome-submit').textContent = setup ? 'Create account' : 'Continue';
   showForgot(false);
+  $('#tv-link').classList.toggle('hidden', setup);
   setMailEnabled(state.mailEnabled);
 }
 
@@ -3265,6 +3266,7 @@ $('#lockdown-btn').addEventListener('click', async (e) => {
 const ACTIVITY_LABELS = {
   'sign-in': 'Signed in',
   'sign-out': 'Signed out',
+  'tv-signin': 'Signed in a TV',
   setup: 'Set up Roost',
   'sign-in-failed': 'Failed sign-in',
   'lockdown-on': 'Locked down outside access',

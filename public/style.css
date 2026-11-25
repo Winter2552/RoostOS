@@ -200,6 +200,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   cursor: pointer;
   color: var(--muted);
 }
+a.link-btn { text-decoration: none; }
 
 
 /* ---------- alerts bell ---------- */

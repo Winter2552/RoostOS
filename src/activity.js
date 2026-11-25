@@ -15,6 +15,7 @@ const SAVE_DELAY_MS = 3000;
 const KINDS = {
   'sign-in': 'sign-ins',
   'sign-out': 'sign-ins',
+  'tv-signin': 'sign-ins',
   setup: 'sign-ins',
   'sign-in-failed': 'failed',
   'password-changed': 'users',
