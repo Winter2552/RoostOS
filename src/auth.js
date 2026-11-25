@@ -169,6 +169,17 @@ function deviceName(ua = '') {
   return browser || os || 'Unknown browser';
 }
 
+// A home-screen web app (iPhone "Add to Home Screen") sends no "Safari" in its
+// user agent, so the same phone reads "iPhone" instead of "Safari on iPhone".
+// That is the same device; a different system (or a different named browser) isn't.
+function sameDevice(a = '', b = '') {
+  if (a === b) return true;
+  const part = (n) => { const [br, os] = n.split(' on '); return os ? { br, os } : { br: '', os: br }; };
+  const x = part(a);
+  const y = part(b);
+  return x.os === y.os && (!x.br || !y.br);
+}
+
 // Per-IP limiter for sign-in. Only failed attempts count, so a household
 // signing in through one address (or one tunnel) isn't locked out by
 // ordinary use.
@@ -197,4 +208,4 @@ class RateLimiter {
 }
 
 module.exports = {
-  verifyAgainstNobody, hashPassword, verifyPassword, Sessions, RateLimiter, deviceName, SESSION_TTL_MS, APP_KEY_TTL_MS };
+  verifyAgainstNobody, hashPassword, verifyPassword, Sessions, RateLimiter, deviceName, sameDevice, SESSION_TTL_MS, APP_KEY_TTL_MS };

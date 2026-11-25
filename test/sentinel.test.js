@@ -333,3 +333,13 @@ test('outside (HTTPS) scanners are banned in auto mode, and the admin can see an
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
+
+test('an iPhone home-screen app is the same device as Safari on that iPhone', () => {
+  const { sameDevice } = require('../src/auth');
+  assert.equal(sameDevice('Safari on iPhone', 'iPhone'), true);
+  assert.equal(sameDevice('iPhone', 'Safari on iPhone'), true);
+  assert.equal(sameDevice('Safari on iPhone', 'Safari on iPhone'), true);
+  assert.equal(sameDevice('Safari on iPhone', 'Chrome on Windows'), false);
+  assert.equal(sameDevice('Safari on iPhone', 'Windows'), false);
+  assert.equal(sameDevice('Safari on Mac', 'Chrome on Mac'), false);
+});

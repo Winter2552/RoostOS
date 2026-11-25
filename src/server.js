@@ -16,7 +16,7 @@ const birdhouse = require('./birdhouse');
 const birdhouseAi = require('./birdhouse-ai');
 const secrets = require('./secrets');
 const birdhouseModel = require('../public/birdhouse-model');
-const { hashPassword, verifyPassword, verifyAgainstNobody, Sessions, RateLimiter, deviceName, SESSION_TTL_MS } = require('./auth');
+const { hashPassword, verifyPassword, verifyAgainstNobody, Sessions, RateLimiter, deviceName, sameDevice, SESSION_TTL_MS } = require('./auth');
 const storage = require('./storage');
 const links = require('./links');
 const mail = require('./mail');
@@ -770,7 +770,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     // An admin's browser cookie turning up in a different browser or device is a sign it was stolen.
     if (user && user.role === 'admin' && s.kind === 'browser' && s.name && fromOutside(req)) {
       const now = deviceName(req.headers['user-agent']);
-      if (now !== s.name && sentinel.sessionMismatch({ userId: user.id, username: user.username, sessionId: s.id, was: s.name, now, ip: clientIp(req, trustProxy) })) return null;
+      if (!sameDevice(s.name, now) && sentinel.sessionMismatch({ userId: user.id, username: user.username, sessionId: s.id, was: s.name, now, ip: clientIp(req, trustProxy) })) return null;
     }
     return user;
   }
