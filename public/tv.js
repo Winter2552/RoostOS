@@ -68,8 +68,7 @@
     expiresAt = Date.now() + data.expiresIn;
     $('code').textContent = data.code;
     $('addr').textContent = data.address;
-    // The QR is an SVG Roost drew itself from the sign-in address. code-check: ok
-    if (data.qr) { $('qr').innerHTML = data.qr; $('qr').className = 'qr'; }
+    if (data.qr) { $('qr').innerHTML = data.qr; $('qr').className = 'qr'; } // Roost drew this SVG itself. code-check: ok
     tick();
     wait();
   });
