@@ -761,7 +761,7 @@ Rules for custom designs:
     let need = 0;
     for (const r of rows) if (r.thickness === st.t) need += r.qty * (r.length + KERF) * (r.width + KERF);
     const have = st.qty * st.w * st.l;
-    const sheets = best.boards.filter((bd) => bd.pieces.length).map((bd) => ({ thickness: st.t, width: st.l, height: st.w, owned: true, pieces: bd.pieces }));
+    const sheets = best.boards.filter((bd) => bd.pieces.length).map((bd) => ({ thickness: st.t, width: st.l, height: st.w, owned: true, pieces: bd.pieces, cuts: [], offcuts: [] }));
     const area = sheets.length * st.l * st.w;
     const usedArea = sheets.reduce((a, sh) => a + sh.pieces.reduce((b, q) => b + q.w * q.h, 0), 0);
     const layout = { width: st.l, height: st.w, sheets, timber: [], tooBig: [], area, used: usedArea };
