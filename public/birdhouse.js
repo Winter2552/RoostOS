@@ -374,6 +374,8 @@
     // A board the design says it is made from is the only stock: nothing is added.
     const f = model.fit(S.d);
     const l = f ? f.layout : layout();
+    // A stated board only covers the boards of its thickness; battens and other timber still come from lengths.
+    const timber = f ? layout().timber : l.timber;
     const box = h('div', { class: 'bh-sheets' });
     const p = prefs();
     const kerfIn = h('input', { type: 'number', min: '0', max: '10', step: '0.5', inputmode: 'decimal', value: String(p.kerf), 'aria-label': 'Saw cut width in millimetres' });
@@ -408,7 +410,7 @@
       }
       for (const o of sheet.offcuts || []) saveOffcuts.push({ kind: 'sheet', thick: sheet.thickness, w: Math.round(Math.max(o.w, o.h)), l: Math.round(Math.min(o.w, o.h)), qty: 1, note: offcutNote() });
     });
-    for (const g of l.timber) {
+    for (const g of timber) {
       const bars = g.bars.length;
       const wide = Math.max(...g.bars.map((b) => b.len));
       const own = g.bars.filter((b) => b.owned).length;
@@ -426,7 +428,7 @@
     const waste = l.area ? Math.round((1 - l.used / l.area) * 100) : 0;
     const bits = [];
     if (l.sheets.length) bits.push(`${plural(l.sheets.length, 'sheet')}, ${waste}% left over`);
-    if (l.timber.length) { const n = l.timber.reduce((a, g) => a + g.bars.length, 0); bits.push(`${plural(n, 'length')} of timber`); }
+    if (timber.length) { const n = timber.reduce((a, g) => a + g.bars.length, 0); bits.push(`${plural(n, 'length')} of timber`); }
     box.append(h('p', { class: 'bh-note', text: `${bits.join(' · ')} · ${fmtU(prefs().kerf)} saw cut between boards · letters match the cut list` }));
     if (saveOffcuts.length) {
       const say = h('span', { class: 'bh-say', 'aria-live': 'polite' });
