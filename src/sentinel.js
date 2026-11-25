@@ -56,8 +56,12 @@ const EVIDENCE_KEPT = 10; // incidents that keep their evidence
 const SCANNER_PATH = /^\/(\.(env|git|svn|aws|ssh|ds_store|htaccess|htpasswd)|wp-(login|admin|content|includes|json)|xmlrpc\.php|phpmyadmin|pma\b|myadmin|adminer|admin\.php|cgi-bin|boaform|actuator|vendor\/phpunit|hnap1|owa\/|ecp\/|solr\/|manager\/html|config\.(json|php|yml|yaml|ini)|backup\.(zip|sql|tar|tgz)|setup\.cgi|shell\b|console\b|server-status)/i;
 const TRAVERSAL = /(\.\.[\\/]|%2e%2e|%252e|\\x00|%00)/i;
 
+// Jellyfin's web page asks for its own settings file; that is Roostflix, not a scanner.
+const OWN_FILES = new Set(['/config.json', '/web/config.json', '/manifest.json']);
+
 function isScannerRequest(url) {
   const raw = String(url || '').split('?')[0];
+  if (OWN_FILES.has(raw.toLowerCase())) return false;
   return SCANNER_PATH.test(raw) || TRAVERSAL.test(raw);
 }
 
