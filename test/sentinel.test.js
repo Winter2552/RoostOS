@@ -15,7 +15,7 @@ const { setUpTwoStep } = require('./helpers');
 
 test('scanner requests are told apart from Roost\'s own', () => {
   for (const u of ['/.env', '/.git/config', '/wp-login.php', '/phpmyadmin/index.php', '/cgi-bin/x', '/a/../../etc/passwd', '/x%2e%2e/y', '/boaform/admin/formLogin?x=1']) assert.equal(isScannerRequest(u), true, u);
-  for (const u of ['/', '/api/state', '/.well-known/immich', '/s/abc123', '/api/nest/files?path=a.b', '/jellyfin/web/index.html', '/style.css?v=1']) assert.equal(isScannerRequest(u), false, u);
+  for (const u of ['/', '/api/state', '/.well-known/immich', '/s/abc123', '/api/nest/files?path=a.b', '/jellyfin/web/index.html', '/style.css?v=1', '/config.json', '/web/config.json', '/manifest.json']) assert.equal(isScannerRequest(u), false, u);
 });
 
 function make(mode, db = { users: [{ id: 'u1', username: 'raven', role: 'admin', password: 'x' }], settings: {} }) {

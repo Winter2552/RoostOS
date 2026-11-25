@@ -4282,7 +4282,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       }
       const seen = sentinel.trace(ip, req.method, req.url, req.headers['user-agent']);
       if (seen) res.on('finish', () => { seen.status = res.statusCode; });
-      sentinel.request(ip, req.url);
+      // Someone signed in to Roost (a phone's home-screen app, say) isn't a scanner.
+      if (!sessions.get(tokenOf(req))) sentinel.request(ip, req.url);
     }
     if (lockedOut(req)) {
       res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8', 'Retry-After': '3600' });
