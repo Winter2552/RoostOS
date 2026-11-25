@@ -643,62 +643,131 @@
     }
   }
 
-  // ---------- printing ----------
-  // The whole plan on paper: drawings, cut list, layouts and cost. It is built
-  // only for the moment of printing (the print style hides the rest of the page),
-  // so "Print" in the browser, or Share > PDF on a phone, gives the plan sheet.
+  // ---------- saving as PDF ----------
+  // The whole plan on paper: drawings, cut list, layouts and cost, written as a
+  // real PDF here in the browser (birdhouse-pdf.js, no outside service). On a
+  // phone the file goes to the system share sheet (Save to Files, AirDrop,
+  // Print...); on a computer it downloads.
 
-  function printSheet() {
+  function planPdf() {
+    const pdf = window.BirdhousePdf.create();
+    const M = 36;
+    const FW = pdf.width - 2 * M;
+    let y = M;
+    const fresh = () => { pdf.page(); y = M; };
+    const ensure = (need) => { if (y + need > pdf.height - M) fresh(); };
+    const wrap = (str, size, width) => {
+      const per = Math.max(10, Math.floor(width / (size * 0.6)));
+      const lines = [];
+      let cur = '';
+      for (const word of String(str).split(' ')) {
+        if (cur && (cur + ' ' + word).length > per) { lines.push(cur); cur = word; } else cur = cur ? `${cur} ${word}` : word;
+      }
+      if (cur) lines.push(cur);
+      return lines;
+    };
+    const heading = (t) => { ensure(40); y += 8; pdf.text(t.toUpperCase(), M, y + 8, 8, { gray: 0.35, bold: true }); y += 16; };
+    const note = (t, size = 7.5) => { for (const l of wrap(t, size, FW)) { ensure(size + 4); pdf.text(l, M, y + size, size, { gray: 0.35 }); y += size + 3; } y += 3; };
     const s = model.size(S.d);
-    const cell = (label, value) => h('div', {}, h('small', { text: label }), value);
+
+    fresh();
+    pdf.text(S.name || info().name, M, y + 14, 15, { bold: true });
+    pdf.text(`Birdhouse - Roost - ${new Date().toLocaleDateString()}`, pdf.width - M, y + 14, 7.5, { anchor: 'end', gray: 0.35 });
+    y += 22;
+    pdf.line(M, y, pdf.width - M, y, { width: 1 });
+    y += 12;
+    pdf.text(`${fmt(s.width)} x ${fmt(s.depth)} x ${fmt(s.height)} ${unit()}  (W x D x H)`, M, y + 9, 9, { bold: true });
+    y += 16;
+    note(info().chips(S.d, fmt).join('   '), 8);
+
+    const gap = 12;
+    const cw = (FW - 2 * gap) / 3;
+    let rowH = 0;
+    [['front', 'Front'], ['side', 'Side'], ['top', 'Top']].forEach(([from, name], i) => {
+      const x = M + i * (cw + gap);
+      pdf.text(name.toUpperCase(), x, y + 7, 7, { gray: 0.35, bold: true });
+      rowH = Math.max(rowH, 12 + pdf.svg(drawFlat(from, name), x, y + 12, cw, 190));
+    });
+    y += rowH + 8;
+
+    ensure(250);
+    pdf.text('3D', M, y + 7, 7, { gray: 0.35, bold: true });
+    y += 12 + pdf.svg(draw3d(), M + FW / 2 - 115, y + 12, 230, 230) + 6;
+
+    // Cut list
+    const rows = model.parts(S.d);
+    heading('Cut list');
+    const cols = [0, 22, 300, 335, 405, 475].map((c) => M + c);
+    const head = ['', 'Part', 'Qty', 'Length', 'Width', 'Thick'];
+    head.forEach((t, i) => pdf.text(t, cols[i], y + 8, 7.5, { gray: 0.35, bold: true }));
+    y += 13;
+    pdf.line(M, y - 2, pdf.width - M, y - 2, { width: 0.4, gray: 0.5 });
+    rows.forEach((r, i) => {
+      const joinLines = wrap(r.join || '', 6.5, cols[2] - cols[1] - 8);
+      const need = 12 + joinLines.length * 8 + 4;
+      ensure(need);
+      [letter(i), r.name, String(r.qty), fmt(r.length), fmt(r.width), fmt(r.thickness)].forEach((t, k) => pdf.text(t, cols[k], y + 8, 8.5, { bold: k === 0 }));
+      joinLines.forEach((l, k) => pdf.text(l, cols[1], y + 17 + k * 8, 6.5, { gray: 0.4 }));
+      y += need;
+      pdf.line(M, y - 2, pdf.width - M, y - 2, { width: 0.3, gray: 0.8 });
+    });
+    const area = rows.reduce((a, r) => a + r.qty * r.length * r.width, 0) / 1e6;
+    y += 4;
+    note(`${rows.reduce((a, r) => a + r.qty, 0)} boards - ${area.toFixed(2)} m2 of board - sizes in ${inch() ? 'inches' : 'mm'}`);
+
+    // How to cut it from the stock
+    for (const node of drawSheets().children) {
+      if (node.tagName === 'H3') heading(node.textContent);
+      else if (node.tagName.toLowerCase() === 'svg') {
+        const vb = node.getAttribute('viewBox').split(/[\s,]+/).map(Number);
+        const hh = Math.min(200, FW * (vb[3] / vb[2]));
+        ensure(hh + 6);
+        y += pdf.svg(node, M, y, FW, 200) + 8;
+      } else if (node.classList?.contains('bh-note')) note(node.textContent);
+    }
+
+    // What to buy
     const items = materials();
     const total = items.reduce((a, m) => a + m.qty * priceOf(m), 0);
-    const costTable = h('table', { class: 'bh-table' },
-      h('thead', {}, h('tr', {}, ...['Material', 'Qty', 'Each', 'Total'].map((t) => h('th', { text: t })))),
-      h('tbody', {}, ...items.map((m) => h('tr', {}, h('td', { text: `${m.label}${m.have ? ` (${m.have} from workshop)` : ''}` }), h('td', { text: String(m.qty) }), h('td', { text: money(priceOf(m)) }), h('td', { text: money(m.qty * priceOf(m)) })))),
-      h('tfoot', {}, h('tr', {}, h('td', { text: 'Estimate' }), h('td'), h('td'), h('td', { text: money(total) }))));
-    const when = new Date().toLocaleDateString();
-    return h('div', { id: 'bh-sheet-print' },
-      h('div', { class: 'bh-title' }, cell('PROJECT', `${S.name || info().name} · pine`), cell('SIZE', `${fmt(s.width)} × ${fmt(s.depth)} × ${fmt(s.height)} ${unit()}`), cell('PLANNED', when), cell('MADE WITH', 'Birdhouse · Roost')),
-      h('div', { class: 'bh-chips' }, ...info().chips(S.d, fmt).map((t) => h('span', { class: 'bh-chip', text: t }))),
-      h('div', { class: 'bh-pgrid' }, drawFlat('front', 'Front'), drawFlat('side', 'Side'), drawFlat('top', 'Top')),
-      h('div', { class: 'bh-pgrid two' }, draw3d(), h('div', {}, cutList())),
-      h('div', { class: 'bh-pbreak' }, drawSheets()),
-      h('div', { class: 'bh-pbreak' }, h('h3', { class: 'bh-h', text: 'What to buy' }), costTable,
-        h('p', { class: 'bh-note', text: 'Prices are the ones set in Birdhouse (starter prices are rough guesses). Check them at the shop before buying.' })));
+    heading('What to buy');
+    const bc = [0, 340, 380, 450].map((c) => M + c);
+    ['Material', 'Qty', 'Each', 'Total'].forEach((t, i) => pdf.text(t, bc[i], y + 8, 7.5, { gray: 0.35, bold: true }));
+    y += 13;
+    pdf.line(M, y - 2, pdf.width - M, y - 2, { width: 0.4, gray: 0.5 });
+    for (const m of items) {
+      const lines = wrap(`${m.label}${m.have ? ` (${m.have} from workshop)` : ''}`, 8.5, bc[1] - bc[0] - 8);
+      const need = lines.length * 10 + 5;
+      ensure(need);
+      lines.forEach((l, k) => pdf.text(l, bc[0], y + 8 + k * 10, 8.5));
+      [String(m.qty), money(priceOf(m)), money(m.qty * priceOf(m))].forEach((t, k) => pdf.text(t, bc[k + 1], y + 8, 8.5));
+      y += need;
+      pdf.line(M, y - 2, pdf.width - M, y - 2, { width: 0.3, gray: 0.8 });
+    }
+    ensure(24);
+    pdf.text('Estimate', bc[0], y + 11, 9, { bold: true });
+    pdf.text(money(total), bc[3], y + 11, 9, { bold: true });
+    y += 22;
+    note('Prices are the ones set in Birdhouse (starter prices are rough guesses). Check them at the shop before buying.');
+    return pdf.build();
   }
 
-  // Printing from the page itself is unreliable on phones (iOS Safari and
-  // home-screen apps often ignore window.print()), so the sheet opens as its
-  // own page with a Print button. If the browser blocks the new tab, the same
-  // sheet is shown over this page instead.
-  function printPlan() {
-    const sheet = printSheet();
-    sheet.style.display = 'block';
-    let w = null;
-    try { w = window.open('', '_blank'); } catch { w = null; }
-    if (w && w.document) {
-      const css = new URL('style.css', document.baseURI).href;
-      w.document.open();
-      w.document.write(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${(S.name || info().name).replace(/[<&]/g, '')} - plan</title><link rel="stylesheet" href="${css}"><style>
-        body{background:#fff;margin:0;padding:12px}
-        .bh-pv-bar{display:flex;gap:8px;margin:0 0 12px;font:15px system-ui,sans-serif}
-        .bh-pv-bar button{font:inherit;padding:10px 16px;border:1px solid #000;background:#000;color:#fff;border-radius:8px}
-        .bh-pv-bar button.alt{background:#fff;color:#000}
-        #bh-sheet-print{overflow-x:auto}
-        @media print{.bh-pv-bar{display:none!important}body{padding:0}}
-      </style></head><body><div class="bh-pv-bar"><button id="p">Print or save as PDF</button><button id="c" class="alt">Close</button></div>${sheet.outerHTML}
-      <script>document.getElementById('p').onclick=function(){window.print()};document.getElementById('c').onclick=function(){window.close();if(!window.closed)history.back()}<\/script></body></html>`);
-      w.document.close();
-      return;
+  async function savePdf() {
+    const btn = $('#bh-print');
+    let bytes;
+    try { bytes = planPdf(); } catch (err) { btn.textContent = `Could not make the PDF: ${err.message}`; setTimeout(() => { btn.textContent = 'Save as PDF'; }, 4000); return; }
+    const base = (S.name || info().name).replace(/[^\w .-]+/g, '').trim() || 'Birdhouse plan';
+    const file = new File([bytes], `${base}.pdf`, { type: 'application/pdf' });
+    // Phones and tablets: the system share sheet, so it can be saved anywhere.
+    const touch = window.matchMedia?.('(pointer: coarse)').matches;
+    if (touch && navigator.canShare?.({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: base }); return; } catch (err) { if (err.name === 'AbortError') return; }
     }
-    // Fallback: show the sheet over this page, print from there.
-    document.getElementById('bh-preview')?.remove();
-    const bar = h('div', { class: 'bh-pv-bar' },
-      h('button', { type: 'button', class: 'bh-btn', text: 'Print or save as PDF', onclick: () => window.print() }),
-      h('button', { type: 'button', class: 'bh-btn', text: 'Close', onclick: () => box.remove() }));
-    const box = h('div', { id: 'bh-preview' }, bar, sheet);
-    document.body.append(box);
+    const url = URL.createObjectURL(file);
+    const a = h('a', { href: url, download: file.name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
   }
 
   // ---------- describing a project ----------
@@ -1028,7 +1097,7 @@
       S.built = true;
       $('#bh-adjust').addEventListener('click', openCard);
       $('#bh-save').addEventListener('click', save);
-      $('#bh-print').addEventListener('click', printPlan);
+      $('#bh-print').addEventListener('click', savePdf);
       $('#bh-ask').addEventListener('submit', (e) => { e.preventDefault(); draft($('#bh-text').value); });
       $('#bh-name').addEventListener('change', (e) => {
         S.name = e.target.value.replace(/\s+/g, ' ').trim().slice(0, 60) || info().name;
