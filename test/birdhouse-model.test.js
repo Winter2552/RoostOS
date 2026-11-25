@@ -435,3 +435,9 @@ test('a narrow ply board stays on the sheet; only real timber goes to timber len
   assert.equal(s.sheets[0].pieces.length, 1);
   assert.equal(s.timber.length, 0);
 });
+
+test('the layout for a stated board has cuts and offcuts lists so the Sheets tab can draw it', () => {
+  const d = model.clean({ template: 'custom', stock: { w: 1220, l: 2440, t: 18, qty: 1 }, boards: [{ name: 'Panel', x: 0, y: 0, z: 0, w: 300, d: 18, h: 600, join: '18 mm ply' }] });
+  const f = model.fit(d);
+  assert.ok(f.layout.sheets.every((s) => Array.isArray(s.cuts) && Array.isArray(s.offcuts)));
+});

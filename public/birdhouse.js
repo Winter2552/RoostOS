@@ -393,20 +393,20 @@
         root.append(svg('rect', { x: p.x, y: p.y, width: p.w, height: p.h, class: 'bh-board' }));
         if (Math.min(p.w, p.h) > 90) root.append(svg('text', { x: p.x + p.w / 2, y: p.y + p.h / 2 + 30, 'text-anchor': 'middle', 'font-size': 90, class: 'bh-label' }, letter(p.part)));
       }
-      for (const o of sheet.offcuts) {
+      for (const o of sheet.offcuts || []) {
         root.append(svg('rect', { x: o.x, y: o.y, width: o.w, height: o.h, class: 'bh-offcut' }));
         if (o.w > 420 && o.h > 200) root.append(svg('text', { x: o.x + o.w / 2, y: o.y + o.h / 2 + 22, 'text-anchor': 'middle', 'font-size': 60, class: 'bh-note-svg' }, `${fmt(Math.round(o.w))} × ${fmt(Math.round(o.h))}`));
       }
-      for (const c of sheet.cuts) {
+      for (const c of sheet.cuts || []) {
         const [cx, cy] = c.dir === 'h' ? [c.from + 40, c.at + 2] : [c.at + 2, c.from + 40];
         root.append(svg('circle', { cx, cy, r: 36, class: 'bh-cutdot' }), svg('text', { x: cx, y: cy + 14, 'text-anchor': 'middle', 'font-size': 44, class: 'bh-cutnum' }, String(c.n)));
       }
       box.append(h('h3', { class: 'bh-h', text: `Sheet ${n + 1} · ${fmt(sheet.thickness)} · ${fmt(sheet.width)} × ${fmt(sheet.height)}${sheet.owned ? ' · from your workshop' : ''}` }), root);
-      if (sheet.cuts.length) {
+      if (sheet.cuts && sheet.cuts.length) {
         const steps = h('ol', { class: 'bh-cuts' }, ...sheet.cuts.map((c) => h('li', { text: `${c.dir === 'h' ? 'Along the sheet' : 'Across the sheet'}, ${fmtU(Math.round(c.at))} from the ${c.dir === 'h' ? 'top' : 'left'} edge${c.to - c.from < (c.dir === 'h' ? sheet.width : sheet.height) - 2 * prefs().trim - 1 ? ` (${fmtU(Math.round(c.from))} to ${fmtU(Math.round(c.to))})` : ''}` })));
         box.append(h('details', { class: 'bh-saw' }, h('summary', { text: `Saw cuts in order (${sheet.cuts.length})` }), steps));
       }
-      for (const o of sheet.offcuts) saveOffcuts.push({ kind: 'sheet', thick: sheet.thickness, w: Math.round(Math.max(o.w, o.h)), l: Math.round(Math.min(o.w, o.h)), qty: 1, note: offcutNote() });
+      for (const o of sheet.offcuts || []) saveOffcuts.push({ kind: 'sheet', thick: sheet.thickness, w: Math.round(Math.max(o.w, o.h)), l: Math.round(Math.min(o.w, o.h)), qty: 1, note: offcutNote() });
     });
     for (const g of l.timber) {
       const bars = g.bars.length;
