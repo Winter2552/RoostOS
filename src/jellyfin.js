@@ -206,6 +206,26 @@ class Jellyfin {
     return { token: res.AccessToken, userId: res.User.Id, serverId: res.ServerId };
   }
 
+  // Signs a TV in without a password: Jellyfin's Quick Connect, done here.
+  // Roost asks for a Quick Connect request as the TV, approves it with the
+  // approving person's own Jellyfin sign-in, and collects the TV's token.
+  // Quick Connect is switched on in Jellyfin first if it was off.
+  async quickConnectSignIn(approverToken, { device, deviceId }) {
+    const begin = () => this.call('POST', '/QuickConnect/Initiate', { token: null, device, deviceId });
+    let started;
+    try {
+      started = await begin();
+    } catch (err) {
+      if (err.status !== 401 && err.status !== 403) throw err;
+      const config = await this.call('GET', '/System/Configuration');
+      if (config && config.QuickConnectAvailable !== true) await this.call('POST', '/System/Configuration', { body: { ...config, QuickConnectAvailable: true } });
+      started = await begin();
+    }
+    await this.call('POST', `/QuickConnect/Authorize?code=${encodeURIComponent(started.Code)}`, { token: approverToken });
+    const res = await this.call('POST', '/Users/AuthenticateWithQuickConnect', { token: null, device, deviceId, body: { Secret: started.Secret } });
+    return { token: res.AccessToken, userId: res.User.Id, serverId: res.ServerId };
+  }
+
   async logout(token) {
     await this.call('POST', '/Sessions/Logout', { token });
   }

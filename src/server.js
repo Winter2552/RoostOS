@@ -43,6 +43,7 @@ const { cleanSchedule, isDue } = require('./schedule');
 const { CertManager, validDomain } = require('./tls');
 const twoStep = require('./twostep');
 const { qrSvg } = require('./qr');
+const { TvCodes, tvName } = require('./tvcode');
 const { ActivityLog, clientIp, FILTERS } = require('./activity');
 const { HttpError, send, readJson, readRaw, str } = require('./http');
 const { Nest, disposition, CHUNK: NEST_CHUNK } = require('./nest');
@@ -214,6 +215,12 @@ function cleanRole(v) {
   return v === 'admin' || v === 'guest' ? v : 'user';
 }
 
+// What a TV sign-in (from a code) may ask for: Roostflix and its sign-in hand-over.
+function tvPath(url) {
+  const p = String(url || '').split('?')[0];
+  return p === JELLYFIN_PREFIX || p.startsWith(`${JELLYFIN_PREFIX}/`) || p === '/api/jellyfin/session';
+}
+
 function guestEnded(user) {
   return user.role === 'guest' && !(Date.parse(user.guestUntil) > Date.now());
 }
@@ -369,6 +376,7 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     if (s.jf) jellyfin.logout(s.jf.token).catch(() => {});
   });
   const limiter = new RateLimiter(maxFailedSignIns);
+  const tvCodes = new TvCodes();
   const guard = new AccountGuard();
   // Sign-ins waiting for a code, and authenticator secrets waiting to be
   // confirmed. Both are short-lived, so they stay in memory.
@@ -752,6 +760,8 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
 
   function currentUser(req) {
     const s = sessions.get(tokenOf(req));
+    // A TV's sign-in opens Roostflix and nothing else.
+    if (s && s.kind === 'tv' && !tvPath(req.url)) return null;
     const user = s ? db().users.find((u) => u.id === s.userId) || null : null;
     if (user && guestEnded(user)) {
       sessions.destroyUser(user.id);
@@ -1387,6 +1397,81 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       if (user) record(req, 'sign-out', { actor: user.username });
       sessions.destroy(tokenOf(req));
       send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookies(req, '') });
+    },
+
+    // ---------- sign in a TV with a code ----------
+
+    // The TV asks for a code. Open (the TV isn't signed in), but limited per address.
+    'POST /api/tv/start': (req, res) => {
+      if (!jellyfin.enabled()) throw new HttpError(404, 'Roostflix is not set up yet');
+      const ip = clientIp(req, trustProxy);
+      const made = tvCodes.start({ name: tvName(req.headers['user-agent']), ip, outside: fromOutside(req) });
+      if (!made) throw new HttpError(429, 'Too many codes, wait a few minutes');
+      const domain = (db().settings.tls || {}).domain;
+      const host = domain || String(req.headers.host || 'localhost');
+      const link = `${secure(req) ? 'https' : 'http'}://${host}/code?code=${made.code}`;
+      send(res, 200, { code: made.display, secret: made.secret, expiresIn: made.expiresIn, address: `${host}/code`, qr: qrSvg(link) });
+    },
+
+    // The TV waits here. Held open until the code is approved, so it never polls on a timer.
+    'POST /api/tv/wait': async (req, res) => {
+      const body = await readJson(req);
+      const got = await tvCodes.wait(str(body.secret, 80));
+      if (got.state !== 'approved') return send(res, 200, { state: got.state });
+      const user = db().users.find((u) => u.id === got.userId);
+      if (!user || guestEnded(user) || !canUseJellyfin(user)) {
+        tvCodes.finish(str(body.secret, 80));
+        return send(res, 200, { state: 'denied' });
+      }
+      // The TV hung up while waiting: keep the approval for when it asks again.
+      if (req.socket.destroyed) return;
+      tvCodes.finish(str(body.secret, 80));
+      const name = `Roostflix on ${got.name}`;
+      const token = sessions.create(user.id, { kind: 'tv', name });
+      const session = sessions.get(token);
+      if (secWatch.adminDevice(user, name, clientIp(req, trustProxy))) store.save();
+      // Jellyfin's own sign-in for the TV is made in the background, from the approver's.
+      if (got.approverJf && jellyfin.enabled()) {
+        const work = jellyfin.quickConnectSignIn(got.approverJf, { device: name, deviceId: `roost-${session.id}` })
+          .then((jf) => {
+            if (sessions.list(user.id).includes(session)) {
+              session.jf = jf;
+              sessions.save();
+            } else {
+              jellyfin.logout(jf.token).catch(() => {});
+            }
+          })
+          .catch(jellyfinFailed)
+          .finally(() => jellyfinLinks.delete(session.id));
+        jellyfinLinks.set(session.id, work);
+      }
+      send(res, 200, { state: 'approved' }, { 'Set-Cookie': sessionCookies(req, token) });
+    },
+
+    // The phone: what is this code?
+    'POST /api/tv/lookup': async (req, res) => {
+      const user = requireUser(req);
+      tvAllowedFor(user);
+      const body = await readJson(req);
+      const seen = tvCodes.lookup(str(body.code, 20), { userId: user.id, ip: clientIp(req, trustProxy) });
+      if (seen && seen.limited) throw new HttpError(429, 'Too many wrong codes, wait a few minutes');
+      if (!seen) throw new HttpError(404, "That code isn't right or has expired. Check your TV for the newest one.");
+      send(res, 200, { ...seen, username: user.username });
+    },
+
+    'POST /api/tv/approve': async (req, res) => {
+      const user = requireUser(req);
+      tvAllowedFor(user);
+      const body = await readJson(req);
+      const code = str(body.code, 20);
+      const seen = tvCodes.lookup(code, { userId: user.id, ip: clientIp(req, trustProxy) });
+      if (seen && seen.limited) throw new HttpError(429, 'Too many wrong codes, wait a few minutes');
+      if (!seen) throw new HttpError(404, "That code isn't right or has expired. Check your TV for the newest one.");
+      const approve = body.approve !== false;
+      const mine = sessions.get(tokenOf(req));
+      tvCodes.decide(code, user.id, approve, approve && mine && mine.jf ? mine.jf.token : null);
+      if (approve) record(req, 'tv-signin', { actor: user.username, detail: `${seen.name}${seen.outside ? ' (from outside)' : ''}` });
+      send(res, 200, { ok: true, approved: approve });
     },
 
     'PATCH /api/me': async (req, res) => {
@@ -3947,6 +4032,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
     res.end(req.method === 'HEAD' ? undefined : body);
   }
 
+  // Whoever approves a TV must be able to use Roostflix themselves.
+  function tvAllowedFor(user) {
+    if (!jellyfin.enabled() || !canUseJellyfin(user)) throw new HttpError(403, "You don't have access to Roostflix");
+  }
+
   // Jellyfin is only reachable through Roost by people Roost lets in to it.
   function jellyfinAllowed(req) {
     const user = currentUser(req);
@@ -4253,6 +4343,11 @@ function createServer({ dataDir, nestDir, backupDir = '', secureCookies = false,
       } else if (pathname.startsWith('/releases/img/') && (req.method === 'GET' || req.method === 'HEAD')) {
         // The showcase pictures; the name changes whenever the picture does, so they cache well.
         if (!releaseImages.serve(req, res, pathname.slice('/releases/img'.length), searchParams.get('v'))) send(res, 404, { error: 'Not found' });
+      } else if ((pathname === '/tv' || pathname === '/code') && (req.method === 'GET' || req.method === 'HEAD')) {
+        // The TV's code screen and the phone's approve page: small standalone pages.
+        res.setHeader('Content-Security-Policy', APP_CSP);
+        res.setHeader('Cache-Control', 'no-store');
+        assets.serve(req, res, pathname === '/tv' ? '/tv.html' : '/code.html', null);
       } else if (req.method === 'GET' || req.method === 'HEAD') {
         res.setHeader('Content-Security-Policy', APP_CSP);
         if (!assets.serve(req, res, pathname, searchParams.get('v'))) send(res, 404, { error: 'Not found' });

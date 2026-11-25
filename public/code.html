@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#ffffff">
+<title>Sign in a TV</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+html,body{margin:0;background:#fff;color:#000;font:17px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+@media (prefers-color-scheme:dark){html,body{background:#000;color:#fff}.box,input,.btn.o{border-color:#fff!important}.btn{background:#fff!important;color:#000!important}.btn.o{background:#000!important;color:#fff!important}p{color:#bbb!important}}
+main{max-width:420px;margin:0 auto;padding:56px 20px}
+h1{font-size:26px;margin:0 0 8px}
+p{color:#444;margin:8px 0}
+input{width:100%;box-sizing:border-box;font:700 28px ui-monospace,Menlo,Consolas,monospace;letter-spacing:.12em;text-align:center;text-transform:uppercase;padding:16px;margin:14px 0;border:1px solid #000;border-radius:12px;background:transparent;color:inherit}
+.btn{display:block;width:100%;box-sizing:border-box;padding:15px;border-radius:12px;border:1px solid #000;background:#000;color:#fff;font:600 17px system-ui,sans-serif;text-align:center;margin-top:12px;cursor:pointer;text-decoration:none}
+.btn.o{background:transparent;color:inherit}
+.box{border:1px solid #000;border-radius:12px;padding:14px;margin:16px 0}
+.err{border:1px solid currentColor;border-radius:10px;padding:10px 12px;margin:8px 0;font-size:15px}
+.hide{display:none}
+</style>
+</head>
+<body>
+<main>
+  <section id="enter" class="hide">
+    <h1>Sign in a TV</h1>
+    <p>Enter the code shown on your TV.</p>
+    <form id="form" autocomplete="off">
+      <input id="code" maxlength="9" autocapitalize="characters" autocorrect="off" spellcheck="false" inputmode="text" placeholder="XXXX-XXXX" aria-label="Code from the TV">
+      <div id="err" class="err hide" role="alert"></div>
+      <button class="btn" type="submit">Continue</button>
+    </form>
+    <p id="who" style="font-size:14px;margin-top:28px"></p>
+  </section>
+  <section id="confirm" class="hide">
+    <h1>Sign in this TV?</h1>
+    <p>Only if you can see this code on your TV right now.</p>
+    <div class="box"><b id="c-name"></b><br><span id="c-where"></span><br>Code <span id="c-code"></span></div>
+    <p>It will sign in as <b id="c-user"></b> and can only open Roostflix. Remove it any time in My devices.</p>
+    <div id="err2" class="err hide" role="alert"></div>
+    <button class="btn" id="yes" type="button">Approve</button>
+    <button class="btn o" id="no" type="button">Not me</button>
+  </section>
+  <section id="done" class="hide">
+    <h1 id="d-title"></h1>
+    <p id="d-text"></p>
+    <a class="btn o" href="/">Back to Roost</a>
+  </section>
+  <section id="signin" class="hide">
+    <h1>Sign in to Roost first</h1>
+    <p>Sign in on this phone, then open this page again and enter the code from your TV.</p>
+    <a class="btn" href="/">Sign in</a>
+  </section>
+</main>
+<script src="/code.js"></script>
+</body>
+</html>

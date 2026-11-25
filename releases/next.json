@@ -1,6 +1,11 @@
 {
   "items": [
     {
+      "title": "Sign in a TV with a code",
+      "text": "On a TV, tap Sign in with a code, then enter the code at roostos.network/code on your phone (or scan the QR) and approve. The TV opens Roostflix signed in, with no typing a password on a remote. It only opens Roostflix, and you can sign it out in My devices.",
+      "image": "tv-code.png"
+    },
+    {
       "title": "Cockerel picks his own brain",
       "text": "For each message he chooses Haiku, Sonnet or Opus, whichever is cheapest and still good enough, and says which in a small tag. Tap Think harder to use the strongest model for one message, or pin one in Admin.",
       "image": "cockerel-smarter.png",
