@@ -1935,34 +1935,6 @@ input.bh-name:hover, input.bh-name:focus { border-bottom-color: var(--bp-ink); o
 @media (max-width: 600px) { .bh-cost input[type=number] { width: 5.4em; } }
 .bh-nest { display: inline-flex; gap: 8px; }
 .bh-nest.hidden { display: none; }
-#bh-sheet-print { display: none; }
-#bh-preview { position: fixed; inset: 0; z-index: 9999; background: #fff; overflow: auto; padding: 12px; }
-#bh-preview .bh-pv-bar { display: flex; gap: 8px; margin-bottom: 12px; }
-@media print {
-  @page { size: A4; margin: 12mm; }
-  body > *:not(#bh-sheet-print):not(#bh-preview) { display: none !important; }
-  #bh-preview { position: static; padding: 0; overflow: visible; }
-  #bh-preview .bh-pv-bar { display: none !important; }
-  html, body { background: #fff !important; }
-  #bh-sheet-print {
-    display: block; color: #12408f; font-family: var(--mono); font-size: 11px;
-    --bp-ink: #12408f; --bp-soft: #5b78a6; --bp-line: #b9cde8;
-  }
-  #bh-sheet-print .bh-title { display: grid; grid-template-columns: 2fr 2fr 1fr 1.4fr; border: 1.5px solid #12408f; margin-bottom: 8px; }
-  #bh-sheet-print .bh-title > div { padding: 4px 8px; border-left: 1.5px solid #12408f; }
-  #bh-sheet-print .bh-title > div:first-child { border-left: 0; }
-  #bh-sheet-print .bh-chip { border-color: #12408f; }
-  #bh-sheet-print .bh-pgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 10px 0; break-inside: avoid; }
-  #bh-sheet-print .bh-pgrid.two { grid-template-columns: 1fr 1.2fr; align-items: start; }
-  #bh-sheet-print .bh-pgrid svg { max-height: 70mm; }
-  #bh-sheet-print .bh-board, #bh-sheet-print .bh-face { fill: rgba(18, 64, 143, 0.08); }
-  #bh-sheet-print .bh-face { fill: #12408f; }
-  #bh-sheet-print .bh-pbreak { break-inside: avoid; margin-top: 10px; }
-  #bh-sheet-print .bh-sheets svg { max-height: 42mm; }
-  #bh-sheet-print .bh-pgrid svg { max-height: 62mm; }
-  #bh-sheet-print .bh-table td { border-top-color: #b9cde8; }
-  #bh-sheet-print * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-}
 
 /* Birdhouse: projects home, workshop, shop comparison */
 .bh-head { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
@@ -2010,7 +1982,6 @@ a.bh-btn { text-decoration: none; display: inline-block; }
 .bh-compare input.low { font-weight: 700; border-color: var(--bp-ink); background: rgba(242, 246, 254, 0.2); }
 .bh-go { color: var(--bp-ink); margin-left: 6px; text-decoration: none; }
 .bh-compare .bh-num { white-space: nowrap; }
-@media print { #bh-sheet-print .bh-compare { display: none; } }
 #bh-home .bh-bar, #bh-shop .bh-bar { margin-bottom: 12px; }
 .bh-starters { grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); }
 .bh-starter .bh-thumb { max-width: 80px; }
