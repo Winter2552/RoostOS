@@ -668,12 +668,37 @@
         h('p', { class: 'bh-note', text: 'Prices are the ones set in Birdhouse (starter prices are rough guesses). Check them at the shop before buying.' })));
   }
 
+  // Printing from the page itself is unreliable on phones (iOS Safari and
+  // home-screen apps often ignore window.print()), so the sheet opens as its
+  // own page with a Print button. If the browser blocks the new tab, the same
+  // sheet is shown over this page instead.
   function printPlan() {
-    document.getElementById('bh-sheet-print')?.remove();
-    document.body.append(printSheet());
-    const done = () => { document.getElementById('bh-sheet-print')?.remove(); window.removeEventListener('afterprint', done); };
-    window.addEventListener('afterprint', done);
-    window.print();
+    const sheet = printSheet();
+    sheet.style.display = 'block';
+    let w = null;
+    try { w = window.open('', '_blank'); } catch { w = null; }
+    if (w && w.document) {
+      const css = new URL('style.css', document.baseURI).href;
+      w.document.open();
+      w.document.write(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${(S.name || info().name).replace(/[<&]/g, '')} - plan</title><link rel="stylesheet" href="${css}"><style>
+        body{background:#fff;margin:0;padding:12px}
+        .bh-pv-bar{display:flex;gap:8px;margin:0 0 12px;font:15px system-ui,sans-serif}
+        .bh-pv-bar button{font:inherit;padding:10px 16px;border:1px solid #000;background:#000;color:#fff;border-radius:8px}
+        .bh-pv-bar button.alt{background:#fff;color:#000}
+        #bh-sheet-print{overflow-x:auto}
+        @media print{.bh-pv-bar{display:none!important}body{padding:0}}
+      </style></head><body><div class="bh-pv-bar"><button id="p">Print or save as PDF</button><button id="c" class="alt">Close</button></div>${sheet.outerHTML}
+      <script>document.getElementById('p').onclick=function(){window.print()};document.getElementById('c').onclick=function(){window.close();if(!window.closed)history.back()}<\/script></body></html>`);
+      w.document.close();
+      return;
+    }
+    // Fallback: show the sheet over this page, print from there.
+    document.getElementById('bh-preview')?.remove();
+    const bar = h('div', { class: 'bh-pv-bar' },
+      h('button', { type: 'button', class: 'bh-btn', text: 'Print or save as PDF', onclick: () => window.print() }),
+      h('button', { type: 'button', class: 'bh-btn', text: 'Close', onclick: () => box.remove() }));
+    const box = h('div', { id: 'bh-preview' }, bar, sheet);
+    document.body.append(box);
   }
 
   // ---------- describing a project ----------

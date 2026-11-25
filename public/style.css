@@ -1936,9 +1936,13 @@ input.bh-name:hover, input.bh-name:focus { border-bottom-color: var(--bp-ink); o
 .bh-nest { display: inline-flex; gap: 8px; }
 .bh-nest.hidden { display: none; }
 #bh-sheet-print { display: none; }
+#bh-preview { position: fixed; inset: 0; z-index: 9999; background: #fff; overflow: auto; padding: 12px; }
+#bh-preview .bh-pv-bar { display: flex; gap: 8px; margin-bottom: 12px; }
 @media print {
   @page { size: A4; margin: 12mm; }
-  body > *:not(#bh-sheet-print) { display: none !important; }
+  body > *:not(#bh-sheet-print):not(#bh-preview) { display: none !important; }
+  #bh-preview { position: static; padding: 0; overflow: visible; }
+  #bh-preview .bh-pv-bar { display: none !important; }
   html, body { background: #fff !important; }
   #bh-sheet-print {
     display: block; color: #12408f; font-family: var(--mono); font-size: 11px;
